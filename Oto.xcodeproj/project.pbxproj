@@ -6,6 +6,26 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		D3F2CE82305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE74305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md */; };
+		D3F2CE83305EA62300F5674F /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7F305EA62300F5674F /* README.md */; };
+		D3F2CE84305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE71305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md */; };
+		D3F2CE85305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7A305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md */; };
+		D3F2CE86305EA62300F5674F /* 10_NEXT_STEP.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE78305EA62300F5674F /* 10_NEXT_STEP.md */; };
+		D3F2CE87305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE70305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md */; };
+		D3F2CE88305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE76305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md */; };
+		D3F2CE89305EA62300F5674F /* 13_TYPA_UI_AUDIT.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7B305EA62300F5674F /* 13_TYPA_UI_AUDIT.md */; };
+		D3F2CE8A305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE72305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md */; };
+		D3F2CE8B305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7D305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md */; };
+		D3F2CE8C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md */; };
+		D3F2CE8D305EA62300F5674F /* 16_REBUILD_DECISIONS.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7E305EA62300F5674F /* 16_REBUILD_DECISIONS.md */; };
+		D3F2CE8E305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE6F305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md */; };
+		D3F2CE8F305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE75305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md */; };
+		D3F2CE90305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE79305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md */; };
+		D3F2CE91305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE77305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md */; };
+		D3F2CE92305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		D3F2CE55305E9EDD00F5674F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +47,23 @@
 		D3F2CE45305E9EDB00F5674F /* Oto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Oto.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D3F2CE54305E9EDD00F5674F /* OtoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OtoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D3F2CE5E305E9EDD00F5674F /* OtoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OtoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D3F2CE6F305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 01_YAP_PARITY_ARCHITECTURE.md; sourceTree = "<group>"; };
+		D3F2CE70305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 02_RECORDING_WORKFLOWS.md; sourceTree = "<group>"; };
+		D3F2CE71305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 03_NATIVE_SWIFTUI_UI.md; sourceTree = "<group>"; };
+		D3F2CE72305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md; sourceTree = "<group>"; };
+		D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 05_CURRENT_TO_REBUILD_MAP.md; sourceTree = "<group>"; };
+		D3F2CE74305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 06_BAR_VISUALIZER_RECREATION.md; sourceTree = "<group>"; };
+		D3F2CE75305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md; sourceTree = "<group>"; };
+		D3F2CE76305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 08_ENGINEERING_PLAYBOOK.md; sourceTree = "<group>"; };
+		D3F2CE77305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md; sourceTree = "<group>"; };
+		D3F2CE78305EA62300F5674F /* 10_NEXT_STEP.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 10_NEXT_STEP.md; sourceTree = "<group>"; };
+		D3F2CE79305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 11_RELIABILITY_TEST_MATRIX.md; sourceTree = "<group>"; };
+		D3F2CE7A305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 12_SHORTCUT_BACKEND_PLAN.md; sourceTree = "<group>"; };
+		D3F2CE7B305EA62300F5674F /* 13_TYPA_UI_AUDIT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 13_TYPA_UI_AUDIT.md; sourceTree = "<group>"; };
+		D3F2CE7C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 14_YAP_BACKEND_AUDIT.md; sourceTree = "<group>"; };
+		D3F2CE7D305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 15_ENGINEERING_WISDOM_AND_MISTAKES.md; sourceTree = "<group>"; };
+		D3F2CE7E305EA62300F5674F /* 16_REBUILD_DECISIONS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 16_REBUILD_DECISIONS.md; sourceTree = "<group>"; };
+		D3F2CE7F305EA62300F5674F /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -72,6 +109,7 @@
 				D3F2CE47305E9EDB00F5674F /* Oto */,
 				D3F2CE57305E9EDD00F5674F /* OtoTests */,
 				D3F2CE61305E9EDD00F5674F /* OtoUITests */,
+				D3F2CE81305EA62300F5674F /* Docs */,
 				D3F2CE46305E9EDB00F5674F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -84,6 +122,38 @@
 				D3F2CE5E305E9EDD00F5674F /* OtoUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		D3F2CE80305EA62300F5674F /* OTO_REBUILD_PLAN */ = {
+			isa = PBXGroup;
+			children = (
+				D3F2CE6F305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md */,
+				D3F2CE70305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md */,
+				D3F2CE71305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md */,
+				D3F2CE72305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md */,
+				D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */,
+				D3F2CE74305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md */,
+				D3F2CE75305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md */,
+				D3F2CE76305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md */,
+				D3F2CE77305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md */,
+				D3F2CE78305EA62300F5674F /* 10_NEXT_STEP.md */,
+				D3F2CE79305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md */,
+				D3F2CE7A305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md */,
+				D3F2CE7B305EA62300F5674F /* 13_TYPA_UI_AUDIT.md */,
+				D3F2CE7C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md */,
+				D3F2CE7D305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md */,
+				D3F2CE7E305EA62300F5674F /* 16_REBUILD_DECISIONS.md */,
+				D3F2CE7F305EA62300F5674F /* README.md */,
+			);
+			path = OTO_REBUILD_PLAN;
+			sourceTree = "<group>";
+		};
+		D3F2CE81305EA62300F5674F /* Docs */ = {
+			isa = PBXGroup;
+			children = (
+				D3F2CE80305EA62300F5674F /* OTO_REBUILD_PLAN */,
+			);
+			path = Docs;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -197,6 +267,23 @@
 		D3F2CE43305E9EDB00F5674F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				D3F2CE82305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md in Resources */,
+				D3F2CE83305EA62300F5674F /* README.md in Resources */,
+				D3F2CE84305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md in Resources */,
+				D3F2CE85305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md in Resources */,
+				D3F2CE86305EA62300F5674F /* 10_NEXT_STEP.md in Resources */,
+				D3F2CE87305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md in Resources */,
+				D3F2CE88305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md in Resources */,
+				D3F2CE89305EA62300F5674F /* 13_TYPA_UI_AUDIT.md in Resources */,
+				D3F2CE8A305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md in Resources */,
+				D3F2CE8B305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md in Resources */,
+				D3F2CE8C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md in Resources */,
+				D3F2CE8D305EA62300F5674F /* 16_REBUILD_DECISIONS.md in Resources */,
+				D3F2CE8E305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md in Resources */,
+				D3F2CE8F305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md in Resources */,
+				D3F2CE90305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md in Resources */,
+				D3F2CE91305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md in Resources */,
+				D3F2CE92305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md in Resources */,
 			);
 		};
 		D3F2CE52305E9EDD00F5674F /* Resources */ = {
