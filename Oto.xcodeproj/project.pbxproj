@@ -24,6 +24,7 @@
 		D3F2CE90305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE79305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md */; };
 		D3F2CE91305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE77305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md */; };
 		D3F2CE92305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */; };
+		D3F2CE94305EAE6C00F5674F /* START_HERE_PRODUCT.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE93305EAE6C00F5674F /* START_HERE_PRODUCT.md */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -64,6 +65,7 @@
 		D3F2CE7D305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 15_ENGINEERING_WISDOM_AND_MISTAKES.md; sourceTree = "<group>"; };
 		D3F2CE7E305EA62300F5674F /* 16_REBUILD_DECISIONS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 16_REBUILD_DECISIONS.md; sourceTree = "<group>"; };
 		D3F2CE7F305EA62300F5674F /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		D3F2CE93305EAE6C00F5674F /* START_HERE_PRODUCT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = START_HERE_PRODUCT.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -130,6 +132,7 @@
 				D3F2CE6F305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md */,
 				D3F2CE70305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md */,
 				D3F2CE71305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md */,
+				D3F2CE93305EAE6C00F5674F /* START_HERE_PRODUCT.md */,
 				D3F2CE72305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md */,
 				D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */,
 				D3F2CE74305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md */,
@@ -284,6 +287,7 @@
 				D3F2CE90305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md in Resources */,
 				D3F2CE91305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md in Resources */,
 				D3F2CE92305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md in Resources */,
+				D3F2CE94305EAE6C00F5674F /* START_HERE_PRODUCT.md in Resources */,
 			);
 		};
 		D3F2CE52305E9EDD00F5674F /* Resources */ = {
