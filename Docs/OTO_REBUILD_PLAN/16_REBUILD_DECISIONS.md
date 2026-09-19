@@ -16,7 +16,8 @@ This is the short, explicit record of decisions that previously appeared in seve
 | Settings navigation | Native `Settings` scene with `NavigationSplitView`, `List(selection:)`, and `Form`; optional native `TabView` inside selected detail panes | Typa's root `TabView` informs spacing and scene ownership but is not a second Oto root architecture. Detail tabs may group tightly related views such as Dictionary/Snippets or Privacy/History. |
 | Typography | Native system metrics for macOS-owned chrome and controls; pinned bundled font only for Oto-authored text where it does not alter native behavior | Avoids custom titlebar/control regressions, global font installation, and runtime font downloads. |
 | Status vocabulary | “Reference” describes old code; “verified” requires rebuild evidence | Prevents historical implementation notes from being mistaken for shipped behavior. |
-| Intelligence | Post-v1 only, on-device `SystemLanguageModel` behind an availability gate | Raw dictation must never depend on Apple Intelligence, network access, or a second lifecycle. |
+| Intelligence | Optional post-v1 Apple Intelligence using on-device `SystemLanguageModel`, behind an availability gate | This is writing assistance, not a user-managed local-model catalog or speech engine. Raw dictation must never depend on Apple Intelligence, network access, or a second lifecycle. |
+| Settings information architecture | Four visible v1 destinations: Dictation, Writing, History, General. Add Intelligence only when a tested Apple Intelligence feature ships. | Keeps the native sidebar focused while allowing the product model to grow without exposing an empty future pane. Detail tabs group Shortcuts/Audio/Speech, Dictionary/Snippets, and History/Privacy. |
 
 ## Evidence required to change a locked decision
 

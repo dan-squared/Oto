@@ -27,7 +27,7 @@ The future implementation is a clean rebuild, not a patchwork migration of the c
 - **Settings navigation:** Oto adopts one native `Settings` scene with a `NavigationSplitView` sidebar, `List(selection:)`, and `Form` detail panes. Individual detail panes may use a native `TabView` for closely related subviews (for example, Dictionary/Snippets or Privacy/History); tabs never replace or duplicate the top-level sidebar. Typa's native `TabView` is a reference observation, not a second Oto root-navigation decision.
 - **Typography:** system typography and control metrics own macOS chrome and native controls. Oto-authored copy follows the repository's pinned bundled-font policy only where it does not alter system-owned surfaces; no global installation or runtime font download is allowed.
 - **Status language:** words such as “fixed”, “ready”, and “verified” refer to the rebuild only when a replacement test or packaged-app check proves them. Historical audits use “reference” or “observed” instead.
-- **Release scope:** Apple Speech dictation, insertion, writing tools, history, and native Settings are v1. Apple Intelligence and other model/runtime work is post-v1 and must never appear as a required v1 pane or dependency.
+- **Release scope:** Apple Speech dictation, insertion, writing tools, history, and native Settings are v1. Apple Intelligence is an optional post-v1 writing layer using Apple's on-device `SystemLanguageModel`; it is not a user-managed local-model catalog, a speech engine, or a required v1 dependency.
 
 ## Reference repositories
 
@@ -41,11 +41,12 @@ The future implementation is a clean rebuild, not a patchwork migration of the c
 
 ### Source-of-truth order for future agents
 
-1. This folder for the from-scratch architecture and implementation phases.
-2. [`OTO_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md`](../OTO_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md) for product flows, failure cases, and acceptance criteria.
-3. [`OTO_ENGINEERING_PLAYBOOK.md`](../OTO_ENGINEERING_PLAYBOOK.md) for invariants, concurrency, privacy, and test rules.
-4. [`YAP_BACKEND_AUDIT.md`](../YAP_BACKEND_AUDIT.md) for the local Yap source audit and decisions not to copy blindly.
-5. [`OTO_APPLE_SPEECH_IMPLEMENTATION_PLAN.md`](../OTO_APPLE_SPEECH_IMPLEMENTATION_PLAN.md) for Apple Speech asset and locale details.
+1. [`START_HERE_PRODUCT.md`](../START_HERE_PRODUCT.md) for the current product boundary, sidebar information architecture, and phased starting order.
+2. This folder for the from-scratch architecture and implementation phases.
+3. [`OTO_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md`](../OTO_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md) for product flows, failure cases, and acceptance criteria.
+4. [`OTO_ENGINEERING_PLAYBOOK.md`](../OTO_ENGINEERING_PLAYBOOK.md) for invariants, concurrency, privacy, and test rules.
+5. [`YAP_BACKEND_AUDIT.md`](../YAP_BACKEND_AUDIT.md) for the local Yap source audit and decisions not to copy blindly.
+6. [`OTO_APPLE_SPEECH_IMPLEMENTATION_PLAN.md`](../OTO_APPLE_SPEECH_IMPLEMENTATION_PLAN.md) for Apple Speech asset and locale details.
 
 The numbered rebuild editions in this folder are the versions future agents should use while rebuilding: `07` Speech, `08` engineering, `09` product, `10` next step, `11` reliability, `12` shortcuts, `13` native UI audit, `14` YAP audit, and `16` the locked decision log. `15_ENGINEERING_WISDOM_AND_MISTAKES.md` records the failure patterns and repository rules learned during the first implementation attempt.
 
@@ -63,7 +64,7 @@ The first rebuilt release is Apple Speech-first and offline after the user expli
 - opt-in local transcript history;
 - no cloud speech, no silent downloads, no third-party model catalog, and no background intelligence dependency.
 
-Smart writing, model selection, and richer Apple Intelligence features are later layers. They must consume a finished raw transcript and never be required to make ordinary dictation work.
+Smart writing and richer Apple Intelligence features are later layers. They must consume a finished raw transcript, preserve the source, and never be required to make ordinary dictation work. Oto does not ship a local-model catalog or third-party model loader.
 
 ## Apple references required before UI work
 
