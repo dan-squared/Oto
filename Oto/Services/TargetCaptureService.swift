@@ -13,44 +13,42 @@ import Foundation
 /// check) lands in Phase 4.
 protocol TargetCapturing: Sendable {
     /// Capture the current target. Called once per session, synchronously
-    /// at begin time.
-    func capture() -> TargetApplication
+    /// at begin time — hence `nonisolated`: the background coordinator
+    /// calls it from a synchronous context (Swift 6). Implementations must
+    /// be synchronous and side-effect free beyond the read.
+    nonisolated func capture() -> TargetApplication
     /// Whether a previously captured target is still alive. Checked at
     /// finalization; a dead target keeps the transcript in recovery and
-    /// never falls back to the new frontmost app.
-    func isAlive(_ target: TargetApplication) -> Bool
+    /// never falls back to the new frontmost app. Async by contract:
+    /// liveness may involve I/O, and the coordinator already awaits it —
+    /// which also keeps actor-backed fakes (Swift 6) natural.
+    func isAlive(_ target: TargetApplication) async -> Bool
 }
 
-/// Scriptable fake for Phase 1 coordinator tests. `frontmost` may be mutated
-/// mid-session to simulate app switching; the coordinator must still insert
-/// into `stubTarget` (the captured one), never the new frontmost.
+/// Scriptable fake for Phase 1 coordinator tests. Capture is start-pinned
+/// by construction (`capture()` always returns `stubTarget`), so a
+/// mid-session switch cannot redirect insertion — the same structural
+/// guarantee the real service gives by capturing once (audit S1).
 actor FakeTargetCapture: TargetCapturing {
     /// The target returned by `capture()` — i.e. what was frontmost at start.
-    var stubTarget: TargetApplication
-    /// Simulates the live frontmost app. Mutating this mid-session must not
-    /// affect where the transcript goes.
-    var frontmost: TargetApplication
+    let stubTarget: TargetApplication
     /// When false, `isAlive` reports the captured target as dead.
     var capturedTargetAlive = true
 
-    private(set) var captureCalls = 0
-
     init(stubTarget: TargetApplication) {
         self.stubTarget = stubTarget
-        self.frontmost = stubTarget
     }
 
-    func capture() -> TargetApplication {
-        captureCalls += 1
-        return stubTarget
+    nonisolated func capture() -> TargetApplication {
+        stubTarget
     }
 
-    func isAlive(_ target: TargetApplication) -> Bool {
-        target == stubTarget ? capturedTargetAlive : true
-    }
-
-    func setFrontmost(_ target: TargetApplication) {
-        frontmost = target
+    func isAlive(_ target: TargetApplication) async -> Bool {
+        // Identity, not whole-struct equality: aliveness is about the pid
+        // (and this avoids the @MainActor-inferred Equatable conformance,
+        // unusable from actor isolation under Swift 6).
+        guard target.processIdentifier == stubTarget.processIdentifier else { return true }
+        return capturedTargetAlive
     }
 
     func setCapturedTargetAlive(_ alive: Bool) {

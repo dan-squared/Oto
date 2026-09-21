@@ -5,7 +5,18 @@
 //  Created by Daniel Girma on 19/09/2026.
 //
 
+import AppKit
 import SwiftUI
+
+/// Restores the persisted Dock visibility once NSApplication exists.
+/// NSApp is nil in App.init (crash-proven 2026-09-21), so this lives in
+/// the delegate — silent on failure by design: Regular remains and the
+/// stored pref is untouched for next launch (apply writes only on success).
+final class DockRestoreDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = DockVisibility.apply(shown: DockVisibility.isShown())
+    }
+}
 
 @main
 struct OtoApp: App {
@@ -20,21 +31,27 @@ struct OtoApp: App {
     private let preparer = SpeechAssetPreparer()
     private let permissions = PermissionsManager()
     private let login: any LoginItemManaging = LiveLoginItemManager()
-    private let inserter = RealTextInsertion()
+    // One instance shared by the coordinator pipeline and the menu Retry
+    // path — two instances could never diverge in behavior, but one is
+    // the honest shape (audit S2).
+    private let inserter: RealTextInsertion
+    @NSApplicationDelegateAdaptor(DockRestoreDelegate.self) private var dockRestore
 
     init() {
         let relay = AudioBufferRelay()
         let audio = AppleAudioCapture(bufferHandler: { buffer in
             relay.receive(buffer)
         })
-        let speech = AppleSpeechService(locale: .current, relay: relay)
+        let speech = AppleSpeechService(relay: relay)
+        let inserter = RealTextInsertion()
         let coordinator = DictationCoordinator(
             audio: audio,
             speech: speech,
             targetService: RealTargetCapture(),
-            inserter: RealTextInsertion()
+            inserter: inserter
         )
         self.coordinator = coordinator
+        self.inserter = inserter
         let dispatch = ShortcutDispatch(coordinator: coordinator)
         self.dispatch = dispatch
         // Shortcut layer: Carbon combos + HID tap (right-Option hold
@@ -45,7 +62,7 @@ struct OtoApp: App {
 
     var body: some Scene {
         MenuBarExtra("Oto", systemImage: "waveform") {
-            OtoMenuBarView(coordinator: coordinator, inserter: inserter)
+            OtoMenuBarView(coordinator: coordinator, inserter: inserter, dispatch: dispatch)
         }
         .menuBarExtraStyle(.menu)
 
@@ -57,5 +74,6 @@ struct OtoApp: App {
                 login: login
             )
         }
+        .defaultSize(width: 760, height: 620)
     }
 }

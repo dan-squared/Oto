@@ -28,11 +28,6 @@ final class ModifierHotkeyMonitor {
     /// dispatch for the calibration row (never claimed without proof).
     private(set) var isLive = false
 
-    /// Fires when a previously-live registration fails to resume (e.g.
-    /// another app grabbed the combo while asleep). Dispatch surfaces it
-    /// as a conflict; the trigger choice is preserved for retry.
-    var onRegistrationFailure: (() -> Void)?
-
     private var carbonHotKey: CarbonHotKey?
     /// Carbon may re-deliver pressed events while held; normalize those to
     /// repeats here so the transition machine never sees a second "first"

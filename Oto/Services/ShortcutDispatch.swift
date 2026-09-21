@@ -57,7 +57,6 @@ final class ShortcutDispatch {
         self.configuration = configuration
 
         modifierMonitor.onEvent = { [weak self] in self?.receive($0) }
-        modifierMonitor.onRegistrationFailure = { [weak self] in self?.handleBackendFailure() }
         hidMonitor.onEvent = { [weak self] in self?.receive($0) }
         hidMonitor.onEscape = { [weak self] in self?.receiveEscape() }
     }
@@ -130,10 +129,12 @@ final class ShortcutDispatch {
         }
     }
 
-    /// Re-check Accessibility-derived availability (call on app
-    /// activation). Revocation surfaces as unavailable; recovery
-    /// re-registers. Never rebuilds while the trigger is physically
-    /// down — tearing down mid-hold would strand the release.
+    /// Re-check Accessibility-derived availability. Called on every menu
+    /// open (the one hook guaranteed to run while the user is present —
+    /// audit F2 wired the previously zero-caller path here). Revocation
+    /// surfaces as unavailable; recovery re-registers. Never rebuilds
+    /// while the trigger is physically down — tearing down mid-hold would
+    /// strand the release.
     func refreshAvailability() {
         if requiresAccessibility && !isAccessibilityTrusted() {
             calibration = .requiresAccessibility
@@ -216,13 +217,6 @@ final class ShortcutDispatch {
         case .modifierHold, .functionKey:
             return hidMonitor.isLive
         }
-    }
-
-    /// A live backend died underneath us (resume conflict). Surface it;
-    /// the trigger choice is preserved and `refreshAvailability` retries.
-    private func handleBackendFailure() {
-        calibration = .conflicts
-        log.error("backend registration lost (conflict)")
     }
 
     // MARK: - Event routing (the single async hop)

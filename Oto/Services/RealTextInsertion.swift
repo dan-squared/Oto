@@ -114,17 +114,29 @@ struct InsertionEvents: Sendable {
 /// Pure gate ordering: trust → secure input → paste. Unit-tested without
 /// hardware; the live edge is proven by the device matrix only.
 enum InsertionDecision: Equatable, Sendable {
+    // Explicit: compared in decision tests from any domain (Swift 6).
+    nonisolated static func == (lhs: InsertionDecision, rhs: InsertionDecision) -> Bool {
+        switch (lhs, rhs) {
+        case (.proceed, .proceed), (.refuseUntrusted, .refuseUntrusted):
+            return true
+        case (.refuseSecureInput(let a), .refuseSecureInput(let b)):
+            return a == b
+        default:
+            return false
+        }
+    }
+
     case proceed
     case refuseUntrusted
     case refuseSecureInput(holder: String?)
 
-    static func next(isTrusted: Bool, secureInput: Bool, holder: String?) -> InsertionDecision {
+    nonisolated static func next(isTrusted: Bool, secureInput: Bool, holder: String?) -> InsertionDecision {
         if !isTrusted { return .refuseUntrusted }
         if secureInput { return .refuseSecureInput(holder: holder) }
         return .proceed
     }
 
-    static func shouldRestore(
+    nonisolated static func shouldRestore(
         wroteChangeCount: Int, wroteMarker: String,
         currentChangeCount: Int, currentMarker: String?
     ) -> Bool {
@@ -250,6 +262,13 @@ final class RealTextInsertion: TextInserting {
     /// trust/focus policy gates are skipped. Returns true when the keystroke
     /// was posted (delivery itself remains unverified, as always).
     func retryPostToFrontmost(_ text: String) async -> Bool {
+        // Secure input still blocks synthetic keystrokes — posting anyway
+        // would vanish silently while the caller reports success. Refuse
+        // honestly (audit F4); the trust/focus policy gates stay skipped.
+        if events.secureInputEnabled() {
+            log.info("retry: refused, secure input enabled")
+            return false
+        }
         let front = NSWorkspace.shared.frontmostApplication
         log.info("retry: posting to frontmost \(front?.bundleIdentifier ?? "?", privacy: .public) (\(front?.processIdentifier ?? -1, privacy: .public))")
         let saved = PasteboardSnapshot.capture(pasteboard)

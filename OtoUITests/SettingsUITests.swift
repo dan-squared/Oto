@@ -36,13 +36,20 @@ final class SettingsUITests: XCTestCase {
         XCTAssertEqual(app.windows.count, 1, "Only one Settings window may exist")
 
         // Native chrome proof: the standard traffic lights exist (the deleted
-        // custom titlebar would fail exactly here), and the split-view
-        // sidebar toggle proves the NavigationSplitView root.
+        // custom titlebar would fail exactly here), and both toolbar tabs
+        // prove the top-bar root (§phase-5-topbar: no sidebar exists at all).
         XCTAssertTrue(settingsWindow.buttons["_XCUI:CloseWindow"].exists)
+        XCTAssertTrue(settingsWindow.buttons["General"].exists)
+        XCTAssertTrue(settingsWindow.buttons["Dictation"].exists)
+
+        // Dock setting (phase-5-dock-visibility): single source of truth in
+        // Settings General. Existence only — never flipped here (flipping
+        // would hide the runner's Dock via setActivationPolicy).
+        settingsWindow.buttons["General"].click()
         XCTAssertTrue(
-            settingsWindow.buttons.matching(
-                NSPredicate(format: "label CONTAINS %@", "Sidebar")
-            ).firstMatch.exists
+            settingsWindow.descendants(matching: .any)["ShowInDockToggle"]
+                .waitForExistence(timeout: 10),
+            "General must expose the Show-in-Dock toggle"
         )
     }
 }

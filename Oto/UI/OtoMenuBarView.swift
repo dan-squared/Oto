@@ -15,8 +15,9 @@ import SwiftUI
 struct OtoMenuBarView: View {
     let coordinator: DictationCoordinator
     let inserter: RealTextInsertion
+    let dispatch: ShortcutDispatch
 
-    @State private var status = "No session yet"
+    @State private var status = "idle — no session yet"
     @State private var recoveryAvailable = false
     @State private var feedback: String?
 
@@ -25,7 +26,10 @@ struct OtoMenuBarView: View {
             .task {
                 // One shot: the menu rebuilds on every open, so a single
                 // read is always fresh. No poll loop (that was diagnostics
-                // scaffolding for a label that lied).
+                // scaffolding for a label that lied). Feedback is cleared
+                // here so a previous "Posted" line never greets the next open.
+                feedback = nil
+                dispatch.refreshAvailability()
                 status = await coordinator.lastSessionSummary()
                 recoveryAvailable = await coordinator.recoveryText() != nil
             }
@@ -54,11 +58,12 @@ struct OtoMenuBarView: View {
                         return
                     }
                     // The person pressed this while looking at the target —
-                    // they are the check (same contract as Settings retry).
+                    // they are the check: only someone facing the app they
+                    // want the text in presses Retry.
                     let posted = await inserter.retryPostToFrontmost(text)
                     feedback = posted
                         ? "Posted — check the frontmost app."
-                        : "Retry failed — clipboard unavailable."
+                        : "Retry failed — secure input may be blocking it, or the clipboard was unavailable."
                 }
             }
             Divider()

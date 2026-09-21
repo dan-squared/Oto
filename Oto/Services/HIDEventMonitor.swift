@@ -138,6 +138,13 @@ final class HIDEventMonitor {
     /// Runs from a C callback on the main runloop: the consume decision is
     /// synchronous HERE; actions hop async. Never blocks, never awaits.
     private nonisolated func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // The tap lives on the main runloop; anything else means the
+        // assumeIsolated below would trap. Pass through unconsumed (safe
+        // default) and canary in Debug — symmetric with CarbonHotKey.
+        guard Thread.isMainThread else {
+            assertionFailure("HID event tap must run on the main runloop.")
+            return Unmanaged.passUnretained(event)
+        }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             DispatchQueue.main.async { [weak self] in
                 Task { @MainActor [weak self] in
@@ -155,10 +162,14 @@ final class HIDEventMonitor {
             return Unmanaged.passUnretained(event)
         }
 
+        // Sendable snapshot before the isolation boundary: the non-Sendable
+        // CGEvent must not cross into the @Sendable assumeIsolated body
+        // (Swift 6 region isolation). Field reads are valid synchronously.
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        let flags = event.flags
         let decided: (emit: ShortcutEvent?, consume: Bool) = MainActor.assumeIsolated {
-            self.decide(type: type, keyCode: keyCode, isRepeat: isRepeat, flags: event.flags)
+            self.decide(type: type, keyCode: keyCode, isRepeat: isRepeat, flags: flags)
         }
 
         if let emit = decided.emit {
@@ -167,7 +178,10 @@ final class HIDEventMonitor {
         return decided.consume ? nil : Unmanaged.passUnretained(event)
     }
 
-    private func decide(
+    /// Exposed internal for the decide-matrix tests (audit S3): the C
+    /// callback and tap lifecycle stay private; only the pure
+    /// type/key/flags → (emit, consume) decision is tested.
+    func decide(
         type: CGEventType,
         keyCode: Int64,
         isRepeat: Bool,
@@ -214,7 +228,7 @@ final class HIDEventMonitor {
         return (hold.step(.flags(down: down)), false)
     }
 
-    private func decideFunction(
+    func decideFunction(
         keyCode: Int64,
         isRepeat: Bool,
         flags: CGEventFlags,
@@ -261,7 +275,7 @@ struct ModifierHoldState: Equatable, Sendable {
         case otherActivity
     }
 
-    mutating func step(_ event: HoldEvent) -> ShortcutEvent? {
+    nonisolated mutating func step(_ event: HoldEvent) -> ShortcutEvent? {
         switch event {
         case .flags(let down):
             if down {
@@ -282,7 +296,7 @@ struct ModifierHoldState: Equatable, Sendable {
     }
 
     /// CGEvent flag family for a modifier key code.
-    static func flag(for keyCode: UInt16) -> CGEventFlags? {
+    nonisolated static func flag(for keyCode: UInt16) -> CGEventFlags? {
         switch keyCode {
         case UInt16(kVK_Shift), UInt16(kVK_RightShift): return .maskShift
         case UInt16(kVK_Command), UInt16(kVK_RightCommand): return .maskCommand

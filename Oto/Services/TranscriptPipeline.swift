@@ -12,7 +12,8 @@ import Foundation
 /// touching the coordinator. The target is passed through now so the
 /// signature already matches the Phase 6 contract (02 finish rules).
 struct TranscriptPipeline: Sendable {
-    func process(_ raw: String, for target: TargetApplication) -> String {
+    /// Pure trim (Swift 6: `nonisolated` for the background coordinator).
+    nonisolated func process(_ raw: String, for target: TargetApplication) -> String {
         raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

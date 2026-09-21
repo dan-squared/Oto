@@ -10,16 +10,19 @@ import Carbon.HIToolbox
 import Foundation
 
 /// Carbon modifier masks (stable since forever; verified in 27 SDK).
-enum CarbonModifiers {
-    static let command = 256
-    static let shift = 512
-    static let option = 2048
-    static let control = 4096
+/// Namespace enum: `Sendable`-conformance keeps the constants shareable
+/// from nonisolated contexts (Swift 6, default MainActor isolation).
+enum CarbonModifiers: Sendable {
+    nonisolated static let command = 256
+    nonisolated static let shift = 512
+    nonisolated static let option = 2048
+    nonisolated static let control = 4096
 }
 
 extension NSEvent.ModifierFlags {
-    /// NSEvent flags → Carbon modifier mask for hotkey matching.
-    var carbonMask: Int {
+    /// NSEvent flags → Carbon modifier mask for hotkey matching. Pure
+    /// bit math: `nonisolated` (Swift 6).
+    nonisolated var carbonMask: Int {
         var mask = 0
         if contains(.command) { mask |= CarbonModifiers.command }
         if contains(.shift) { mask |= CarbonModifiers.shift }
@@ -40,10 +43,9 @@ final class CarbonHotKey {
     let carbonModifiers: Int
     let onKeyDown: () -> Void
     let onKeyUp: () -> Void
-    var onRegistrationFailed: (() -> Void)?
 
     fileprivate let id: Int
-    fileprivate var eventHotKeyRef: EventHotKeyRef?
+    nonisolated(unsafe) fileprivate var eventHotKeyRef: EventHotKeyRef?
 
     init?(
         carbonKeyCode: Int,
@@ -63,7 +65,16 @@ final class CarbonHotKey {
     }
 
     deinit {
-        CarbonHotKeyCenter.shared.unregister(self)
+        // Nonisolated by definition, and the center is MainActor-bound —
+        // no hop is possible here. Unregister at the OS level directly:
+        // the RAII guarantee (a dead HotKey cannot remain registered)
+        // holds; the center's weak entry evaporates and is swept on the
+        // next registration. Runs on the main actor in practice (the
+        // monitor owns this from @MainActor lifecycle methods).
+        if let ref = eventHotKeyRef {
+            UnregisterEventHotKey(ref)
+            eventHotKeyRef = nil
+        }
     }
 }
 
@@ -106,17 +117,13 @@ final class CarbonHotKeyCenter {
             return false
         }
         hotKey.eventHotKeyRef = ref
+        // Sweep weak entries whose owners de-registered via deinit (the
+        // explicit unregister path was removed with the deinit fix — one
+        // OS-level path, no stale callbacks either way).
+        hotKeys = hotKeys.filter { $0.value.value != nil }
         hotKeys[hotKey.id] = WeakHotKey(value: hotKey)
         setUpEventHandlerIfNeeded()
         return true
-    }
-
-    func unregister(_ hotKey: CarbonHotKey) {
-        if let ref = hotKey.eventHotKeyRef {
-            UnregisterEventHotKey(ref)
-            hotKey.eventHotKeyRef = nil
-        }
-        hotKeys.removeValue(forKey: hotKey.id)
     }
 
     /// System symbolic hotkeys (for recorder conflict warnings).
@@ -167,23 +174,18 @@ final class CarbonHotKeyCenter {
         eventHandler = handler
     }
 
-    fileprivate func handleEvent(_ event: EventRef?) -> OSStatus {
-        guard let event else { return OSStatus(eventNotHandledErr) }
-        var hotKeyId = EventHotKeyID()
-        guard GetEventParameter(
-            event,
-            UInt32(kEventParamDirectObject),
-            UInt32(typeEventHotKeyID),
-            nil,
-            MemoryLayout<EventHotKeyID>.size,
-            nil,
-            &hotKeyId
-        ) == noErr,
-              hotKeyId.signature == signature,
-              let hotKey = hotKeys[Int(hotKeyId.id)]?.value
-        else { return OSStatus(eventNotHandledErr) }
+    /// Parsed, Sendable fire command: kind + id cross the isolation
+    /// boundary; the non-Sendable EventRef never does (Swift 6 region
+    /// isolation). Parsed synchronously on the delivery thread, which is
+    /// valid: Carbon event data is live for the callback's duration.
+    struct Fire: Sendable {
+        var kind: Int
+        var id: Int
+    }
 
-        switch Int(GetEventKind(event)) {
+    fileprivate func fire(_ fire: Fire) -> OSStatus {
+        guard let hotKey = hotKeys[fire.id]?.value else { return OSStatus(eventNotHandledErr) }
+        switch fire.kind {
         case kEventHotKeyPressed:
             hotKey.onKeyDown()
             return noErr
@@ -194,9 +196,30 @@ final class CarbonHotKeyCenter {
             return OSStatus(eventNotHandledErr)
         }
     }
+
+    nonisolated fileprivate func parseFire(_ event: EventRef?) -> Fire? {
+        guard let event else { return nil }
+        var hotKeyId = EventHotKeyID()
+        guard GetEventParameter(
+            event,
+            UInt32(kEventParamDirectObject),
+            UInt32(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            nil,
+            &hotKeyId
+        ) == noErr,
+              hotKeyId.signature == signature
+        else { return nil }
+        return Fire(kind: Int(GetEventKind(event)), id: Int(hotKeyId.id))
+    }
 }
 
-private func carbonHotKeyEventHandler(
+/// C entry point for the Carbon handler: must be `nonisolated` (a C
+/// function pointer cannot be formed from an isolated function). The hop
+/// back onto the actor is explicit inside via `assumeIsolated` — Carbon
+/// guarantees main-thread delivery, asserted below.
+nonisolated private func carbonHotKeyEventHandler(
     _: EventHandlerCallRef?,
     event: EventRef?,
     userData: UnsafeMutableRawPointer?
@@ -207,7 +230,8 @@ private func carbonHotKeyEventHandler(
         assertionFailure("Carbon event callback must run on the main thread.")
         return OSStatus(eventNotHandledErr)
     }
+    guard let fire = center.parseFire(event) else { return OSStatus(eventNotHandledErr) }
     return MainActor.assumeIsolated {
-        center.handleEvent(event)
+        center.fire(fire)
     }
 }

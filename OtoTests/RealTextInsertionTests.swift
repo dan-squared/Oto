@@ -19,6 +19,25 @@ private func scratchBoard() -> NSPasteboard {
     NSPasteboard(name: NSPasteboard.Name("oto-insert-\(UUID().uuidString)"))
 }
 
+/// Test-only Sendable counter for the scripted `@Sendable` event hooks.
+/// Swift 6 region isolation forbids mutating captured vars inside
+/// concurrently-executing closures; the lock is the sharing proof, and the
+/// main-actor test struct never touches the value off-domain.
+final class HookCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func bump() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 private func scriptedEvents(
     trusted: Bool = true,
     secure: Bool = false,
@@ -67,14 +86,14 @@ struct RealTextInsertionTests {
         board.clearContents()
         board.setString("mine", forType: .string)
         let before = board.changeCount
-        var hid = 0
-        var reactivates = 0
-        var focusReads = 0
-        var events = scriptedEvents(trusted: false, postedHID: { hid += 1 })
+        let hid = HookCount()
+        let reactivates = HookCount()
+        let focusReads = HookCount()
+        var events = scriptedEvents(trusted: false, postedHID: { hid.bump() })
         let baseReactivate = events.reactivate
-        events.reactivate = { reactivates += 1; return baseReactivate($0) }
+        events.reactivate = { reactivates.bump(); return baseReactivate($0) }
         let baseFront = events.frontmostPID
-        events.frontmostPID = { focusReads += 1; return baseFront() }
+        events.frontmostPID = { focusReads.bump(); return baseFront() }
         let service = RealTextInsertion(
             events: events, timings: fastTimings(), pasteboard: board
         )
@@ -87,9 +106,9 @@ struct RealTextInsertionTests {
         #expect(board.changeCount == before)
         #expect(board.string(forType: .string) == "mine")
         #expect(board.string(forType: PasteboardReceipt.markerType) == nil)
-        #expect(hid == 0)
-        #expect(reactivates == 0)
-        #expect(focusReads == 0)
+        #expect(hid.count == 0)
+        #expect(reactivates.count == 0)
+        #expect(focusReads.count == 0)
     }
 
     // 02 recovery table, secure-input row: a global holder (any app) must not
@@ -100,9 +119,9 @@ struct RealTextInsertionTests {
         board.clearContents()
         board.setString("mine", forType: .string)
         let before = board.changeCount
-        var hid = 0
+        let hid = HookCount()
         let service = RealTextInsertion(
-            events: scriptedEvents(secure: true, postedHID: { hid += 1 }),
+            events: scriptedEvents(secure: true, postedHID: { hid.bump() }),
             timings: fastTimings(), pasteboard: board
         )
         let result = await service.insert("secret words", into: anyTarget())
@@ -114,7 +133,7 @@ struct RealTextInsertionTests {
         #expect(board.changeCount == before)
         #expect(board.string(forType: .string) == "mine")
         #expect(board.string(forType: PasteboardReceipt.markerType) == nil)
-        #expect(hid == 0)
+        #expect(hid.count == 0)
     }
 
     // §9: nil pid means capture found no frontmost app (locked screen, login
@@ -124,11 +143,11 @@ struct RealTextInsertionTests {
         board.clearContents()
         board.setString("mine", forType: .string)
         let before = board.changeCount
-        var hid = 0
-        var reactivates = 0
-        var events = scriptedEvents(postedHID: { hid += 1 })
+        let hid = HookCount()
+        let reactivates = HookCount()
+        var events = scriptedEvents(postedHID: { hid.bump() })
         let base = events.reactivate
-        events.reactivate = { reactivates += 1; return base($0) }
+        events.reactivate = { reactivates.bump(); return base($0) }
         let service = RealTextInsertion(
             events: events, timings: fastTimings(), pasteboard: board
         )
@@ -138,8 +157,8 @@ struct RealTextInsertionTests {
             return
         }
         #expect(board.changeCount == before)
-        #expect(hid == 0)
-        #expect(reactivates == 0)
+        #expect(hid.count == 0)
+        #expect(reactivates.count == 0)
     }
 
     // §9 sandbox-valid proxy: `reactivate == false` is the sandboxed norm
@@ -151,11 +170,11 @@ struct RealTextInsertionTests {
         board.clearContents()
         board.setString("mine", forType: .string)
         let before = board.changeCount
-        var hid = 0
+        let hid = HookCount()
         let service = RealTextInsertion(
             events: scriptedEvents(
                 reactivate: { _ in false },
-                postedHID: { hid += 1 }
+                postedHID: { hid.bump() }
             ),
             timings: fastTimings(), pasteboard: board
         )
@@ -169,7 +188,7 @@ struct RealTextInsertionTests {
         #expect(board.changeCount == before)
         #expect(board.string(forType: .string) == "mine")
         #expect(board.string(forType: PasteboardReceipt.markerType) == nil)
-        #expect(hid == 0)
+        #expect(hid.count == 0)
     }
 
     // §11: the same fail-closed branches must name the Oto-frontmost case
@@ -177,12 +196,12 @@ struct RealTextInsertionTests {
     // Two tests because both branches route through the helper independently.
     @Test func otoFrontmostNamesItselfOnReactivateRefusal() async {
         let board = scratchBoard()
-        var hid = 0
+        let hid = HookCount()
         let service = RealTextInsertion(
             events: scriptedEvents(
                 reactivate: { _ in false },
                 otoFrontmost: { true },
-                postedHID: { hid += 1 }
+                postedHID: { hid.bump() }
             ),
             timings: fastTimings(), pasteboard: board
         )
@@ -192,19 +211,19 @@ struct RealTextInsertionTests {
             return
         }
         #expect(reason.contains("Oto itself"))
-        #expect(hid == 0)
+        #expect(hid.count == 0)
     }
 
     @Test func otoFrontmostNamesItselfOnFocusRace() async {
         let board = scratchBoard()
         board.clearContents()
         board.setString("mine", forType: .string)
-        var hid = 0
+        let hid = HookCount()
         let service = RealTextInsertion(
             events: scriptedEvents(
                 frontmostPID: { 11111 },
                 otoFrontmost: { true },
-                postedHID: { hid += 1 }
+                postedHID: { hid.bump() }
             ),
             timings: fastTimings(), pasteboard: board
         )
@@ -214,7 +233,7 @@ struct RealTextInsertionTests {
             return
         }
         #expect(reason.contains("Oto itself"))
-        #expect(hid == 0)
+        #expect(hid.count == 0)
         #expect(board.string(forType: .string) == "mine")
     }
 
@@ -222,14 +241,14 @@ struct RealTextInsertionTests {
     // for the guarded restore. The HID route is the device-proven one.
     @Test func proceedPostsHIDWhenActiveAndFrontmost() async {
         let board = scratchBoard()
-        var hid = 0
+        let hid = HookCount()
         let service = RealTextInsertion(
-            events: scriptedEvents(postedHID: { hid += 1 }),
+            events: scriptedEvents(postedHID: { hid.bump() }),
             timings: fastTimings(restore: 300_000_000), pasteboard: board
         )
         let result = await service.insert("dictated", into: anyTarget())
         #expect(result == .inserted)
-        #expect(hid == 1)
+        #expect(hid.count == 1)
         #expect(board.string(forType: .string) == "dictated")
         #expect(board.string(forType: PasteboardReceipt.markerType) != nil)
     }
@@ -242,11 +261,11 @@ struct RealTextInsertionTests {
         let board = scratchBoard()
         board.clearContents()
         board.setString("mine", forType: .string)
-        var hid = 0
+        let hid = HookCount()
         let service = RealTextInsertion(
             events: scriptedEvents(
                 frontmostPID: { 11111 },
-                postedHID: { hid += 1 }
+                postedHID: { hid.bump() }
             ),
             timings: fastTimings(), pasteboard: board
         )
@@ -256,7 +275,7 @@ struct RealTextInsertionTests {
             return
         }
         #expect(reason.contains("lost focus"))
-        #expect(hid == 0)
+        #expect(hid.count == 0)
         #expect(board.string(forType: .string) == "mine")
         #expect(board.string(forType: PasteboardReceipt.markerType) == nil)
     }
@@ -309,21 +328,40 @@ struct RealTextInsertionTests {
         let board = scratchBoard()
         board.clearContents()
         board.setString("mine", forType: .string)
-        var hid = 0
+        let hid = HookCount()
         let service = RealTextInsertion(
             events: scriptedEvents(
                 trusted: false,
                 reactivate: { _ in false },
                 frontmostPID: { 11111 },
-                postedHID: { hid += 1 }
+                postedHID: { hid.bump() }
             ),
             timings: fastTimings(restore: 300_000_000), pasteboard: board
         )
         let posted = await service.retryPostToFrontmost("kept words")
         #expect(posted)
-        #expect(hid == 1)
+        #expect(hid.count == 1)
         #expect(board.string(forType: .string) == "kept words")
         #expect(board.string(forType: PasteboardReceipt.markerType) != nil)
+    }
+
+    // F4: retry under secure input must refuse (not post into the void
+    // while the menu claims success). Clipboard untouched, nothing posted.
+    @Test func retryRefusesUnderSecureInput() async {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let before = board.changeCount
+        let hid = HookCount()
+        let service = RealTextInsertion(
+            events: scriptedEvents(secure: true, postedHID: { hid.bump() }),
+            timings: fastTimings(), pasteboard: board
+        )
+        let posted = await service.retryPostToFrontmost("kept words")
+        #expect(!posted)
+        #expect(hid.count == 0)
+        #expect(board.changeCount == before)
+        #expect(board.string(forType: .string) == "mine")
     }
 
     // 11 clipboard-restoration acceptance: the transcript lingers only until

@@ -3,6 +3,7 @@
 //  Oto
 //
 
+import AppKit
 import ServiceManagement
 import SwiftUI
 
@@ -10,11 +11,38 @@ import SwiftUI
 /// shortcut controls (those live in Dictation). Thin by design: toggles
 /// without engines behind them are dead controls, and dead controls are
 /// worse than a short pane.
+/// Dock visibility preference. One documented call
+/// (`setActivationPolicy`), persisted as a scalar — not a model store, so
+/// the 12:46 one-store rule is untouched. Default shown: preserves current
+/// behavior on upgrade.
+enum DockVisibility {
+    nonisolated static let defaultsKey = "app.Oto.showInDock"
+
+    /// Pure read with upgrade default: `nonisolated` (Swift 6).
+    nonisolated static func isShown(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: defaultsKey) as? Bool ?? true
+    }
+
+    /// Pure mapping: `nonisolated` (Swift 6).
+    nonisolated static func policy(for shown: Bool) -> NSApplication.ActivationPolicy {
+        shown ? .regular : .accessory
+    }
+
+    @discardableResult
+    static func apply(shown: Bool, defaults: UserDefaults = .standard) -> Bool {
+        guard NSApp.setActivationPolicy(policy(for: shown)) else { return false }
+        defaults.set(shown, forKey: defaultsKey)
+        return true
+    }
+}
+
 struct GeneralPane: View {
     let login: any LoginItemManaging
 
     @State private var loginStatus: SMAppService.Status = .notRegistered
     @State private var loginError: String?
+    @State private var showInDock = DockVisibility.isShown()
+    @State private var dockError: String?
 
     var body: some View {
         Form {
@@ -24,7 +52,6 @@ struct GeneralPane: View {
                     set: { newValue in setLogin(enabled: newValue) }
                 ))
                 .toggleStyle(.switch)
-
                 // Four states, never two: revoked consent and lookup failure
                 // both read as guidance, not as a broken toggle.
                 if loginStatus == .requiresApproval {
@@ -42,6 +69,21 @@ struct GeneralPane: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                Toggle("Show Oto in Dock", isOn: Binding(
+                    get: { showInDock },
+                    set: { newValue in setDockVisibility(shown: newValue) }
+                ))
+                .toggleStyle(.switch)
+                .accessibilityIdentifier("ShowInDockToggle")
+                Text("Applies immediately. When off, Oto lives in the menu bar only — no Dock icon, no ⌘Tab. Closing Settings never quits the app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let dockError {
+                    Text(dockError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("About") {
@@ -50,7 +92,8 @@ struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("General")
+        // No .navigationTitle: sections self-label, and a stacked
+        // sidebar+detail title inflates the toolbar zone (§11).
         .task { refreshLogin() }
     }
 
@@ -74,5 +117,16 @@ struct GeneralPane: View {
             loginError = error.localizedDescription
             refreshLogin()
         }
+    }
+
+    private func setDockVisibility(shown: Bool) {
+        // Binding-set (not onChange): on failure the state is left untouched
+        // so the toggle never lies, and no revert loop is possible.
+        dockError = nil
+        guard DockVisibility.apply(shown: shown) else {
+            dockError = "Could not change Dock visibility right now."
+            return
+        }
+        showInDock = shown
     }
 }

@@ -32,7 +32,7 @@ struct HotkeyTransitionState: Equatable, Sendable {
         case escape
     }
 
-    mutating func step(_ input: Input, mode: InteractionMode) -> ShortcutTransition {
+    nonisolated mutating func step(_ input: Input, mode: InteractionMode) -> ShortcutTransition {
         switch input {
         case .escape:
             isDown = false
@@ -76,7 +76,7 @@ struct HotkeyTransitionState: Equatable, Sendable {
 /// apps; fn flag is fine (it's how the row is typed in media mode).
 /// Adopted from the Yap reference (`FunctionKeyTrigger.shouldFire`, MIT).
 enum FunctionKeyMatching: Sendable {
-    static func shouldFire(
+    nonisolated static func shouldFire(
         codes: Set<Int64>,
         keyCode: Int64,
         flags: CGEventFlags,

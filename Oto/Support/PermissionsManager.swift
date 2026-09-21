@@ -5,6 +5,7 @@
 //  Created by Daniel Girma on 19/09/2026.
 //
 
+import ApplicationServices
 import AVFoundation
 import Foundation
 import Speech
@@ -63,12 +64,13 @@ struct PermissionsManager: Sendable {
     func speechStatus() -> SFSpeechRecognizerAuthorizationStatus {
         SFSpeechRecognizer.authorizationStatus()
     }
+}
 
-    func requestSpeech() async -> SFSpeechRecognizerAuthorizationStatus {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status)
-            }
-        }
-    }
+extension PermissionsManager {
+    /// The AX prompt options key. Spelled as a literal because the C global
+    /// (`kAXTrustedCheckOptionPrompt`) imports as shared mutable state and
+    /// is rejected from checked contexts under Swift 6. Value verified at
+    /// runtime 2026-09-21 (prints "AXTrustedCheckOptionPrompt"); stable
+    /// since 10.9 per the SDK headers.
+    nonisolated static let axPromptKey = "AXTrustedCheckOptionPrompt"
 }

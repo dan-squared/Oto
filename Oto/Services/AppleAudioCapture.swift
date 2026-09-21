@@ -28,19 +28,42 @@ import os
 /// Tap the input's hardware format; never assume a sample rate. The tap
 /// callback only forwards to the injected handler (the relay) — no UI,
 /// no logging, no conversion on the realtime thread.
+/// Coalesces input-device config flurries (notably Bluetooth SCO link
+/// bring-up, which renegotiates in bursts) into at most one rebuild per
+/// quiet window. Pure decision function — exhaustively unit-tested; the
+/// actor owns timestamps and pending work.
+struct RebuildDebouncePolicy: Sendable {
+    /// Minimum quiet between rebuilds. Starting value from the 2026-09-21
+    /// Jabra trace (bring-up flurry inside one second); the device matrix
+    /// tunes it, never guesses (plan/bt-sco-flap.md).
+    var quietNanoseconds: UInt64 = 1_500_000_000
+
+    nonisolated func shouldRebuildNow(now: Date, lastRebuild: Date?) -> Bool {
+        guard let lastRebuild else { return true }
+        return now.timeIntervalSince(lastRebuild) * 1_000_000_000 >= Double(quietNanoseconds)
+    }
+}
+
 actor AppleAudioCapture: AudioCaptureServing {
     struct EngineError: Error, Sendable {}
 
     private let bufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    private let debounce: RebuildDebouncePolicy
     private let log = Logger(subsystem: "app.Oto", category: "audio")
 
     private var engine = AVAudioEngine()
     private var isRunning = false
     private var configObserver: NSObjectProtocol?
     private var handlingConfigChange = false
+    private var lastRebuild: Date?
+    private var pendingRebuild: Task<Void, Never>?
 
-    init(bufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil) {
+    init(
+        bufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil,
+        debounce: RebuildDebouncePolicy = RebuildDebouncePolicy()
+    ) {
         self.bufferHandler = bufferHandler
+        self.debounce = debounce
     }
 
     func start() async throws {
@@ -79,6 +102,8 @@ actor AppleAudioCapture: AudioCaptureServing {
     }
 
     private func teardown() {
+        pendingRebuild?.cancel()
+        pendingRebuild = nil
         removeConfigObserver()
         if isRunning {
             engine.inputNode.removeTap(onBus: 0)
@@ -101,6 +126,11 @@ actor AppleAudioCapture: AudioCaptureServing {
 
         // Capture the handler (not self): the tap closure runs on the
         // realtime thread and must not touch actor state.
+        // NOTE (Swift 6 migration): macOS 27 deprecates this variant in
+        // favor of throwing installAudioTap with read-only buffers — see
+        // plan/audit-solidify.md S5. Deliberately NOT migrated here: the
+        // new buffer type crosses relay→feed→converter, and that change
+        // ships only with a device audio-matrix, never blind.
         let handler = bufferHandler
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
             handler?(buffer)
@@ -126,15 +156,45 @@ actor AppleAudioCapture: AudioCaptureServing {
     /// Default input reconfigured (device unplugged/switched): rebuild on a
     /// fresh engine so recording continues without inheriting the old
     /// device's format. Delivered on the main queue.
+    ///
+    /// Flurries (Bluetooth SCO bring-up renegotiates in bursts) coalesce:
+    /// at most one rebuild per quiet window, scheduled after the link
+    /// settles — tearing down on every flutter is how gaps multiply
+    /// (plan/bt-sco-flap.md, device-proven 2026-09-21).
     private func handleConfigurationChange() {
         // Rebuilding can itself emit another change; never re-enter, and
         // ignore changes once stopped.
         guard isRunning, !handlingConfigChange else { return }
+        if debounce.shouldRebuildNow(now: Date(), lastRebuild: lastRebuild) {
+            pendingRebuild?.cancel()
+            pendingRebuild = nil
+            rebuildForDeviceChange()
+        } else {
+            // Inside the window: collapse into one scheduled rebuild after
+            // quiet. A newer change re-arms the timer (never stacks).
+            pendingRebuild?.cancel()
+            let quiet = debounce.quietNanoseconds
+            pendingRebuild = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: quiet)
+                guard !Task.isCancelled else { return }
+                await self?.rebuildForDeviceChange()
+            }
+        }
+    }
+
+    /// Single rebuild path for device changes (immediate and scheduled).
+    /// Re-guards: a stop racing the timer must not resurrect the engine.
+    private func rebuildForDeviceChange() {
+        pendingRebuild = nil
+        guard isRunning, !handlingConfigChange else { return }
         handlingConfigChange = true
         defer { handlingConfigChange = false }
+        lastRebuild = Date()
 
         do {
             try restart()
+            let format = engine.inputNode.outputFormat(forBus: 0)
+            log.info("audio rebuilt after device change rate=\(Int(format.sampleRate), privacy: .public) ch=\(format.channelCount, privacy: .public)")
         } catch {
             // The new device won't start: tear down rather than look alive
             // while recording nothing.

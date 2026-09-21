@@ -25,6 +25,7 @@ private final class FakeLoginItem: LoginItemManaging, @unchecked Sendable {
     }
 }
 
+@MainActor
 struct LoginItemManagerTests {
     @Test func enableReachesRegister() async {
         let fake = FakeLoginItem()

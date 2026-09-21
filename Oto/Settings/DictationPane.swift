@@ -161,7 +161,8 @@ struct DictationPane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Dictation")
+        // No .navigationTitle: sections self-label, and a stacked
+        // sidebar+detail title inflates the toolbar zone (§11).
         .task {
             syncFromDispatch()
             await refreshSpeech()
@@ -258,7 +259,8 @@ struct DictationPane: View {
     /// page itself when untrusted, no-ops when trusted. Verified in the
     /// macOS 27 headers (10.9+); no raw Settings URLs.
     private func requestAccessibilityPrompt() {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        _ = AXIsProcessTrustedWithOptions([
+            PermissionsManager.axPromptKey: true,
+        ] as CFDictionary)
     }
 }

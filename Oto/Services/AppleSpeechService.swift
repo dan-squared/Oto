@@ -15,6 +15,9 @@ import os
 enum SpeechSessionError: Error, Sendable {
     case excessiveAudioLoss(dropped: Int)
     case engineFailure(String)
+    /// Zero buffers reached the feeder all session (dead/zombie mic):
+    /// fail loud instead of completing empty (bt-sco-flap.md).
+    case noAudioCaptured
 }
 
 extension SpeechSessionError: LocalizedError {
@@ -24,6 +27,8 @@ extension SpeechSessionError: LocalizedError {
             return "Too much audio was lost (\(dropped) buffers dropped)."
         case .engineFailure(let detail):
             return "Speech engine failed (\(detail))."
+        case .noAudioCaptured:
+            return "No audio reached the microphone."
         }
     }
 }
@@ -31,27 +36,38 @@ extension SpeechSessionError: LocalizedError {
 /// Realtime feeder: the ONLY object the audio thread touches. Converter +
 /// continuation live behind one lock; session state stays on the actor.
 /// `feed` drops (never blocks) when no session is configured.
+///
+/// Concurrency (Swift 6, default MainActor isolation): the lock is the
+/// isolation. Shared mutable state is `nonisolated(unsafe)` — manually
+/// synchronized memory, every access under `lock` — and the methods are
+/// plain checked `nonisolated`. `unsafe` names exactly the trust: remove
+/// the lock discipline and nothing compiler-side saves us. The audio
+/// thread can never hop to an actor, so actor isolation is not an
+/// available alternative for this type. `NSLock` itself is Sendable
+/// (`NS_SWIFT_SENDABLE` in the 27 SDK).
 final class AudioFeedBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: AsyncStream<AnalyzerInput>.Continuation?
-    private var format: AVAudioFormat?
+    private nonisolated(unsafe) var continuation: AsyncStream<AnalyzerInput>.Continuation?
+    private nonisolated(unsafe) var format: AVAudioFormat?
+    private nonisolated(unsafe) var conversionFailures = 0
     private let converter = BufferConverter()
 
-    func createStream() -> AsyncStream<AnalyzerInput> {
+    nonisolated func createStream() -> AsyncStream<AnalyzerInput> {
         lock.lock()
         defer { lock.unlock() }
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         self.continuation = continuation
+        conversionFailures = 0
         return stream
     }
 
-    func configure(format: AVAudioFormat) {
+    nonisolated func configure(format: AVAudioFormat) {
         lock.lock()
         defer { lock.unlock() }
         self.format = format
     }
 
-    func feed(_ buffer: AVAudioPCMBuffer) {
+    nonisolated func feed(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         guard let continuation, let format else {
             lock.unlock()
@@ -61,6 +77,10 @@ final class AudioFeedBox: @unchecked Sendable {
         do {
             converted = try converter.convertBuffer(buffer, to: format)
         } catch {
+            // Counted, never logged per-buffer (realtime thread): surfaced
+            // once per session at finish (bt-sco-flap.md). Silence with a
+            // number beats silence with a shrug.
+            conversionFailures += 1
             converted = nil
         }
         lock.unlock()
@@ -69,7 +89,13 @@ final class AudioFeedBox: @unchecked Sendable {
         }
     }
 
-    func finishInput() {
+    nonisolated func conversionFailureCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return conversionFailures
+    }
+
+    nonisolated func finishInput() {
         lock.lock()
         defer { lock.unlock() }
         continuation?.finish()
@@ -89,7 +115,6 @@ actor AppleSpeechService: SpeechServing {
     /// lands in Phase 6. Finals are the only path to insertion.
     var onPartial: (@Sendable (String) -> Void)?
 
-    private let locale: Locale
     private let relay: AudioBufferRelay
     private let permissions: PermissionsManager
     private let feedBox = AudioFeedBox()
@@ -101,11 +126,9 @@ actor AppleSpeechService: SpeechServing {
     private var finalizedText = ""
 
     init(
-        locale: Locale = .current,
         relay: AudioBufferRelay,
         permissions: PermissionsManager = PermissionsManager()
     ) {
-        self.locale = locale
         self.relay = relay
         self.permissions = permissions
     }
@@ -119,9 +142,11 @@ actor AppleSpeechService: SpeechServing {
             throw SpeechReadiness.microphoneDenied
         }
 
-        // 2. Resolve the system locale against what Apple supports.
+        // 2. Resolve the system locale against what Apple supports. Read
+        // per session, not frozen at launch (audit N3): a language change
+        // without relaunch must still dictate.
         let supported = await SpeechTranscriber.supportedLocales
-        guard let resolved = SpeechLocaleMatching.bestMatch(for: locale, in: supported) else {
+        guard let resolved = SpeechLocaleMatching.bestMatch(for: .current, in: supported) else {
             throw SpeechReadiness.unsupportedLocale
         }
 
@@ -194,8 +219,16 @@ actor AppleSpeechService: SpeechServing {
 
         let text = finalizedText
         let dropped = relay.droppedBufferCount()
+        let delivered = relay.deliveredBufferCount()
+        let convFail = feedBox.conversionFailureCount()
         teardown()
+        log.info("speech finished delivered=\(delivered, privacy: .public) dropped=\(dropped, privacy: .public) convFail=\(convFail, privacy: .public) chars=\(text.count, privacy: .public)")
 
+        // Dead/zombie mic: zero buffers all session. Fail loud with an
+        // honest reason instead of completing empty (bt-sco-flap.md).
+        if delivered == 0 {
+            throw SpeechSessionError.noAudioCaptured
+        }
         if dropped > AudioBufferRelay.maximumDroppedBeforeFailure {
             throw SpeechSessionError.excessiveAudioLoss(dropped: dropped)
         }

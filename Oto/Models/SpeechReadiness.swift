@@ -18,6 +18,21 @@ enum SpeechReadiness: Error, Equatable, Sendable {
     case assetsPreparing
     case microphoneDenied
     case ready
+
+    // Explicit: the coordinator actor compares readiness without a
+    // MainActor hop (Swift 6, default MainActor isolation).
+    nonisolated static func == (lhs: SpeechReadiness, rhs: SpeechReadiness) -> Bool {
+        switch (lhs, rhs) {
+        case (.unsupportedLocale, .unsupportedLocale),
+             (.assetsNotPrepared, .assetsNotPrepared),
+             (.assetsPreparing, .assetsPreparing),
+             (.microphoneDenied, .microphoneDenied),
+             (.ready, .ready):
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 extension SpeechReadiness: LocalizedError {
@@ -40,8 +55,9 @@ extension SpeechReadiness: LocalizedError {
 /// Pure readiness mapping — unit-tested without hardware or Apple assets.
 enum SpeechReadinessMapper: Sendable {
     /// Order is deliberate: microphone first (most actionable), then locale,
-    /// then asset state.
-    static func map(
+    /// then asset state. Pure mapping: `nonisolated` for the background
+    /// speech actor (Swift 6, default MainActor isolation).
+    nonisolated static func map(
         microphoneGranted: Bool,
         resolvedLocale: Locale?,
         installedLocales: [Locale],

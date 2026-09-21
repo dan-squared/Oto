@@ -12,22 +12,22 @@ import Foundation
 import Testing
 @testable import Oto
 
+// All sessions run through background actors; the suite itself rides the
+// main actor (same precedent as RealTextInsertionTests): actors, inits,
+// and state comparisons stay in one domain (Swift 6).
+@MainActor
 struct DictationCoordinatorTests {
     private static let stubTarget = TargetApplication(
         bundleIdentifier: "com.example.FakeTarget",
         processIdentifier: 1234,
         windowIdentifier: nil
     )
-    private static let otherTarget = TargetApplication(
-        bundleIdentifier: "com.example.OtherApp",
-        processIdentifier: 5678,
-        windowIdentifier: nil
-    )
 
     private func makeSUT(
         finalText: String = "hello oto",
         insertionResult: InsertionResult = .inserted,
-        prepareGateOpen: Bool = true
+        prepareGateOpen: Bool = true,
+        finishError: (any Error)? = nil
     ) -> (
         coordinator: DictationCoordinator,
         audio: FakeAudioCapture,
@@ -38,6 +38,7 @@ struct DictationCoordinatorTests {
         let audio = FakeAudioCapture()
         let speech = FakeSpeechService(
             finalText: finalText,
+            finishError: finishError,
             prepareGateOpen: prepareGateOpen
         )
         let target = FakeTargetCapture(stubTarget: Self.stubTarget)
@@ -267,12 +268,14 @@ struct DictationCoordinatorTests {
     // MARK: - 9. App switch keeps the captured target
 
     @Test func frontmostChangeDoesNotRedirectInsertion() async {
-        let (coordinator, _, _, target, inserter) = makeSUT(finalText: "to captured")
+        let (coordinator, _, _, _, inserter) = makeSUT(finalText: "to captured")
 
         let id = await coordinator.beginHold()
         _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
-        // User switches apps mid-session.
-        await target.setFrontmost(Self.otherTarget)
+        // Capture is start-pinned by construction (the fake returns the
+        // start target unconditionally, mirroring the real service): a
+        // mid-session switch has nothing to redirect — the coordinator
+        // holds no frontmost reference at all.
         await coordinator.finish(id!)
         let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
 
@@ -346,5 +349,63 @@ struct DictationCoordinatorTests {
         let next = await coordinator.beginHold()
         #expect(next != nil)
         _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+    }
+
+    // MARK: - 13. Dead mic fails loud (bt-sco-flap.md): zero audio is a
+    // failure with an honest reason — never a silent empty completion.
+    // No transcript exists to keep: recovery stays empty, clipboard
+    // untouched, insertion never attempted.
+
+    @Test func zeroAudioFailsWithoutRecovery() async {
+        let (coordinator, _, _, _, inserter) = makeSUT(
+            finishError: SpeechSessionError.noAudioCaptured
+        )
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.finish(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+
+        guard case .failed(_, .noAudioCaptured) = terminal else {
+            Issue.record("expected failed(noAudioCaptured), got \(terminal)")
+            return
+        }
+        #expect(await coordinator.recoveryTranscript == nil)
+        #expect(await inserter.calls.count == 0)
+        #expect(await coordinator.lastSessionSummary() == "failed: no audio captured — check the microphone")
+    }
+
+    // MARK: - 14. Menu status copy (audit S4): UI-visible strings pinned
+
+    @Test func statusCopyTracksStates() async {
+        let (coordinator, _, _, _, _) = makeSUT()
+        #expect(await coordinator.lastSessionSummary() == "idle — no session yet")
+
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        #expect(await coordinator.lastSessionSummary() == "recording (holdToTalk)…")
+
+        await coordinator.finish(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .completed = terminal else {
+            Issue.record("expected completed, got \(terminal)")
+            return
+        }
+        #expect(await coordinator.lastSessionSummary() == "completed (holdToTalk)")
+    }
+
+    @Test func statusCopyNamesFailureAndRecovery() async {
+        let (coordinator, _, _, _, _) = makeSUT(
+            finalText: "keep me",
+            insertionResult: .recoverableFailure(reason: "denied")
+        )
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.finish(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed = terminal else {
+            Issue.record("expected failed, got \(terminal)")
+            return
+        }
+        #expect(await coordinator.lastSessionSummary() == "failed: insertion failed (denied), transcript kept")
     }
 }

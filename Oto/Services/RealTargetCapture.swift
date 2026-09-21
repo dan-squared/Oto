@@ -16,7 +16,10 @@ import Foundation
 /// the cursor is often on a display the person isn't looking at. Chain is
 /// focused-window → mouse → nil; every step is nil-tolerant.
 final class RealTargetCapture: TargetCapturing {
-    func capture() -> TargetApplication {
+    /// Synchronous snapshot read (NSWorkspace/AX/screen queries are all
+    /// nonisolated in the 27 SDK): `nonisolated` to satisfy the protocol
+    /// for the background coordinator (Swift 6).
+    nonisolated func capture() -> TargetApplication {
         let app = NSWorkspace.shared.frontmostApplication
         let bundleID: String? = app?.bundleIdentifier ?? nil
         return TargetApplication(
@@ -27,7 +30,7 @@ final class RealTargetCapture: TargetCapturing {
         )
     }
 
-    func isAlive(_ target: TargetApplication) -> Bool {
+    func isAlive(_ target: TargetApplication) async -> Bool {
         guard let pid = target.processIdentifier else { return false }
         guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
         return !app.isTerminated
@@ -35,7 +38,9 @@ final class RealTargetCapture: TargetCapturing {
 
     // MARK: - Screen (best-effort, nil-tolerant)
 
-    private static func screenDisplayID() -> CGDirectDisplayID? {
+    // Synchronous snapshot reads: `nonisolated` for the background
+    // capture path (Swift 6); every SDK call inside is nonisolated.
+    nonisolated private static func screenDisplayID() -> CGDirectDisplayID? {
         if let id = focusedWindowDisplayID() { return id }
         let mouse = NSEvent.mouseLocation
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }),
@@ -46,7 +51,7 @@ final class RealTargetCapture: TargetCapturing {
         return nil
     }
 
-    private static func focusedWindowDisplayID() -> CGDirectDisplayID? {
+    nonisolated private static func focusedWindowDisplayID() -> CGDirectDisplayID? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         // Without AX trust every query below fails closed → nil. That is the
         // correct outcome: an unknown screen must never block dictation.
@@ -73,11 +78,11 @@ final class RealTargetCapture: TargetCapturing {
         return nil
     }
 
-    private static func primaryScreenHeight() -> CGFloat? {
+    nonisolated private static func primaryScreenHeight() -> CGFloat? {
         (NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.main)?.frame.height
     }
 
-    private static func copyElement(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
+    nonisolated private static func copyElement(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXUIElementGetTypeID()
@@ -86,7 +91,7 @@ final class RealTargetCapture: TargetCapturing {
         return unsafeDowncast(value, to: AXUIElement.self)
     }
 
-    private static func copyAXValue(_ element: AXUIElement, _ attribute: String, expecting: AXValueType) -> AXValue? {
+    nonisolated private static func copyAXValue(_ element: AXUIElement, _ attribute: String, expecting: AXValueType) -> AXValue? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXValueGetTypeID()
@@ -97,14 +102,14 @@ final class RealTargetCapture: TargetCapturing {
         return axValue
     }
 
-    private static func copyPoint(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
+    nonisolated private static func copyPoint(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
         guard let axValue = copyAXValue(element, attribute, expecting: .cgPoint) else { return nil }
         var result = CGPoint.zero
         guard AXValueGetValue(axValue, .cgPoint, &result) else { return nil }
         return result
     }
 
-    private static func copySize(_ element: AXUIElement, _ attribute: String) -> CGSize? {
+    nonisolated private static func copySize(_ element: AXUIElement, _ attribute: String) -> CGSize? {
         guard let axValue = copyAXValue(element, attribute, expecting: .cgSize) else { return nil }
         var result = CGSize.zero
         guard AXValueGetValue(axValue, .cgSize, &result) else { return nil }

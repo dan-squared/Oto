@@ -9,9 +9,15 @@ import Foundation
 
 /// Finalized transcript text. Only finals (never partials) may be inserted,
 /// saved, or preserved for recovery (02 §Apple Speech workflow).
+/// Plain value: equality is `nonisolated` for the background coordinator
+/// (Swift 6, default MainActor isolation).
 struct Transcript: Equatable, Sendable {
     /// Raw finalized text from the speech service.
     let text: String
+
+    nonisolated static func == (lhs: Transcript, rhs: Transcript) -> Bool {
+        lhs.text == rhs.text
+    }
 
     /// Trimmed text. Empty (including whitespace-only) transcripts complete
     /// the session without insertion (02 session timeline).

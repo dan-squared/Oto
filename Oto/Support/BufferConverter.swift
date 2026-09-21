@@ -22,13 +22,21 @@ final class BufferConverter {
         case conversionFailed
     }
 
-    private var converter: AVAudioConverter?
+    // Touched only under `AudioFeedBox`'s lock (the sole owner — see the
+    // single instantiation site): `nonisolated(unsafe)` memory with a
+    // checked `nonisolated` entry point (Swift 6, default MainActor
+    // isolation). AVAudioConverter caches are not thread-safe on their own.
+    private nonisolated(unsafe) var converter: AVAudioConverter?
 
-    func convertBuffer(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat) throws -> AVAudioPCMBuffer {
+    nonisolated func convertBuffer(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat) throws -> AVAudioPCMBuffer {
         let inputFormat = buffer.format
         guard inputFormat != format else { return buffer }
 
-        if converter == nil || converter?.outputFormat != format {
+        // The converter's input format is fixed at creation (readonly per
+        // AVAudioConverter.h) — a device switch mid-session changes the
+        // tap's format, so the input side must join the cache key or every
+        // buffer after the switch throws and is silently dropped (audit F1).
+        if converter == nil || converter?.outputFormat != format || converter?.inputFormat != inputFormat {
             converter = AVAudioConverter(from: inputFormat, to: format)
             converter?.primeMethod = .none
         }

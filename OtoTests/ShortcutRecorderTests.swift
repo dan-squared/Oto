@@ -11,6 +11,8 @@ import Foundation
 import Testing
 @testable import Oto
 
+// Touches UserDefaults + config values: main-actor suite (Swift 6).
+@MainActor
 struct ShortcutRecorderTests {
     // MARK: - Classification
 
@@ -76,20 +78,6 @@ struct ShortcutRecorderTests {
         #expect(conflicts.contains(.systemShortcut))
     }
 
-    @Test func menuItemConflictIsFlagged() {
-        let outcome = ShortcutRecorderRules.classify(
-            keyCode: UInt16(kVK_ANSI_D),
-            modifiers: [.command, .shift],
-            systemShortcuts: [],
-            menuItemTitles: ["\(CarbonModifiers.command | CarbonModifiers.shift):\(kVK_ANSI_D)": "Dictate"]
-        )
-        guard case .captured(_, _, let conflicts) = outcome else {
-            Issue.record("expected captured, got \(outcome)")
-            return
-        }
-        #expect(conflicts.contains(.menuItem(title: "Dictate")))
-    }
-
     @Test func commandSpaceIsDisallowed() {
         let outcome = ShortcutRecorderRules.classify(
             keyCode: UInt16(kVK_Space),
@@ -104,6 +92,21 @@ struct ShortcutRecorderTests {
             if case .disallowed = $0 { return true }
             return false
         }))
+    }
+
+    // MARK: - Conflict policy copy (audit S4 gap: blocksSaving/describe
+    // had zero coverage despite gating what the UI saves)
+
+    @Test func disallowedBlocksSystemWarns() {
+        #expect(ShortcutRecorderConflicts.blocksSaving([.systemShortcut]) == false)
+        #expect(ShortcutRecorderConflicts.blocksSaving([.disallowed(reason: "x")]) == true)
+        #expect(ShortcutRecorderConflicts.blocksSaving([]) == false)
+    }
+
+    @Test func describeNamesEachConflict() {
+        #expect(ShortcutRecorderConflicts.describe([.systemShortcut]).contains("system shortcut"))
+        #expect(ShortcutRecorderConflicts.describe([.disallowed(reason: "sandboxed")]).contains("sandboxed"))
+        #expect(ShortcutRecorderConflicts.describe([]).isEmpty)
     }
 
     @Test func functionKeyCapturesBare() {

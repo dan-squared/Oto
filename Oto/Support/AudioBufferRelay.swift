@@ -17,24 +17,35 @@ import Foundation
 /// reference (`AudioBufferRelay.swift`, MIT) with one required improvement
 /// (07 §4.2): drops are COUNTED, and the session fails past a threshold
 /// rather than silently producing a corrupted transcript.
+///
+/// Concurrency (Swift 6, default MainActor isolation): the lock is the
+/// isolation. Shared mutable state is `nonisolated(unsafe)` — manually
+/// synchronized memory, every access under `lock` — and the methods are
+/// plain checked `nonisolated`. See the accepted ordering race noted on
+/// `attach` (audit N1). `NSLock` itself is Sendable (`NS_SWIFT_SENDABLE`
+/// in the 27 SDK).
 final class AudioBufferRelay: @unchecked Sendable {
     /// ~2048 frames each; 250 is roughly 10 seconds. A ceiling in case the
     /// transcriber never becomes ready, so we never grow without bound.
-    static let maximumPending = 250
+    nonisolated static let maximumPending = 250
 
     /// Past this many dropped buffers the transcript is untrustworthy;
     /// `AppleSpeechService.finish()` throws instead of returning it.
     /// Exact value is provisional pending device measurement.
-    static let maximumDroppedBeforeFailure = 50
+    nonisolated static let maximumDroppedBeforeFailure = 50
 
     private let lock = NSLock()
-    private var pending: [AVAudioPCMBuffer] = []
-    private var sink: ((AVAudioPCMBuffer) -> Void)?
-    private var droppedCount = 0
+    private nonisolated(unsafe) var pending: [AVAudioPCMBuffer] = []
+    private nonisolated(unsafe) var sink: ((AVAudioPCMBuffer) -> Void)?
+    private nonisolated(unsafe) var droppedCount = 0
+    /// Buffers handed to the sink since `attach` (one session's proof of
+    /// mic life; reset per attach, read at finish).
+    private nonisolated(unsafe) var deliveredCount = 0
 
-    func receive(_ buffer: AVAudioPCMBuffer) {
+    nonisolated func receive(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         if let sink {
+            deliveredCount += 1
             lock.unlock()
             sink(buffer)
             return
@@ -50,19 +61,28 @@ final class AudioBufferRelay: @unchecked Sendable {
         lock.unlock()
     }
 
-    func attach(_ sink: @escaping (AVAudioPCMBuffer) -> Void) {
+    nonisolated func attach(_ sink: @escaping (AVAudioPCMBuffer) -> Void) {
         lock.lock()
         let buffered = pending
         pending.removeAll()
+        deliveredCount = 0
         self.sink = sink
         lock.unlock()
 
+        // Accepted race (audit N1): a buffer arriving between the sink
+        // assignment above and this flush loop delivers AHEAD of older
+        // buffered audio. Microsecond window at session start, quality-only
+        // (slightly shuffled first words); sequencing the flush would cost
+        // realtime blocking. Revisit with device evidence, not theory.
         for buffer in buffered {
+            lock.lock()
+            deliveredCount += 1
+            lock.unlock()
             sink(buffer)
         }
     }
 
-    func reset() {
+    nonisolated func reset() {
         lock.lock()
         sink = nil
         pending.removeAll()
@@ -70,7 +90,13 @@ final class AudioBufferRelay: @unchecked Sendable {
         lock.unlock()
     }
 
-    func droppedBufferCount() -> Int {
+    nonisolated func deliveredBufferCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return deliveredCount
+    }
+
+    nonisolated func droppedBufferCount() -> Int {
         lock.lock()
         defer { lock.unlock() }
         return droppedCount

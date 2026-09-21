@@ -68,6 +68,25 @@ struct AudioBufferRelayTests {
         #expect(delivered.count == AudioBufferRelay.maximumPending)
     }
 
+    @Test func deliveredCountsSinkHandoffsPerAttachWindow() {
+        let relay = AudioBufferRelay()
+        var delivered: [AVAudioPCMBuffer] = []
+        relay.attach { delivered.append($0) }
+        relay.receive(makeBuffer())
+        relay.receive(makeBuffer())
+        relay.receive(makeBuffer())
+        #expect(relay.deliveredBufferCount() == 3)
+        // Re-attach opens a new window: the count resets, flushed audio counts.
+        relay.receive(makeBuffer())
+        relay.reset()
+        relay.receive(makeBuffer())
+        relay.receive(makeBuffer())
+        var flushed: [AVAudioPCMBuffer] = []
+        relay.attach { flushed.append($0) }
+        #expect(flushed.count == 2)
+        #expect(relay.deliveredBufferCount() == 2)
+    }
+
     @Test func resetClearsSinkPendingAndDrops() {
         let relay = AudioBufferRelay()
         var delivered: [AVAudioPCMBuffer] = []

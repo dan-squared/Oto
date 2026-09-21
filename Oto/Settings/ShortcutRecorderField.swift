@@ -12,26 +12,25 @@ import SwiftUI
 /// label died. The classification rules, Escape-cancels, Delete-clears, and invalid-beeps
 /// behavior are unchanged and stay covered by `ShortcutRecorderTests`.
 enum ShortcutRecorderConflicts {
-    static func blocksSaving(_ conflicts: [RecorderConflict]) -> Bool {
+    nonisolated static func blocksSaving(_ conflicts: [RecorderConflict]) -> Bool {
         conflicts.contains {
             switch $0 {
-            case .menuItem, .disallowed: return true
+            case .disallowed: return true
             case .systemShortcut: return false
             }
         }
     }
 
-    static func describe(_ conflicts: [RecorderConflict]) -> String {
+    nonisolated static func describe(_ conflicts: [RecorderConflict]) -> String {
         conflicts.map { conflict in
             switch conflict {
-            case .menuItem(let title): return "Used by menu item “\(title)” — blocked."
             case .systemShortcut: return "Also a system shortcut — saved anyway."
             case .disallowed(let reason): return "Blocked: \(reason)"
             }
         }.joined(separator: " ")
     }
 
-    static func describeCombo(modifiers: UInt32, keyCode: UInt32) -> String {
+    nonisolated static func describeCombo(modifiers: UInt32, keyCode: UInt32) -> String {
         var parts: [String] = []
         if modifiers & UInt32(CarbonModifiers.command) != 0 { parts.append("⌘") }
         if modifiers & UInt32(CarbonModifiers.shift) != 0 { parts.append("⇧") }

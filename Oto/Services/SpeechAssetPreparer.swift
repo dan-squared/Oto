@@ -71,6 +71,7 @@ struct SpeechAssetPreparer: Sendable {
             if !reserved.contains(tag) {
                 do { _ = try await AssetInventory.reserve(locale: resolved) } catch {
                     log.error("reserve failed after installed check")
+                    return "Installed but could not be reserved: \(error.localizedDescription)"
                 }
             }
             log.info("already prepared")

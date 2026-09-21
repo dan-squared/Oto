@@ -64,4 +64,16 @@ struct SpeechLocaleMatchingTests {
             ) == Locale(identifier: "en_GB")
         )
     }
+
+    @Test func regionOverrideWidensToLanguageRegion() {
+        // The motivating bug class: when system language and region
+        // disagree, macOS reports en_US@rg=… (BCP-47 en-US-u-rg-…) — no
+        // engine lists that string, so exact comparison must widen to
+        // language+region instead of reporting unsupported.
+        let match = SpeechLocaleMatching.bestMatch(
+            for: Locale(identifier: "en-US-u-rg-eszzzz"),
+            in: Self.candidates
+        )
+        #expect(match == Locale(identifier: "en_US"))
+    }
 }

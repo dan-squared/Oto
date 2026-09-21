@@ -19,7 +19,9 @@ import Foundation
 /// then same language+region ignoring extensions, then same language in
 /// any region.
 enum SpeechLocaleMatching: Sendable {
-    static func bestMatch<Candidates: Sequence>(
+    /// Pure widening match, no state: `nonisolated` for the background
+    /// speech actor (Swift 6, default MainActor isolation).
+    nonisolated static func bestMatch<Candidates: Sequence>(
         for locale: Locale,
         in candidates: Candidates
     ) -> Locale? where Candidates.Element == Locale {

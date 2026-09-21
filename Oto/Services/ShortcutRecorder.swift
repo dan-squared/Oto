@@ -20,15 +20,40 @@ enum RecorderOutcome: Equatable, Sendable {
     case invalid
     /// Valid combo captured; conflicts listed for the UI to present.
     case captured(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict])
+
+    // Explicit: compared in tests from nonisolated contexts (Swift 6).
+    nonisolated static func == (lhs: RecorderOutcome, rhs: RecorderOutcome) -> Bool {
+        switch (lhs, rhs) {
+        case (.cancelled, .cancelled), (.cleared, .cleared), (.invalid, .invalid):
+            return true
+        case (.captured(let lm, let lk, let lc), .captured(let rm, let rk, let rc)):
+            return lm == rm && lk == rk && lc == rc
+        default:
+            return false
+        }
+    }
 }
 
-/// A conflict the UI must present before saving (policy: menu-item BLOCKS,
-/// system WARNS, sandboxed-disallowed BLOCKS — from the 3.1.0 reference
-/// `ConflictPolicy`, Oto-owned).
+/// A conflict the UI must present before saving (policy: system WARNS,
+/// sandboxed-disallowed BLOCKS — from the 3.1.0 reference `ConflictPolicy`,
+/// Oto-owned). Note: no menu-item check — Oto cannot enumerate other apps'
+/// menus, and its own menu is trivial, so that branch was dead in
+/// production (audit D4) and is gone rather than kept as theater.
 enum RecorderConflict: Equatable, Sendable {
-    case menuItem(title: String)
     case systemShortcut
     case disallowed(reason: String)
+
+    // Explicit: compared in tests and UI copy from any domain (Swift 6).
+    nonisolated static func == (lhs: RecorderConflict, rhs: RecorderConflict) -> Bool {
+        switch (lhs, rhs) {
+        case (.systemShortcut, .systemShortcut):
+            return true
+        case (.disallowed(let a), .disallowed(let b)):
+            return a == b
+        default:
+            return false
+        }
+    }
 }
 
 /// Pure recorder rules: NSEvent → outcome. No monitors, no side effects —
@@ -36,11 +61,11 @@ enum RecorderConflict: Equatable, Sendable {
 /// feeds events here; global registration is suspended while listening
 /// (dispatch owns that).
 enum ShortcutRecorderRules: Sendable {
-    static func classify(
+    /// Pure NSEvent → outcome mapping: `nonisolated` (Swift 6).
+    nonisolated static func classify(
         keyCode: UInt16,
         modifiers: NSEvent.ModifierFlags,
-        systemShortcuts: [(keyCode: Int, modifiers: Int)],
-        menuItemTitles: [String: String] = [:]
+        systemShortcuts: [(keyCode: Int, modifiers: Int)]
     ) -> RecorderOutcome {
         let relevant = modifiers.intersection([.command, .shift, .option, .control])
 
@@ -68,9 +93,6 @@ enum ShortcutRecorderRules: Sendable {
         let carbon = relevant.carbonMask
         var conflicts: [RecorderConflict] = []
 
-        if let menuTitle = menuItemTitles["\(carbon):\(keyCode)"] {
-            conflicts.append(.menuItem(title: menuTitle))
-        }
         if systemShortcuts.contains(where: { $0.keyCode == Int(keyCode) && $0.modifiers == carbon }) {
             conflicts.append(.systemShortcut)
         }
@@ -82,7 +104,7 @@ enum ShortcutRecorderRules: Sendable {
 
     /// F1–F12 key codes for the bare-shift exception. Explicit list —
     /// no range tricks (a malformed range traps the whole test runner).
-    static var functionKeyCodes: Set<UInt16> {
+    nonisolated static var functionKeyCodes: Set<UInt16> {
         [
             UInt16(kVK_F1), UInt16(kVK_F2), UInt16(kVK_F3),
             UInt16(kVK_F4), UInt16(kVK_F5), UInt16(kVK_F6),
@@ -94,7 +116,7 @@ enum ShortcutRecorderRules: Sendable {
     /// Combos the system will not deliver to sandboxed apps. Conservative
     /// best-effort list (mirrors the reference `isDisallowed` concept);
     /// device-matrix findings extend it, never shrink validation silently.
-    static func isDisallowedInSandbox(modifiers: Int, keyCode: UInt16) -> Bool {
+    nonisolated static func isDisallowedInSandbox(modifiers: Int, keyCode: UInt16) -> Bool {
         // Spotlight (⌘Space), Siri/dictation system keys, and lock-screen
         // class combos never reach a sandboxed app.
         if modifiers == CarbonModifiers.command, keyCode == UInt16(kVK_Space) {

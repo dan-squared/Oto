@@ -155,6 +155,7 @@ actor DictationCoordinator {
             case .audioCapture: reason = "audio capture failed"
             case .speechPreparation: reason = "speech preparation failed"
             case .microphoneDenied: reason = "microphone denied"
+            case .noAudioCaptured: reason = "no audio captured — check the microphone"
             case .targetGone: reason = "target app closed"
             case .insertionFailed(let detail): reason = "insertion failed (\(detail))"
             }
@@ -250,7 +251,15 @@ actor DictationCoordinator {
         } catch {
             guard currentSessionID == sessionID else { return }
             currentSessionID = nil
-            state = .failed(context, .speechPreparation(error.localizedDescription))
+            // Dead mic surfaces honestly: no transcript exists to keep,
+            // so recovery stays empty and the reason names the mic.
+            if let sessionError = error as? SpeechSessionError,
+               case .noAudioCaptured = sessionError
+            {
+                state = .failed(context, .noAudioCaptured)
+            } else {
+                state = .failed(context, .speechPreparation(error.localizedDescription))
+            }
             return
         }
 
