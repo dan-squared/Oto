@@ -36,6 +36,13 @@ struct OtoApp: App {
     // the honest shape (audit S2).
     private let inserter: RealTextInsertion
     @NSApplicationDelegateAdaptor(DockRestoreDelegate.self) private var dockRestore
+    // Phase 6A writing stores. One persistence service; three observable
+    // owners passed to Settings. The coordinator receives rule snapshots
+    // (values, never store references) and the history sink.
+    private let persistence: LocalPersistence
+    private let dictionaryStore: DictionaryStore
+    private let snippetStore: SnippetStore
+    private let historyStore: HistoryStore
 
     init() {
         let relay = AudioBufferRelay()
@@ -44,20 +51,37 @@ struct OtoApp: App {
         })
         let speech = AppleSpeechService(relay: relay)
         let inserter = RealTextInsertion()
+        let persistence = LocalPersistence()
+        let dictionaryStore = DictionaryStore(persistence: persistence)
+        let snippetStore = SnippetStore(persistence: persistence)
+        let historyStore = HistoryStore(persistence: persistence)
         let coordinator = DictationCoordinator(
             audio: audio,
             speech: speech,
             targetService: RealTargetCapture(),
-            inserter: inserter
+            inserter: inserter,
+            history: historyStore
         )
         self.coordinator = coordinator
         self.inserter = inserter
+        self.persistence = persistence
+        self.dictionaryStore = dictionaryStore
+        self.snippetStore = snippetStore
+        self.historyStore = historyStore
         let dispatch = ShortcutDispatch(coordinator: coordinator)
         self.dispatch = dispatch
         // Shortcut layer: Carbon combos + HID tap (right-Option hold
         // default). No NSEvent monitors in the trigger path — they wedge
         // MenuBarExtra menu tracking (bisect-proven, see HIDEventMonitor).
         dispatch.start()
+        // Stores load off the launch path; rules push when ready. Dictation
+        // before this lands uses trim-only (today's behavior), never blocks.
+        Task {
+            await dictionaryStore.load()
+            await snippetStore.load()
+            await historyStore.load()
+            await coordinator.setDictionaryRules(dictionaryStore.rules)
+        }
     }
 
     var body: some Scene {
@@ -71,7 +95,12 @@ struct OtoApp: App {
                 dispatch: dispatch,
                 preparer: preparer,
                 permissions: permissions,
-                login: login
+                login: login,
+                coordinator: coordinator,
+                dictionary: dictionaryStore,
+                snippets: snippetStore,
+                history: historyStore,
+                inserter: inserter
             )
         }
         .defaultSize(width: 760, height: 620)

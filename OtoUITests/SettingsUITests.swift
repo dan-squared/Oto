@@ -36,11 +36,13 @@ final class SettingsUITests: XCTestCase {
         XCTAssertEqual(app.windows.count, 1, "Only one Settings window may exist")
 
         // Native chrome proof: the standard traffic lights exist (the deleted
-        // custom titlebar would fail exactly here), and both toolbar tabs
+        // custom titlebar would fail exactly here), and all four toolbar tabs
         // prove the top-bar root (§phase-5-topbar: no sidebar exists at all).
         XCTAssertTrue(settingsWindow.buttons["_XCUI:CloseWindow"].exists)
         XCTAssertTrue(settingsWindow.buttons["General"].exists)
         XCTAssertTrue(settingsWindow.buttons["Dictation"].exists)
+        XCTAssertTrue(settingsWindow.buttons["Writing"].exists)
+        XCTAssertTrue(settingsWindow.buttons["Privacy & History"].exists)
 
         // Dock setting (phase-5-dock-visibility): single source of truth in
         // Settings General. Existence only — never flipped here (flipping

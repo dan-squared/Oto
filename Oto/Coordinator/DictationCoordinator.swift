@@ -31,7 +31,10 @@ actor DictationCoordinator {
     private let speech: any SpeechServing
     private let targetService: any TargetCapturing
     private let inserter: any TextInserting
-    private let pipeline: TranscriptPipeline
+    private var pipeline: TranscriptPipeline
+    /// Optional history sink (Phase 6A). Nil in tests and when history is
+    /// off — recording is a no-op either way. Set once at app composition.
+    private let history: HistoryStore?
 
     private var currentSessionID: UUID?
     private var sessionContext: SessionContext?
@@ -46,13 +49,21 @@ actor DictationCoordinator {
         speech: any SpeechServing,
         targetService: any TargetCapturing,
         inserter: any TextInserting,
-        pipeline: TranscriptPipeline = TranscriptPipeline()
+        pipeline: TranscriptPipeline = TranscriptPipeline(),
+        history: HistoryStore?
     ) {
         self.audio = audio
         self.speech = speech
         self.targetService = targetService
         self.inserter = inserter
         self.pipeline = pipeline
+        self.history = history
+    }
+
+    /// Live rule refresh from the dictionary store (Writing pane saves).
+    /// Value copy: the background finalize path keeps using plain arrays.
+    func setDictionaryRules(_ rules: [DictionaryRule]) {
+        pipeline = TranscriptPipeline(dictionaryRules: rules)
     }
 
     // MARK: - Intents
@@ -274,6 +285,16 @@ actor DictationCoordinator {
             state = .completed(context)
             log.info("completed (empty, no insertion) \(sessionID.uuidString.prefix(8), privacy: .public)")
             return
+        }
+
+        // Opt-in recall: final text only (never audio/partials/clipboard).
+        // The store itself no-ops when history is off. Recorded once here so
+        // inserted, target-gone, and insertion-failed finals are all kept.
+        if let history {
+            await history.record(finalText: clean, bundleID: context.target.bundleIdentifier)
+            // Suspension crossed actor isolation: a cancel may have won
+            // while recording. Re-check identity before touching targets.
+            guard currentSessionID == sessionID else { return }
         }
 
         // Liveness over freshness: a dead target keeps the transcript in

@@ -47,7 +47,8 @@ struct DictationCoordinatorTests {
             audio: audio,
             speech: speech,
             targetService: target,
-            inserter: inserter
+            inserter: inserter,
+            history: nil
         )
         return (coordinator, audio, speech, target, inserter)
     }
