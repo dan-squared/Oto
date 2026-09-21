@@ -186,7 +186,7 @@ says blocked (F4). No push until you verify (standing rule).
   converged on the true, fixable set above. Attributed to module-cache
   state across the language-mode switch; did not recur.
 
-## 10. Deferred with SDK facts: audio-tap modernization (S5, NOT done)
+## 10. Audio-tap modernization (S5, EXECUTED 2026-09-21 — see plan/s5-audiotap.md)
 
 - macOS 27 deprecates `installTapOnBus:bufferSize:format:block:` (void)
   (`AVAudioNode.h:117`, replacement named in the attribute).
@@ -201,10 +201,11 @@ says blocked (F4). No push until you verify (standing rule).
   device audio-matrix (record → transcript quality), never blind. The
   deprecated call still works (present in the 27 SDK, device-proven
   audio path). One deprecation warning remains as the honest marker.
-- Migration sketch (future): bridge `AVReadOnlyAudioPCMBuffer` → converter
-  input at the feed boundary; keep the drop-and-count discipline; extend
-  `BufferConverterTests` with the new input type; device-matrix audio
-  quality before/after.
+- Executed: `installAudioTap` + `AVAudioPCMBuffer(copying:)` bridge
+  (one copy per block); relay/feed/converter untouched; bit-exact
+  headless round-trip tests; deprecation warning at zero. The
+  `init(copying:)` isolation risk did not fire. Device matrix pending —
+  plan/s5-audiotap.md §5.
 
 ## 11. Migration complete (2026-09-21, same session)
 

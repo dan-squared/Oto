@@ -139,14 +139,14 @@ actor AppleAudioCapture: AudioCaptureServing {
         // (plan/installtap-crash.md). Nil has zero behavioral delta when
         // stable (it IS the hardware format); the downstream converter
         // adapts arbitrary input by design.
-        // NOTE (Swift 6 migration): macOS 27 deprecates this variant in
-        // favor of throwing installAudioTap with read-only buffers — see
-        // plan/audit-solidify.md S5. Deliberately NOT migrated here: the
-        // new buffer type crosses relay→feed→converter, and that change
-        // ships only with a device audio-matrix, never blind.
+        // S5 (plan/s5-audiotap.md): throwing installAudioTap; the block
+        // receives a Sendable read-only struct, bridged to an owned buffer
+        // via the sanctioned init(copying:). One small copy per block; the
+        // relay owns it from here, and the realtime thread never touches
+        // it again.
         let handler = bufferHandler
-        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
-            handler?(buffer)
+        try input.installAudioTap(onBus: 0, bufferSize: 2048, format: nil) { readOnly, _ in
+            handler?(AVAudioPCMBuffer(copying: readOnly))
         }
     }
 
