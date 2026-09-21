@@ -25,14 +25,17 @@ import Foundation
 /// `attach` (audit N1). `NSLock` itself is Sendable (`NS_SWIFT_SENDABLE`
 /// in the 27 SDK).
 final class AudioBufferRelay: @unchecked Sendable {
-    /// ~2048 frames each; 250 is roughly 10 seconds. A ceiling in case the
-    /// transcriber never becomes ready, so we never grow without bound.
-    nonisolated static let maximumPending = 250
+    /// ~4096 frames each; 125 is roughly 10 seconds at the tuned 48 kHz.
+    /// A ceiling in case the transcriber never becomes ready, so we never
+    /// grow without bound. Halved with bufferSize 2048→4096 to preserve
+    /// exact time-equivalence (plan/buffer-size.md).
+    nonisolated static let maximumPending = 125
 
     /// Past this many dropped buffers the transcript is untrustworthy;
     /// `AppleSpeechService.finish()` throws instead of returning it.
-    /// Exact value is provisional pending device measurement.
-    nonisolated static let maximumDroppedBeforeFailure = 50
+    /// 25 ≈ 2.1 s of lost audio at 48 kHz (halved with bufferSize;
+    /// exact value provisional pending device measurement).
+    nonisolated static let maximumDroppedBeforeFailure = 25
 
     private let lock = NSLock()
     private nonisolated(unsafe) var pending: [AVAudioPCMBuffer] = []

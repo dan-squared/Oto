@@ -145,7 +145,10 @@ actor AppleAudioCapture: AudioCaptureServing {
         // relay owns it from here, and the realtime thread never touches
         // it again.
         let handler = bufferHandler
-        try input.installAudioTap(onBus: 0, bufferSize: 2048, format: nil) { readOnly, _ in
+        // bufferSize 4096 (plan/buffer-size.md): power-of-2 inside the
+        // documented [100, 400] ms request range for the BT rate
+        // (256 ms @16 kHz; 85 ms @48 kHz).
+        try input.installAudioTap(onBus: 0, bufferSize: 4096, format: nil) { readOnly, _ in
             handler?(AVAudioPCMBuffer(copying: readOnly))
         }
     }
