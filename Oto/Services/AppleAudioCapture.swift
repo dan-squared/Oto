@@ -115,24 +115,37 @@ actor AppleAudioCapture: AudioCaptureServing {
         engine = AVAudioEngine()
     }
 
+    /// Degenerate-node predicate: a formatless input (device gone) must
+    /// throw before `installTap`, never reach it. Pure — unit-tested.
+    nonisolated static func tapFormatUsable(_ format: AVAudioFormat) -> Bool {
+        format.sampleRate > 0 && format.channelCount > 0
+    }
+
     private func installTap() throws {
         let input = engine.inputNode
         input.removeTap(onBus: 0)
         let format = input.outputFormat(forBus: 0)
 
-        guard format.sampleRate > 0, format.channelCount > 0 else {
+        guard Self.tapFormatUsable(format) else {
             throw EngineError()
         }
 
         // Capture the handler (not self): the tap closure runs on the
         // realtime thread and must not touch actor state.
+        // format: nil — the tap uses the node's LIVE format. Passing our
+        // just-read format reintroduces the crash class that killed PID
+        // 19574: on a flapping device the read is stale by install time
+        // and installTap raises an uncatchable NSException on mismatch
+        // (plan/installtap-crash.md). Nil has zero behavioral delta when
+        // stable (it IS the hardware format); the downstream converter
+        // adapts arbitrary input by design.
         // NOTE (Swift 6 migration): macOS 27 deprecates this variant in
         // favor of throwing installAudioTap with read-only buffers — see
         // plan/audit-solidify.md S5. Deliberately NOT migrated here: the
         // new buffer type crosses relay→feed→converter, and that change
         // ships only with a device audio-matrix, never blind.
         let handler = bufferHandler
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
             handler?(buffer)
         }
     }

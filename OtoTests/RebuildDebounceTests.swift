@@ -7,6 +7,7 @@
 //  flutter multiplies silence gaps. Pure decision function, deterministic.
 //
 
+import AVFoundation
 import Foundation
 import Testing
 @testable import Oto
@@ -37,6 +38,20 @@ struct RebuildDebounceTests {
         let last = Date()
         let now = last.addingTimeInterval(1.6)
         #expect(policy.shouldRebuildNow(now: now, lastRebuild: last))
+    }
+
+    @Test func degenerateFormatRefusesTap() {
+        // installTap-crash.md: a formatless node (device gone) must throw
+        // before installTap is ever called — the throw is catchable, the
+        // NSException on mismatch is not.
+        let badRate = AVAudioFormat(standardFormatWithSampleRate: 0, channels: 1)
+        let badChannels = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 0)
+        let good = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
+        // AVAudioFormat init is failable: a 0-rate/0-channel descriptor
+        // may itself refuse to construct — nil counts as unusable.
+        #expect((badRate.map(AppleAudioCapture.tapFormatUsable) ?? false) == false)
+        #expect((badChannels.map(AppleAudioCapture.tapFormatUsable) ?? false) == false)
+        #expect(AppleAudioCapture.tapFormatUsable(good))
     }
 
     @Test func tighterWindowFlapsLess() {
