@@ -65,6 +65,33 @@ struct SnippetStoreTests {
         #expect(preview.hasSuffix("more)"))
     }
 
+    @Test func deletePersistsCleanly() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let persistence = LocalPersistence(directory: dir)
+        let store = SnippetStore(persistence: persistence)
+        guard case .success(let first) = await store.add(name: "One", expansion: "1", bundleID: nil),
+              case .success = await store.add(name: "Two", expansion: "2", bundleID: nil)
+        else {
+            Issue.record("setup adds must succeed"); return
+        }
+        await store.remove(id: first.id)
+        // Fresh instance over the same file: exactly the survivor.
+        // Proves the file, not just memory — no deleted-row residue.
+        let reloaded = SnippetStore(persistence: persistence)
+        await reloaded.load()
+        #expect(reloaded.snippets.count == 1)
+        #expect(reloaded.snippets[0].name == "Two")
+    }
+
+    @Test func updateMissingIsNotFound() async {
+        let store = makeStore()
+        let ghost = Snippet(name: "Ghost", expansion: "x")
+        let result = await store.update(ghost)
+        if case .failure(let error) = result {
+            #expect(error == .notFound)
+        } else { Issue.record("expected notFound for deleted id") }
+    }
     @Test func v1SchemaHasNoTriggerKey() async throws {
         let store = makeStore()
         // Scoped snippet: all four v1 keys present, trigger absent by bytes.

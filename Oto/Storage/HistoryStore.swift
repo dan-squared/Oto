@@ -38,7 +38,7 @@ struct HistoryEntry: Sendable, Hashable, Codable, Identifiable {
 final class HistoryStore {
     static let filename = "history.v1.json"
     nonisolated static let enabledKey = "app.Oto.historyEnabled"
-    nonisolated static let maxEntries = 200
+    nonisolated static let maxEntries = 100
     nonisolated static let maxAgeDays = 30
 
     /// Newest-first, already trimmed. Empty until load() + first record().

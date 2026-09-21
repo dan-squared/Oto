@@ -28,6 +28,7 @@ struct PrivacyHistoryPane: View {
     @AppStorage("app.Oto.historyEnabled") private var historyEnabled = false
     @State private var showClearConfirm = false
     @State private var feedback: String?
+    @State private var historyPage = 1
 
     @State private var micText = "Checking…"
     @State private var axTrusted = false
@@ -50,6 +51,10 @@ struct PrivacyHistoryPane: View {
         .formStyle(.grouped)
         .onChange(of: historyEnabled) { _, new in
             history.setEnabled(new)
+            if !new { historyPage = 1 }
+        }
+        .onChange(of: history.entries.count) { _, _ in
+            historyPage = HistoryPage.clampedPage(historyPage, total: history.entries.count)
         }
         .confirmationDialog(
             "Delete all history on this Mac?",
@@ -57,7 +62,10 @@ struct PrivacyHistoryPane: View {
             titleVisibility: .visible
         ) {
             Button("Delete \(history.entries.count) entries", role: .destructive) {
-                Task { await history.clearAll() }
+                Task {
+                    await history.clearAll()
+                    historyPage = 1
+                }
             }
         } message: {
             Text("This removes every remembered transcript on this Mac. Cannot be undone.")
@@ -82,14 +90,17 @@ struct PrivacyHistoryPane: View {
                     systemImage: "clock",
                     description: Text("Turn it on to recall past dictation.")
                 )
+                .frame(maxWidth: .infinity, minHeight: 240)
             } else if history.entries.isEmpty {
                 ContentUnavailableView(
                     "No remembered transcripts",
                     systemImage: "clock",
                     description: Text("Finished dictation appears here.")
                 )
+                .frame(maxWidth: .infinity, minHeight: 240)
             } else {
-                ForEach(history.entries) { entry in
+                let pageCount = HistoryPage.pageCount(total: history.entries.count)
+                ForEach(HistoryPage.slice(items: history.entries, page: historyPage)) { entry in
                     VStack(alignment: .leading) {
                         Text(entry.finalText)
                             .lineLimit(3)
@@ -112,8 +123,34 @@ struct PrivacyHistoryPane: View {
                     }
                 }
                 HStack {
-                    Spacer()
                     Button("Clear all…", role: .destructive) { showClearConfirm = true }
+                    Spacer()
+                }
+                // Footer: newest-first pages, 10 per page. Page count caps at
+                // 10 by construction (100-entry bound), so numbered buttons
+                // never need ellipsis logic.
+                HStack {
+                    Button("Previous") {
+                        if historyPage > 1 { historyPage -= 1 }
+                    }
+                    .disabled(historyPage <= 1)
+                    ForEach(1...pageCount, id: \.self) { number in
+                        if number == historyPage {
+                            Button("\(number)") { historyPage = number }
+                                .buttonStyle(.borderedProminent)
+                        } else {
+                            Button("\(number)") { historyPage = number }
+                                .buttonStyle(.link)
+                        }
+                    }
+                    Button("Next") {
+                        if historyPage < pageCount { historyPage += 1 }
+                    }
+                    .disabled(historyPage >= pageCount)
+                    Spacer()
+                    Text("Page \(historyPage) of \(pageCount)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             if let feedback {

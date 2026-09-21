@@ -67,6 +67,7 @@ enum DictionaryValidationError: Error, Equatable, Sendable {
     case emptyBundleID
     case duplicate(spoken: String, scope: String)
     case storeFull
+    case notFound
 
     nonisolated var errorDescription: String {
         switch self {
@@ -84,6 +85,8 @@ enum DictionaryValidationError: Error, Equatable, Sendable {
             return "‘\(spoken)’ already exists (\(scope)). Edit the existing rule instead of adding a copy."
         case .storeFull:
             return "Dictionary holds \(DictionaryRule.maxRules) rules. Delete or merge a rule before adding another."
+        case .notFound:
+            return "This rule was deleted."
         }
     }
 }
@@ -266,7 +269,7 @@ final class DictionaryStore {
 
     func update(_ rule: DictionaryRule) async -> Result<DictionaryRule, DictionaryValidationError> {
         guard let index = rules.firstIndex(where: { $0.id == rule.id }) else {
-            return .failure(.emptySpoken)
+            return .failure(.notFound)
         }
         var fixed = rule
         fixed.spoken = DictionaryRule.normalizeSpoken(rule.spoken)

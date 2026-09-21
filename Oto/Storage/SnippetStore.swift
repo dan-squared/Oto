@@ -56,6 +56,7 @@ enum SnippetValidationError: Error, Equatable, Sendable {
     case expansionTooLong
     case emptyBundleID
     case storeFull
+    case notFound
 
     nonisolated var errorDescription: String {
         switch self {
@@ -73,6 +74,8 @@ enum SnippetValidationError: Error, Equatable, Sendable {
             return "App scope is empty — pick Global or enter the app's bundle ID."
         case .storeFull:
             return "Snippets hold \(Snippet.maxSnippets) entries. Delete one before adding another."
+        case .notFound:
+            return "This snippet was deleted."
         }
     }
 }
@@ -130,7 +133,7 @@ final class SnippetStore {
 
     func update(_ snippet: Snippet) async -> Result<Snippet, SnippetValidationError> {
         guard let index = snippets.firstIndex(where: { $0.id == snippet.id }) else {
-            return .failure(.emptyName)
+            return .failure(.notFound)
         }
         var fixed = snippet
         fixed.name = fixed.name.trimmingCharacters(in: .whitespacesAndNewlines)

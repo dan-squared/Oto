@@ -45,7 +45,7 @@ struct HistoryStoreTests {
         let (store, _) = makeStore()
         store.setEnabled(true)
         let now = Date()
-        for index in 0..<250 {
+        for index in 0..<120 {
             await store.record(
                 finalText: "entry \(index)",
                 bundleID: nil,
@@ -53,8 +53,9 @@ struct HistoryStoreTests {
             )
         }
         #expect(store.entries.count == HistoryStore.maxEntries)
+        #expect(HistoryStore.maxEntries == 100)
         // Newest first: the last written entry is on top.
-        #expect(store.entries[0].finalText == "entry 249")
+        #expect(store.entries[0].finalText == "entry 119")
     }
 
     @Test func oldEntriesEvicted() async {

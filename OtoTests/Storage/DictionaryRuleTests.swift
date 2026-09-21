@@ -186,6 +186,15 @@ struct DictionaryRuleTests {
         if case .failure = scoped { Issue.record("cross-scope must be legal") }
     }
 
+    @Test func updateMissingIsNotFound() async {
+        let (store, _) = makeStore()
+        let ghost = DictionaryRule(spoken: "ghost", replacement: "x")
+        let result = await store.update(ghost)
+        if case .failure(let error) = result {
+            #expect(error == .notFound)
+        } else { Issue.record("expected notFound for deleted id") }
+    }
+
     @Test func pipelineAppliesRulesWithScope() {
         let pipeline = TranscriptPipeline(dictionaryRules: [
             rule("teh", "the"),

@@ -128,6 +128,7 @@ struct WritingPane: View {
                     systemImage: "text.book.closed",
                     description: Text("Add a spoken form and its replacement. Rules apply to future dictation.")
                 )
+                .frame(maxWidth: .infinity, minHeight: 240)
             } else {
                 ForEach(dictionary.rules) { rule in
                     HStack {
@@ -233,6 +234,7 @@ struct WritingPane: View {
                     systemImage: "text.quote",
                     description: Text("Save repeated text once, then copy it wherever you need it.")
                 )
+                .frame(maxWidth: .infinity, minHeight: 240)
             } else {
                 ForEach(snippets.snippets) { snippet in
                     VStack(alignment: .leading) {
@@ -244,12 +246,17 @@ struct WritingPane: View {
                         Text(snippet.bundleID ?? "Everywhere")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                        HStack {
+                            Button("Copy") { copySnippet(snippet) }
+                            Button("Delete", role: .destructive) {
+                                Task { await snippets.remove(id: snippet.id) }
+                            }
+                            Spacer()
+                        }
+                        .font(.caption)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { editingSnippet = snippet }
-                    .contextMenu {
-                        Button("Copy expansion") { copySnippet(snippet) }
-                    }
                 }
                 .onDelete { offsets in
                     Task {
