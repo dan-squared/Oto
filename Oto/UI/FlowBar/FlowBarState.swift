@@ -26,8 +26,7 @@ enum FlowBarState: Equatable, Sendable {
         switch (lhs, rhs) {
         case (.hidden, .hidden), (.preparing, .preparing),
              (.recording, .recording), (.finalizing, .finalizing),
-             (.inserting, .inserting), (.successFlash, .successFlash),
-             (.cancelledFlash, .cancelledFlash), (.failure, .failure):
+             (.inserting, .inserting), (.failure, .failure):
             return true
         default:
             return false
@@ -39,8 +38,6 @@ enum FlowBarState: Equatable, Sendable {
     case recording
     case finalizing
     case inserting
-    case successFlash
-    case cancelledFlash
     case failure
 }
 
@@ -109,14 +106,17 @@ struct FlowBarProjection: Equatable, Sendable {
                 showsSettingsLink: false, recoveryAvailable: recoveryAvailable
             )
         case .completed(let context):
+            // v6: no end-state pixels. Insertion is the confirmation — the
+            // loader melts straight out (controller vanish path).
             return FlowBarProjection(
-                state: .successFlash, sessionID: context.id,
+                state: .hidden, sessionID: context.id,
                 handsFreeCaption: false, message: nil,
                 showsSettingsLink: false, recoveryAvailable: recoveryAvailable
             )
         case .cancelled(let context):
+            // v6: cancel vanishes like success (no monument either).
             return FlowBarProjection(
-                state: .cancelledFlash, sessionID: context.id,
+                state: .hidden, sessionID: context.id,
                 handsFreeCaption: false, message: nil,
                 showsSettingsLink: false, recoveryAvailable: recoveryAvailable
             )

@@ -10,9 +10,11 @@
 //  never edited (reads only); the menu keeps its own one-shot reads.
 //
 //  Invariants: analyzer stops whenever recording ends (silence guaranteed
-//  by await stop); panel orderOut only after terminal flashes elapse or an
-//  explicit dismiss; modal/auto-copy fire exactly once per failure
-//  transition (route-key comparison); auto-copy writes once per key.
+//  by await stop); the panel melts out (fade + orderOut) on the first
+//  hidden poll after a visible state — completion renders no pixels,
+//  insertion is the confirmation (v6); modal/auto-copy fire exactly once
+//  per failure transition (route-key comparison); auto-copy writes once
+//  per key.
 //
 
 import AppKit
@@ -21,12 +23,11 @@ import Foundation
 @MainActor
 final class FlowBarController {
     nonisolated static let pollInterval: UInt64 = 150_000_000
-    // Liquid-quick finish (v5): the flash holds just long enough to read as
-    // confirmation (~0.35s), then melts out in 0.12s — total vanish <0.55s.
-    // (Was 1.0/0.8: the pill lingered past the "done" feeling.)
-    nonisolated static let successFlashDuration: Double = 0.35
-    nonisolated static let cancelledFlashDuration: Double = 0.30
     nonisolated static let noticeDuration: Double = 2.0
+    /// Vanish grace (v6): the first hidden poll after a visible state melts
+    /// the loader out immediately — no hold, no end-state. Total exit ≈
+    /// one 0.12s fade + this margin.
+    nonisolated static let vanishDelay: Double = 0.14
 
     let model: FlowBarModel
     private let coordinator: DictationCoordinator
@@ -38,10 +39,7 @@ final class FlowBarController {
 
     private var panel: FlowBarPanel?
     private var pollTask: Task<Void, Never>?
-    private var consumedFlashID: UUID?
     private var lastRouteKey: String?
-    private var flashDeadline: Date?
-    private var flashSessionID: UUID?
     private var noticeDeadline: Date?
     private var analyzerRecording = false
     /// Fade-hide generation: any state change invalidates a pending hide
@@ -72,7 +70,7 @@ final class FlowBarController {
         // transitions only ever setFrame + orderFront.
         modal.prewarm()
         if panel == nil {
-            panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .successFlash))
+            panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .recording))
         }
         pollTask = Task { await self.pollLoop() }
     }
@@ -107,14 +105,19 @@ final class FlowBarController {
         model.motionFrozen = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         model.update(projection: projection)
 
-        // State change invalidates any pending fade-hide first.
+        // State change invalidates any pending fade-hide first — but ONLY
+        // when the new target needs the panel. Hidden→hidden moves
+        // (completed→idle) let the scheduled melt ride; cancelling there
+        // would hide→reshow flicker on the very next poll (v6).
         let stateKey = "\(state)-\(projection.sessionID?.uuidString ?? "nil")"
         if stateKey != lastStateKey {
             lastStateKey = stateKey
-            hideGeneration += 1
-            hideTask?.cancel()
-            hideTask = nil
-            panel?.restoreContentAlpha()
+            if projection.state != .hidden || model.notice != nil {
+                hideGeneration += 1
+                hideTask?.cancel()
+                hideTask = nil
+                panel?.restoreContentAlpha()
+            }
         }
 
         // Recovery routing BEFORE analyzer sync (v4 F3c): the modal must
@@ -144,28 +147,34 @@ final class FlowBarController {
 
     private func syncPanel(state: DictationState, projection: FlowBarProjection) {
         let hasNotice = model.notice != nil
+        // v6 vanish path: no end-state pixels. The first hidden poll after a
+        // visible state melts the loader straight out (generation-guarded);
+        // later hidden polls are no-ops. Notices render below, never here.
+        if !hasNotice, projection.state == .hidden {
+            guard hideTask == nil else { return }
+            guard panel?.isVisible == true else {
+                panel?.hide()
+                return
+            }
+            let generation = hideGeneration
+            panel?.fadeContentOut()
+            hideTask = Task {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(Self.vanishDelay * 1_000_000_000)
+                )
+                guard !Task.isCancelled, generation == self.hideGeneration else { return }
+                self.panel?.hideNow()
+            }
+            return
+        }
         let width: CGFloat
         if hasNotice {
             width = VisualizerMath.panelWidth(for: .failure)
         } else {
             width = VisualizerMath.panelWidth(for: projection.state)
         }
-        // A consumed flash stays out until the state moves on (otherwise
-        // the deadline would re-arm every poll — an infinite flash loop).
-        let isConsumedFlash: Bool = {
-            switch projection.state {
-            case .successFlash, .cancelledFlash:
-                return projection.sessionID == consumedFlashID
-            default:
-                return false
-            }
-        }()
-        if !hasNotice, projection.sessionID != consumedFlashID {
-            consumedFlashID = nil
-        }
-        guard !isConsumedFlash, (hasNotice || (projection.state != .hidden && width > 0)) else {
-            // Flash deadlines hide explicitly; plain hidden hides now.
-            if flashDeadline == nil { panel?.hide() }
+        guard hasNotice || (projection.state != .hidden && width > 0) else {
+            panel?.hide()
             return
         }
         if panel == nil {
@@ -200,36 +209,11 @@ final class FlowBarController {
     }
 
     private func syncDeadlines(projection: FlowBarProjection) {
+        // v6: no terminal-flash holds (completion renders nothing — the
+        // vanish path in syncPanel owns the exit). Only transient notices
+        // have deadlines now. `projection` stays in the signature so the
+        // poll reads as one snapshot in, everything driven out.
         let now = Date()
-        // Terminal flashes hold, then hide (failure holds indefinitely).
-        switch projection.state {
-        case .successFlash, .cancelledFlash:
-            // Re-arm per session: a stale deadline from a previous flash
-            // must never hide the new one instantly.
-            if flashSessionID != projection.sessionID {
-                flashSessionID = projection.sessionID
-                let duration = projection.state == .successFlash
-                    ? Self.successFlashDuration : Self.cancelledFlashDuration
-                flashDeadline = now.addingTimeInterval(duration)
-            } else if let deadline = flashDeadline, now >= deadline {
-                // Buttery finish (v4 F2): render-server fade, then orderOut.
-                // Generation-guarded: a state change above already cancelled
-                // this task, so a stale completion can never hide new UI.
-                flashDeadline = nil
-                consumedFlashID = projection.sessionID
-                let generation = hideGeneration
-                panel?.fadeContentOut()
-                hideTask?.cancel()
-                hideTask = Task {
-                    try? await Task.sleep(for: .milliseconds(180))
-                    guard !Task.isCancelled, generation == self.hideGeneration else { return }
-                    self.panel?.hideNow()
-                }
-            }
-        default:
-            flashSessionID = nil
-            break
-        }
         if model.notice != nil {
             if noticeDeadline == nil {
                 noticeDeadline = now.addingTimeInterval(Self.noticeDuration)

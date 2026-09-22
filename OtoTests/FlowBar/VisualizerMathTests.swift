@@ -98,13 +98,13 @@ struct VisualizerMathTests {
 
     @Test func widthsAreMini() {
         #expect(VisualizerMath.panelWidth(for: .recording) == 112)
-        #expect(VisualizerMath.panelWidth(for: .preparing) == 116)
+        // v6: preparing == recording — waves from frame one, zero resize.
+        #expect(VisualizerMath.panelWidth(for: .preparing) == 112)
         #expect(VisualizerMath.panelWidth(for: .finalizing) == 116)
         #expect(VisualizerMath.panelWidth(for: .inserting) == 116)
-        #expect(VisualizerMath.panelWidth(for: .successFlash) == 64)
-        #expect(VisualizerMath.panelWidth(for: .cancelledFlash) == 64)
         #expect(VisualizerMath.panelWidth(for: .failure) == 200)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
+        // (No end-state widths: completion renders nothing.)
         // Mini v3: half the v2 area (152×44=6688 → 112×32=3584).
         #expect(VisualizerMath.panelWidth(for: .recording) <= 116)
         #expect(VisualizerMath.pillHeight == 32)
@@ -112,5 +112,15 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.barCount == 8)
         #expect(VisualizerMath.barWidth == 3.5)
         #expect(VisualizerMath.recordDot == 8)
+    }
+
+    @Test func swayLoopIsGentleAndNearTheFloor() {
+        // v6 "waves move a bit": the loop breathes between floor and 0.26 —
+        // visible life, never shouty; silence (0.10) reads as sway-worthy.
+        #expect(VisualizerMath.swayValues.first == 0.10)
+        #expect(VisualizerMath.swayValues.max() == 0.26)
+        #expect(VisualizerMath.swayValues.last == VisualizerMath.swayValues.first)
+        #expect(0.10 < VisualizerMath.swayThreshold)
+        #expect(VisualizerMath.swayThreshold < 0.5)
     }
 }

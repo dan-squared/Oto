@@ -16,12 +16,12 @@ import Testing
 struct PillLayersTests {
     @Test func statesMapToGroups() {
         #expect(PillVisual.forState(.hidden) == nil)
-        #expect(PillVisual.forState(.preparing) == .dots)
+        // v6: preparing renders bars — waves from frame one, no dot prelude.
+        #expect(PillVisual.forState(.preparing) == .bars)
         #expect(PillVisual.forState(.recording) == .bars)
         #expect(PillVisual.forState(.finalizing) == .dotsSpinner)
         #expect(PillVisual.forState(.inserting) == .dotsSpinner)
-        #expect(PillVisual.forState(.successFlash) == .flash)
-        #expect(PillVisual.forState(.cancelledFlash) == .flash)
+        // v6: completion renders nothing (vanish path) — no flash case exists.
         #expect(PillVisual.forState(.failure) == .message)
     }
 
@@ -33,13 +33,50 @@ struct PillLayersTests {
         #expect(pill.barOpacity(0) == 1)
         #expect(pill.dotOpacity() == 1)
         #expect(pill.chaseOpacity(0) == 0)
-        #expect(pill.flashOpacity(0) == 0)
         // Level lands on the GPU transform (m22 = scaleY), not a rebuilt path.
         #expect(abs(pill.barScaleY(0) - 1) < 0.001)
         #expect(abs(pill.barScaleY(1) - 0.02) < 0.001)
         // Breathe rides the render server (v5), not the data tick.
         #expect(pill.breatheHasAnimation())
         #expect(!pill.chaseHasAnimation())
+        // Voice present: no idle sway (v6).
+        #expect(!pill.swayHasAnimation())
+    }
+
+    @Test func silentBarsSwayAndVoiceTakesOver() {
+        // v6 "waves move a bit": silence sways gently on the render server;
+        // the first voice poll evicts it and live values show through.
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 112, height: 32))
+        pill.show(visual: .bars)
+        pill.layout(width: 112)
+        pill.update(
+            values: [Float](repeating: 0.10, count: VisualizerMath.barCount),
+            text: nil, centerText: false, reduceMotion: false
+        )
+        #expect(pill.swayHasAnimation())
+        #expect(pill.swayAnimationCount() == VisualizerMath.barCount)
+        pill.update(
+            values: [0.9, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2],
+            text: nil, centerText: false, reduceMotion: false
+        )
+        #expect(!pill.swayHasAnimation())
+        #expect(abs(pill.barScaleY(0) - 0.9) < 0.001)
+    }
+
+    @Test func swayDiesOnGroupSwitch() {
+        // Leaving bars kills the sway with everything else — a dying wave
+        // must never outlive its group (same overflow class as v4 F1b).
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 112, height: 32))
+        pill.show(visual: .bars)
+        pill.layout(width: 112)
+        pill.update(
+            values: [Float](repeating: 0.10, count: VisualizerMath.barCount),
+            text: nil, centerText: false, reduceMotion: false
+        )
+        #expect(pill.swayHasAnimation())
+        pill.show(visual: .dotsSpinner, animated: false)
+        #expect(!pill.swayHasAnimation())
+        #expect(!pill.breatheHasAnimation())
     }
 
     @Test func dotsSpinnerShowsChaseAndNativeSpinner() {
@@ -97,6 +134,7 @@ struct PillLayersTests {
         pill.update(values: [1, 1, 1, 1, 1, 1, 1, 1], text: nil, centerText: false, reduceMotion: true)
         #expect(abs(pill.barScaleY(0) - 0.3) < 0.001)
         #expect(!pill.breatheHasAnimation())
+        #expect(!pill.swayHasAnimation())
         pill.show(visual: .dotsSpinner)
         pill.update(values: [], text: nil, centerText: false, reduceMotion: true)
         #expect(pill.spinnerHidden())
@@ -113,19 +151,19 @@ struct PillLayersTests {
     }
 
     @Test func shrinkSwitchKillsOutgoingGroupInstantly() {
-        // v4 F1b: 116→64 with dots still fading would paint chase dots
-        // outside the constricted frame. Instant path: opacity 0 now,
-        // incoming group still fades in. v5 adds: the render-server wave
-        // is removed BEFORE the kill, so no animation overrides it.
+        // v4 F1b outlives v6's flash deletion: any animated=false switch
+        // must zero the outgoing group AND remove its render-server wave,
+        // so no animation overrides the kill. Loader → message exercises
+        // the same path the old loader → flash did.
         let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
         pill.show(visual: .dotsSpinner)
         pill.layout(width: 116)
         pill.update(values: [], text: nil, centerText: false, reduceMotion: false)
         #expect(pill.chaseHasAnimation())
-        pill.show(visual: .flash, animated: false)
-        pill.layout(width: 64)
+        pill.show(visual: .message, animated: false)
+        pill.layout(width: 200)
         #expect(!pill.chaseHasAnimation())
         #expect(pill.chaseOpacity(3) == 0)
-        #expect(pill.flashOpacity(0) == 0.35)
+        #expect(pill.labelText() == "")
     }
 }

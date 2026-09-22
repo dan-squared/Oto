@@ -171,10 +171,10 @@ final class FlowBarPanel {
         )
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                // Liquid-quick (v5): 0.20s easeOut — the window lands fast
+                // Liquid-quick (v6): 0.15s easeOut — the window lands fast
                 // with a soft settle, matched by the bg-path morph in
-                // PillContentView.layout. (Was 0.28 easeInEaseOut: floaty.)
-                context.duration = 0.20
+                // PillContentView.layout. (Was 0.28, then 0.20: floaty.)
+                context.duration = 0.15
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().setFrame(frame, display: true)
             }

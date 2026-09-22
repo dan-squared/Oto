@@ -100,7 +100,8 @@ struct FlowBarControllerTests {
         }
         await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
         await sut.controller.pollOnce()
-        #expect(sut.controller.model.projection.state == .successFlash)
+        // v6: completion renders no pixels — the loader melts straight out.
+        #expect(sut.controller.model.projection.state == .hidden)
         // Leaving recording stops the analyzer → silence, awaited.
         #expect(sut.controller.model.sample == .silence)
     }

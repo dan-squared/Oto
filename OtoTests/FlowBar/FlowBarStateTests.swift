@@ -4,8 +4,8 @@
 //
 //  Slice 6B/6C1: the projection + routing contracts. Every DictationState
 //  maps to exactly one pill case; recovery-owned failures NEVER reach the
-//  pill (modal/auto-copy own them); success carries no text (no "Done",
-//  no "insert", no checkmark — insertion is the confirmation).
+//  pill (modal/auto-copy own them); completion renders no pixels at all
+//  (v6 — insertion is the confirmation, the loader just melts out).
 //
 
 import CoreGraphics
@@ -41,8 +41,9 @@ struct FlowBarStateTests {
         #expect(FlowBarProjection.project(.recording(ctx), recoveryAvailable: false).state == .recording)
         #expect(FlowBarProjection.project(.finalizing(ctx), recoveryAvailable: false).state == .finalizing)
         #expect(FlowBarProjection.project(.inserting(ctx), recoveryAvailable: false).state == .inserting)
-        #expect(FlowBarProjection.project(.completed(ctx), recoveryAvailable: false).state == .successFlash)
-        #expect(FlowBarProjection.project(.cancelled(ctx), recoveryAvailable: false).state == .cancelledFlash)
+        // v6: completion renders no pixels — the loader melts straight out.
+        #expect(FlowBarProjection.project(.completed(ctx), recoveryAvailable: false).state == .hidden)
+        #expect(FlowBarProjection.project(.cancelled(ctx), recoveryAvailable: false).state == .hidden)
     }
 
     @Test func sessionIDPassesThroughForIntents() {
@@ -59,12 +60,18 @@ struct FlowBarStateTests {
         #expect(!FlowBarProjection.project(.starting(handsFree), recoveryAvailable: false).handsFreeCaption)
     }
 
-    @Test func successCarriesNoText() {
-        // Insertion is the confirmation. Any wording here reopens the
-        // "did it insert?" debate by test — so the test forbids text.
-        let projection = FlowBarProjection.project(.completed(context()), recoveryAvailable: false)
-        #expect(projection.message == nil)
-        #expect(!projection.showsSettingsLink)
+    @Test func completionCarriesNoPixels() {
+        // Insertion is the confirmation (v6: not even a flash — the loader
+        // melts straight out). Any wording here reopens the "did it
+        // insert?" debate by test — so the test forbids both text and a
+        // dedicated end state.
+        let done = FlowBarProjection.project(.completed(context()), recoveryAvailable: false)
+        #expect(done.state == .hidden)
+        #expect(done.message == nil)
+        #expect(!done.showsSettingsLink)
+        let cancelled = FlowBarProjection.project(.cancelled(context()), recoveryAvailable: false)
+        #expect(cancelled.state == .hidden)
+        #expect(cancelled.message == nil)
     }
 
     @Test func recoveryFailuresNeverReachThePill() {

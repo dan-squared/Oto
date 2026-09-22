@@ -61,18 +61,31 @@ enum VisualizerMath {
 
     /// Panel widths per pill case (pt). Width motion itself is owned by
     /// the AppKit frame animation; this table is the target.
+    /// v6: preparing == recording (112) — starting→recording resizes
+    /// nothing, waves from frame one. No end-state widths: completion
+    /// renders no pixels (vanish path owns the exit).
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
-        case .preparing: 116
+        case .preparing: 112
         case .recording: 112
         case .finalizing: 116
         case .inserting: 116
-        case .successFlash: 64
-        case .cancelledFlash: 64
         case .failure: 200
         }
     }
+
+    // MARK: - Idle sway (v6: "waves move a bit")
+
+    /// Voice-silence gate: display levels below this mean no voice, so the
+    /// render-server sway owns the bars. First voice poll removes it.
+    /// (Silence sits at `floor` = 0.10; voice clears 0.18 within 1–2 polls.)
+    nonisolated static let swayThreshold: Float = 0.18
+    /// Sway keyframe loop (scaleY): gentle drift near the floor, staggered
+    /// per bar via beginTime. Peaks at 0.26 — alive, never shouty.
+    nonisolated static let swayValues: [Double] = [0.10, 0.18, 0.26, 0.18, 0.10]
+    nonisolated static let swayCycle: Double = 1.8
+    nonisolated static let swayStagger: Double = 0.2
 
     // MARK: - Bar shaping
 

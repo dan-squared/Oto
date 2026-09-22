@@ -18,21 +18,22 @@ import AppKit
 import QuartzCore
 
 /// Which layer group is visible. Maps 1:1 from FlowBarState (+ notice).
+/// v6: no stagnant dots at either end — preparing renders bars (waves from
+/// frame one), completion renders nothing (vanish path). Dots exist only
+/// as the working loader (finalizing/inserting).
 enum PillVisual: Equatable {
     case bars
     case dots
     case dotsSpinner
-    case flash
     case message
 
     /// Pill case → layer group. Nil renders nothing (hidden).
     nonisolated static func forState(_ state: FlowBarState) -> PillVisual? {
         switch state {
         case .hidden: nil
-        case .preparing: .dots
+        case .preparing: .bars
         case .recording: .bars
         case .finalizing, .inserting: .dotsSpinner
-        case .successFlash, .cancelledFlash: .flash
         case .failure: .message
         }
     }
@@ -47,7 +48,6 @@ final class PillContentView: NSView {
     private let recordDot = CALayer()
     private var barLayers: [CAShapeLayer] = []
     private var chaseLayers: [CALayer] = []
-    private var flashLayers: [CALayer] = []
     private let spinner = NSProgressIndicator()
     private let label = NSTextField(labelWithString: "")
     private var currentWidth: CGFloat = 0
@@ -61,8 +61,12 @@ final class PillContentView: NSView {
     /// loader must stay alive.
     private var motionVisual: PillVisual?
     private var frozenMotion = false
+    /// Idle-sway state (v6): true while the render-server sway owns the
+    /// bars (silent, unreduced motion). First voice kills it.
+    private var swayOn = false
     nonisolated static let chaseKey = "oto.chase"
     nonisolated static let breatheKey = "oto.breathe"
+    nonisolated static let swayKey = "oto.sway"
     /// One chase cycle: 9 dots at ~6.7 dots/s (the old tick feel, gliding).
     nonisolated static let chaseCycle: Double = 1.35
 
@@ -116,16 +120,6 @@ final class PillContentView: NSView {
             layer?.addSublayer(dot)
         }
 
-        for _ in 0..<5 {
-            let dot = CALayer()
-            dot.backgroundColor = NSColor.white.cgColor
-            dot.cornerRadius = VisualizerMath.chaseDot / 2
-            dot.bounds = CGRect(x: 0, y: 0, width: VisualizerMath.chaseDot, height: VisualizerMath.chaseDot)
-            dot.opacity = 0.35
-            flashLayers.append(dot)
-            layer?.addSublayer(dot)
-        }
-
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
@@ -158,14 +152,14 @@ final class PillContentView: NSView {
             cornerWidth: h / 2, cornerHeight: h / 2, transform: nil
         )
         if bg.path != nil {
-            // Liquid chrome (v5 F4): the silhouette morphs over the same
-            // 0.20s easeOut as the window frame (FlowBarPanel.setFrame), so
-            // pill and window move as one. First layout snaps (no path yet).
+            // Liquid chrome (v5 F4, v6 retime): the silhouette morphs over
+            // the same 0.15s easeOut as the window frame (FlowBarPanel.setFrame),
+            // so pill and window move as one. First layout snaps (no path yet).
             // Element positions snap to the final geometry instantly — with
             // the outgoing group already dead (shrink) or fading in (growth),
             // the eye reads content-leading-chrome-following as liquid.
             CATransaction.begin()
-            CATransaction.setAnimationDuration(0.20)
+            CATransaction.setAnimationDuration(0.15)
             CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
             bg.path = newPath
             CATransaction.commit()
@@ -197,13 +191,6 @@ final class PillContentView: NSView {
             x: dotsX + dotsBlock + 8,
             y: midY - VisualizerMath.spinnerSize / 2
         ))
-
-        // Flash: 5 static dots, centered.
-        let flashBlock = 4 * VisualizerMath.chasePitch + VisualizerMath.chaseDot
-        let flashX = (width - flashBlock) / 2
-        for (i, dot) in flashLayers.enumerated() {
-            dot.position = CGPoint(x: flashX + CGFloat(i) * VisualizerMath.chasePitch + VisualizerMath.chaseDot / 2, y: midY)
-        }
 
         // Message label fills between padding.
         label.frame = CGRect(
@@ -261,7 +248,7 @@ final class PillContentView: NSView {
             startBreatheAnimation()
         case .dots, .dotsSpinner:
             startChaseAnimation()
-        case .flash, .message, .none:
+        case .message, .none:
             break
         }
         motionVisual = visual
@@ -317,7 +304,41 @@ final class PillContentView: NSView {
     private func stopMotionAnimations() {
         chaseLayers.forEach { $0.removeAnimation(forKey: Self.chaseKey) }
         recordDot.removeAnimation(forKey: Self.breatheKey)
+        stopSway()
         motionVisual = nil
+    }
+
+    // MARK: - Idle sway (v6: "waves move a bit")
+
+    /// Gentle bar drift while silent: every bar runs the same 5-sample loop
+    /// near the floor, staggered 0.2s apart — alive at a glance, never
+    /// shouty. The first voice poll removes it; live model values (kept
+    /// current underneath) show through instantly. Pixels only: state and
+    /// levels stay in the model, so tests assert presence, never frames.
+    private func startSway() {
+        guard !swayOn else { return }
+        let values: [NSNumber] = VisualizerMath.swayValues.map { NSNumber(value: $0) }
+        let keyTimes: [NSNumber] = values.indices.map {
+            NSNumber(value: Double($0) / Double(values.count - 1))
+        }
+        let t0 = CACurrentMediaTime()
+        for (i, bar) in barLayers.enumerated() {
+            let anim = CAKeyframeAnimation(keyPath: "transform.scale.y")
+            anim.values = values
+            anim.keyTimes = keyTimes
+            anim.duration = VisualizerMath.swayCycle
+            anim.repeatCount = .infinity
+            anim.isRemovedOnCompletion = false
+            anim.beginTime = t0 - Double(i) * VisualizerMath.swayStagger
+            bar.add(anim, forKey: Self.swayKey)
+        }
+        swayOn = true
+    }
+
+    private func stopSway() {
+        guard swayOn else { return }
+        barLayers.forEach { $0.removeAnimation(forKey: Self.swayKey) }
+        swayOn = false
     }
 
     /// Per-data-push values (voice clock, ≤30 Hz). Touches ONLY data-driven
@@ -356,6 +377,15 @@ final class PillContentView: NSView {
             stopMotionAnimations()
             motionVisual = currentVisual
         } else {
+            // Sway owns silent bars; voice (or leaving bars) evicts it.
+            // Model transforms above stay current underneath, so the
+            // handoff is instant — no pop, no lag.
+            if currentVisual == .bars {
+                let silent = (values.max() ?? 0) < VisualizerMath.swayThreshold
+                if silent { startSway() } else { stopSway() }
+            } else {
+                stopSway()
+            }
             ensureMotion(for: currentVisual)
         }
         if currentVisual == .dotsSpinner, !reduceMotion { spinner.startAnimation(nil) }
@@ -365,10 +395,11 @@ final class PillContentView: NSView {
 
     /// Group visibility with a render-server fade. Model values flip
     /// immediately (assertable headless); pixels interpolate on the GPU.
+    /// v6: 0.15s — buttery fast, no float.
     private func showOnly(_ visual: PillVisual?, animated: Bool = true) {
         CATransaction.begin()
         if animated {
-            CATransaction.setAnimationDuration(0.22)
+            CATransaction.setAnimationDuration(0.15)
         } else {
             CATransaction.setDisableActions(true)
         }
@@ -377,7 +408,6 @@ final class PillContentView: NSView {
         barLayers.forEach { $0.opacity = barsOn ? 1 : 0 }
         let dotsOn = visual == .dots || visual == .dotsSpinner
         chaseLayers.forEach { $0.opacity = dotsOn ? $0.opacity : 0 }
-        flashLayers.forEach { $0.opacity = visual == .flash ? 0.35 : 0 }
         CATransaction.commit()
         label.isHidden = visual != .message
         if visual != .dotsSpinner { spinner.stopAnimation(nil); spinner.isHidden = true }
@@ -388,7 +418,6 @@ final class PillContentView: NSView {
     func barOpacity(_ i: Int) -> Float { barLayers[i].opacity }
     func dotOpacity() -> Float { recordDot.opacity }
     func chaseOpacity(_ i: Int) -> Float { chaseLayers[i].opacity }
-    func flashOpacity(_ i: Int) -> Float { flashLayers[i].opacity }
     func barScaleY(_ i: Int) -> CGFloat { barLayers[i].transform.m22 }
     func spinnerHidden() -> Bool { spinner.isHidden }
     func labelText() -> String { label.stringValue }
@@ -405,4 +434,10 @@ final class PillContentView: NSView {
         recordDot.animation(forKey: Self.breatheKey) != nil
     }
     func contentMaskedToBounds() -> Bool { layer?.masksToBounds == true }
+    func swayHasAnimation() -> Bool {
+        barLayers.allSatisfy { $0.animation(forKey: Self.swayKey) != nil }
+    }
+    func swayAnimationCount() -> Int {
+        barLayers.filter { $0.animation(forKey: Self.swayKey) != nil }.count
+    }
 }
