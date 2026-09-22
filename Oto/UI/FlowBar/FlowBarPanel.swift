@@ -124,11 +124,32 @@ final class FlowBarPanel {
     /// rebuild — this is why v3 can't lag the v2 way.
     func render(
         visual: PillVisual, values: [Float], tick: UInt64,
-        text: String?, centerText: Bool, reduceMotion: Bool
+        text: String?, centerText: Bool, reduceMotion: Bool, animated: Bool
     ) {
-        content.show(visual: visual)
+        content.show(visual: visual, animated: animated)
         content.layout(width: currentWidth)
         content.update(values: values, tick: tick, text: text, centerText: centerText, reduceMotion: reduceMotion)
+    }
+
+    /// Render-server fade of the whole content (v4 finishing). Completion
+    /// runs after the fade; the caller owns orderOut + generation guards.
+    func fadeContentOut(duration: TimeInterval = 0.18) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            content.animator().alphaValue = 0
+        }
+    }
+
+    /// Instant content restore (a new state preempts a mid-fade hide).
+    func restoreContentAlpha() {
+        content.alphaValue = 1
+    }
+
+    /// Order out + leave the content visible for next show.
+    func hideNow() {
+        panel.orderOut(nil)
+        content.alphaValue = 1
     }
 
     func hide() {

@@ -56,6 +56,9 @@ final class PillContentView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        // Overflow is structurally impossible: nothing paints outside the
+        // pill silhouette, whatever a transition does (v4 F1a).
+        clipsToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
         bg.fillColor = CGColor(red: 0.055, green: 0.055, blue: 0.065, alpha: 1)
@@ -175,9 +178,12 @@ final class PillContentView: NSView {
 
     /// Group switch with a render-server fade. Call before `layout(width:)`
     /// so centering (which depends on the visible group) is exact.
-    func show(visual: PillVisual) {
-        if visual != currentVisual {
-            showOnly(visual)
+    /// `animated=false` kills the outgoing group instantly (no fade-out):
+    /// used on shrink transitions, where a fading group would overflow the
+    /// already-narrower frame (v4 F1b).
+    func show(visual: PillVisual, animated: Bool = true) {
+        if visual != currentVisual || !animated {
+            showOnly(visual, animated: animated)
             currentVisual = visual
         }
     }
@@ -213,8 +219,13 @@ final class PillContentView: NSView {
 
     /// Group visibility with a render-server fade. Model values flip
     /// immediately (assertable headless); pixels interpolate on the GPU.
-    private func showOnly(_ visual: PillVisual?) {        CATransaction.begin()
-        CATransaction.setAnimationDuration(0.22)
+    private func showOnly(_ visual: PillVisual?, animated: Bool = true) {
+        CATransaction.begin()
+        if animated {
+            CATransaction.setAnimationDuration(0.22)
+        } else {
+            CATransaction.setDisableActions(true)
+        }
         let barsOn = visual == .bars
         recordDot.opacity = barsOn ? recordDot.opacity : 0
         barLayers.forEach { $0.opacity = barsOn ? 1 : 0 }

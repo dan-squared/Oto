@@ -34,10 +34,12 @@ final class NoTargetModalController {
     private(set) var copied = false
     private var panel: NSPanel?
     private var hosting: NSHostingView<NoTargetModalView>?
+    /// Internal for tests: prewarm stability.
+    var hasPanel: Bool { panel != nil }
 
-    func show(text: String, displayID: CGDirectDisplayID?) {
-        self.text = text
-        copied = false
+    /// Build panel + hosting once, off the transition path (v4 F3b).
+    /// Never orders front — pure construction cost moved to launch.
+    func prewarm() {
         if panel == nil {
             let hosting = NSHostingView(rootView: NoTargetModalView(controller: self))
             self.hosting = hosting
@@ -45,19 +47,38 @@ final class NoTargetModalController {
                 contentView: hosting,
                 size: NSSize(width: Self.width, height: Self.height)
             )
-        } else {
-            hosting?.rootView = NoTargetModalView(controller: self)
         }
+    }
+
+    func show(text: String, displayID: CGDirectDisplayID?) {
+        self.text = text
+        copied = false
+        prewarm()
+        hosting?.rootView = NoTargetModalView(controller: self)
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let visible = screen.visibleFrame
-        let frame = NSRect(
+        let endFrame = NSRect(
             x: visible.midX - Self.width / 2,
             y: visible.midY - Self.height / 2,
             width: Self.width, height: Self.height
         )
-        panel?.setFrame(frame, display: true)
+        // Soft land (v4 F3): start 3% small + transparent, ease out to
+        // full in 0.18s. Quick (no travel, no bounce) yet buttery.
+        let startFrame = NSRect(
+            x: endFrame.midX - endFrame.width * 0.485,
+            y: endFrame.midY - endFrame.height * 0.485,
+            width: endFrame.width * 0.97, height: endFrame.height * 0.97
+        )
+        panel?.setFrame(startFrame, display: false)
+        panel?.alphaValue = 0
         // orderFront, never key: focus must stay wherever the user had it.
         panel?.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel?.animator().setFrame(endFrame, display: true)
+            panel?.animator().alphaValue = 1
+        }
     }
 
     func hide() {
@@ -84,6 +105,9 @@ struct NoTargetModalView: View {
 
     var body: some View {
         ZStack {
+            // Explicit clear root: the hosting view must paint nothing
+            // behind the card (the pill's v2 frame bug class — never again).
+            Color.clear
             RoundedRectangle(cornerRadius: 22)
                 .fill(Color(red: 0.055, green: 0.055, blue: 0.065))
                 .shadow(color: .black.opacity(0.5), radius: 22, y: 6)

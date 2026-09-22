@@ -41,6 +41,11 @@ final class FlowBarController {
     private var flashSessionID: UUID?
     private var noticeDeadline: Date?
     private var analyzerRecording = false
+    /// Fade-hide generation: any state change invalidates a pending hide
+    /// so a new session never inherits a stale fade (v4 finishing).
+    private var hideGeneration: UInt64 = 0
+    private var lastStateKey: String?
+    private var hideTask: Task<Void, Never>?
 
     /// `pasteboard` is injectable so tests never touch the user's clipboard.
     init(
@@ -60,6 +65,12 @@ final class FlowBarController {
 
     func start() {
         guard pollTask == nil else { return }
+        // Prewarm (v4 F3b): first-show construction moves to launch, so
+        // transitions only ever setFrame + orderFront.
+        modal.prewarm()
+        if panel == nil {
+            panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .successFlash))
+        }
         pollTask = Task { await self.pollLoop() }
     }
 
@@ -67,6 +78,8 @@ final class FlowBarController {
         pollTask?.cancel()
         if let pollTask { _ = await pollTask.value }
         pollTask = nil
+        hideTask?.cancel()
+        hideTask = nil
         await analyzer.stop()
         analyzerRecording = false
         panel?.hide()
@@ -91,9 +104,21 @@ final class FlowBarController {
         model.motionFrozen = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         model.update(projection: projection)
 
+        // State change invalidates any pending fade-hide first.
+        let stateKey = "\(state)-\(projection.sessionID?.uuidString ?? "nil")"
+        if stateKey != lastStateKey {
+            lastStateKey = stateKey
+            hideGeneration += 1
+            hideTask?.cancel()
+            hideTask = nil
+            panel?.restoreContentAlpha()
+        }
+
+        // Recovery routing BEFORE analyzer sync (v4 F3c): the modal must
+        // not wait behind an awaited stop (~35ms) on the same poll.
+        syncRecovery(state: state, recovery: recovery)
         await syncAnalyzer(state: state)
         syncPanel(state: state, projection: projection)
-        syncRecovery(state: state, recovery: recovery)
         syncDeadlines(projection: projection)
     }
 
@@ -143,6 +168,9 @@ final class FlowBarController {
         if panel == nil {
             panel = FlowBarPanel(width: width)
         }
+        // Shrink transitions play no fade-out (v4 F1b): the outgoing group
+        // would overflow the already-narrower frame mid-fade.
+        let shrink = width < (panel?.currentWidth ?? .greatestFiniteMagnitude)
         panel?.show(
             sessionID: projection.sessionID,
             displayID: Self.targetScreen(of: state),
@@ -154,14 +182,16 @@ final class FlowBarController {
                 values: model.sample.values, tick: model.sample.tick,
                 text: model.notice ?? projection.message,
                 centerText: model.notice != nil,
-                reduceMotion: model.motionFrozen
+                reduceMotion: model.motionFrozen,
+                animated: !shrink
             )
         } else if let notice = model.notice {
             panel?.render(
                 visual: .message,
                 values: model.sample.values, tick: model.sample.tick,
                 text: notice, centerText: true,
-                reduceMotion: model.motionFrozen
+                reduceMotion: model.motionFrozen,
+                animated: !shrink
             )
         }
     }
@@ -179,9 +209,19 @@ final class FlowBarController {
                     ? Self.successFlashDuration : Self.cancelledFlashDuration
                 flashDeadline = now.addingTimeInterval(duration)
             } else if let deadline = flashDeadline, now >= deadline {
+                // Buttery finish (v4 F2): render-server fade, then orderOut.
+                // Generation-guarded: a state change above already cancelled
+                // this task, so a stale completion can never hide new UI.
                 flashDeadline = nil
                 consumedFlashID = projection.sessionID
-                panel?.hide()
+                let generation = hideGeneration
+                panel?.fadeContentOut()
+                hideTask?.cancel()
+                hideTask = Task {
+                    try? await Task.sleep(for: .milliseconds(180))
+                    guard !Task.isCancelled, generation == self.hideGeneration else { return }
+                    self.panel?.hideNow()
+                }
             }
         default:
             flashSessionID = nil

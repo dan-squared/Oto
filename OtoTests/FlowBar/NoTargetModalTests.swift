@@ -30,4 +30,17 @@ struct NoTargetModalTests {
         // DictationPane's @AppStorage literal must equal this key.
         #expect(NoTargetModalSettings.key == "app.Oto.noTargetModal")
     }
+
+    @Test func prewarmBuildsWithoutShowing() {
+        // v4 F3b: construction moves to launch; show() only positions +
+        // orders. No rebuild across calls (identity stable by hasPanel).
+        let modal = NoTargetModalController()
+        #expect(!modal.hasPanel)
+        modal.prewarm()
+        #expect(modal.hasPanel)
+        #expect(!modal.isVisible)
+        modal.prewarm()
+        #expect(modal.hasPanel)
+        modal.hide()
+    }
 }

@@ -78,4 +78,26 @@ struct PillLayersTests {
         pill.update(values: [], tick: 99, text: nil, centerText: false, reduceMotion: true)
         #expect(pill.spinnerHidden())
     }
+
+    @Test func contentClipsSoOverflowIsImpossible() {
+        // v4 F1a: whatever a transition does, no layer pixel escapes the
+        // pill silhouette.
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 64, height: 32))
+        #expect(pill.clipsToBounds)
+    }
+
+    @Test func shrinkSwitchKillsOutgoingGroupInstantly() {
+        // v4 F1b: 116→64 with dots still fading would paint chase dots
+        // outside the constricted frame. Instant path: opacity 0 now,
+        // incoming group still fades in.
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
+        pill.show(visual: .dotsSpinner)
+        pill.layout(width: 116)
+        pill.update(values: [], tick: 3, text: nil, centerText: false, reduceMotion: false)
+        #expect(pill.chaseOpacity(3) > 0.99)
+        pill.show(visual: .flash, animated: false)
+        pill.layout(width: 64)
+        #expect(pill.chaseOpacity(3) == 0)
+        #expect(pill.flashOpacity(0) == 0.35)
+    }
 }
