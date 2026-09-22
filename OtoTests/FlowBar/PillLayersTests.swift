@@ -22,7 +22,7 @@ struct PillLayersTests {
         #expect(PillVisual.forState(.finalizing) == .dotsSpinner)
         #expect(PillVisual.forState(.inserting) == .dotsSpinner)
         // v6: completion renders nothing (vanish path) — no flash case exists.
-        #expect(PillVisual.forState(.failure) == .message)
+        // v7: failures never reach the pill — no failure case exists.
     }
 
     @Test func barsGroupShowsBarsOnly() {
@@ -44,13 +44,14 @@ struct PillLayersTests {
     }
 
     @Test func silentBarsSwayAndVoiceTakesOver() {
-        // v6 "waves move a bit": silence sways gently on the render server;
-        // the first voice poll evicts it and live values show through.
+        // v6 "waves move a bit" (v7: from the raised floor): silence sways
+        // gently on the render server; the first voice poll evicts it and
+        // live values show through.
         let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 112, height: 32))
         pill.show(visual: .bars)
         pill.layout(width: 112)
         pill.update(
-            values: [Float](repeating: 0.10, count: VisualizerMath.barCount),
+            values: [Float](repeating: VisualizerMath.floor, count: VisualizerMath.barCount),
             text: nil, centerText: false, reduceMotion: false
         )
         #expect(pill.swayHasAnimation())

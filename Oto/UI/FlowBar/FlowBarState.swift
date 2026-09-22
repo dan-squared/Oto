@@ -26,7 +26,7 @@ enum FlowBarState: Equatable, Sendable {
         switch (lhs, rhs) {
         case (.hidden, .hidden), (.preparing, .preparing),
              (.recording, .recording), (.finalizing, .finalizing),
-             (.inserting, .inserting), (.failure, .failure):
+             (.inserting, .inserting):
             return true
         default:
             return false
@@ -38,7 +38,6 @@ enum FlowBarState: Equatable, Sendable {
     case recording
     case finalizing
     case inserting
-    case failure
 }
 
 /// Everything one poll snapshot needs: the case, intent identity, and
@@ -49,8 +48,6 @@ struct FlowBarProjection: Equatable, Sendable {
         lhs.state == rhs.state
             && lhs.sessionID == rhs.sessionID
             && lhs.handsFreeCaption == rhs.handsFreeCaption
-            && lhs.message == rhs.message
-            && lhs.showsSettingsLink == rhs.showsSettingsLink
             && lhs.recoveryAvailable == rhs.recoveryAvailable
     }
 
@@ -58,13 +55,8 @@ struct FlowBarProjection: Equatable, Sendable {
     /// Intent routing only (Stop/Cancel target this session). Never shown.
     let sessionID: UUID?
     /// Hands-free sessions get a ring marker, never a text caption (the
-    /// pill carries no words outside failure/notice copy).
+    /// pill carries no words outside the transient auto-copy notice).
     let handsFreeCaption: Bool
-    /// Failure copy. Nil everywhere else — success is a silent flash
-    /// (insertion is the confirmation; gradient dropped 2026-09-22).
-    let message: String?
-    /// True for failures fixable in Settings (mic/speech-prep).
-    let showsSettingsLink: Bool
     let recoveryAvailable: Bool
 
     /// Pure DictationState → projection. `nonisolated`: the controller
@@ -77,94 +69,53 @@ struct FlowBarProjection: Equatable, Sendable {
         case .idle:
             return FlowBarProjection(
                 state: .hidden, sessionID: nil, handsFreeCaption: false,
-                message: nil, showsSettingsLink: false,
                 recoveryAvailable: recoveryAvailable
             )
         case .starting(let context):
             return FlowBarProjection(
                 state: .preparing, sessionID: context.id,
-                handsFreeCaption: false, message: nil,
-                showsSettingsLink: false, recoveryAvailable: recoveryAvailable
+                handsFreeCaption: false, recoveryAvailable: recoveryAvailable
             )
         case .recording(let context):
             return FlowBarProjection(
                 state: .recording, sessionID: context.id,
                 handsFreeCaption: context.interaction == .handsFree,
-                message: nil, showsSettingsLink: false,
                 recoveryAvailable: recoveryAvailable
             )
         case .finalizing(let context):
             return FlowBarProjection(
                 state: .finalizing, sessionID: context.id,
-                handsFreeCaption: false, message: nil,
-                showsSettingsLink: false, recoveryAvailable: recoveryAvailable
+                handsFreeCaption: false, recoveryAvailable: recoveryAvailable
             )
         case .inserting(let context):
             return FlowBarProjection(
                 state: .inserting, sessionID: context.id,
-                handsFreeCaption: false, message: nil,
-                showsSettingsLink: false, recoveryAvailable: recoveryAvailable
+                handsFreeCaption: false, recoveryAvailable: recoveryAvailable
             )
         case .completed(let context):
             // v6: no end-state pixels. Insertion is the confirmation — the
             // loader melts straight out (controller vanish path).
             return FlowBarProjection(
                 state: .hidden, sessionID: context.id,
-                handsFreeCaption: false, message: nil,
-                showsSettingsLink: false, recoveryAvailable: recoveryAvailable
+                handsFreeCaption: false, recoveryAvailable: recoveryAvailable
             )
         case .cancelled(let context):
             // v6: cancel vanishes like success (no monument either).
             return FlowBarProjection(
                 state: .hidden, sessionID: context.id,
-                handsFreeCaption: false, message: nil,
-                showsSettingsLink: false, recoveryAvailable: recoveryAvailable
+                handsFreeCaption: false, recoveryAvailable: recoveryAvailable
             )
-        case .failed(let context, let failure):
-            // Recovery-owned failures NEVER reach the pill (6C1): the
-            // catcher modal or auto-copy owns them. Anything else holds
-            // the failure panel with honest copy + Dismiss.
-            switch failure {
-            case .targetGone, .insertionFailed:
-                return FlowBarProjection(
-                    state: .hidden, sessionID: context?.id,
-                    handsFreeCaption: false, message: nil,
-                    showsSettingsLink: false,
-                    recoveryAvailable: recoveryAvailable
-                )
-            case .microphoneDenied:
-                return FlowBarProjection(
-                    state: .failure, sessionID: context?.id,
-                    handsFreeCaption: false,
-                    message: "Microphone is off. Allow access in Settings.",
-                    showsSettingsLink: true,
-                    recoveryAvailable: recoveryAvailable
-                )
-            case .speechPreparation(let detail):
-                return FlowBarProjection(
-                    state: .failure, sessionID: context?.id,
-                    handsFreeCaption: false,
-                    message: "Speech isn't ready (\(detail)). Prepare it in Settings.",
-                    showsSettingsLink: true,
-                    recoveryAvailable: recoveryAvailable
-                )
-            case .audioCapture:
-                return FlowBarProjection(
-                    state: .failure, sessionID: context?.id,
-                    handsFreeCaption: false,
-                    message: "Couldn't capture audio.",
-                    showsSettingsLink: false,
-                    recoveryAvailable: recoveryAvailable
-                )
-            case .noAudioCaptured:
-                return FlowBarProjection(
-                    state: .failure, sessionID: context?.id,
-                    handsFreeCaption: false,
-                    message: "No audio heard — check the microphone.",
-                    showsSettingsLink: false,
-                    recoveryAvailable: recoveryAvailable
-                )
-            }
+        case .failed(let context, _):
+            // v7: NO failure reaches the pill — errors ruin the pill's
+            // UI/UX. Recovery-owned failures route to the catcher modal or
+            // auto-copy (6C1, unchanged); everything else is concise menu
+            // status (`lastSessionSummary`, e.g. "failed: microphone
+            // denied") with Settings one row below. The pill melts out.
+            return FlowBarProjection(
+                state: .hidden, sessionID: context?.id,
+                handsFreeCaption: false,
+                recoveryAvailable: recoveryAvailable
+            )
         }
     }
 }

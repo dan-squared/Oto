@@ -142,10 +142,11 @@ struct FlowBarControllerTests {
         }
     }
 
-    @Test func failureHoldsWithoutButtonsUntilStateMoves() async throws {
-        // Button-free pill: failure holds (no Dismiss intent exists) until
-        // the state moves on. Recovery itself is untouched (menu + modal).
-        // Microphone-denied fails fast (prepare throws on open gate).
+    @Test func failureLeavesThePillToTheMenu() async throws {
+        // v7: errors never reach the pill — no panel, no hold, no buttons.
+        // The concise home is menu status (`lastSessionSummary`), pinned
+        // here so the copy has a test. Microphone-denied fails fast
+        // (prepare throws on open gate).
         let denied = DictationCoordinator(
             audio: FakeAudioCapture(),
             speech: FakeSpeechService(finalText: "x", prepareError: SpeechReadiness.microphoneDenied),
@@ -166,16 +167,22 @@ struct FlowBarControllerTests {
         _ = await denied.beginHold()
         await waitFor(denied) { if case .failed = $0 { true } else { false } }
         await controller.pollOnce()
-        #expect(controller.model.projection.state == .failure)
+        #expect(controller.model.projection.state == .hidden)
 
-        // Still failed two polls later: holds with no timeout, no buttons.
+        // Still hidden two polls later: nothing held, nothing rendered.
         await controller.pollOnce()
         await controller.pollOnce()
-        #expect(controller.model.projection.state == .failure)
+        #expect(controller.model.projection.state == .hidden)
 
-        // New session replaces it.
-        _ = await denied.beginHold()
+        // …while the menu names it concisely (the v7 contract).
+        #expect(await denied.lastSessionSummary().contains("microphone denied"))
+
+        // Recovery itself is untouched (menu + modal): a new session still
+        // starts from terminal failure — and fails pill-free again, fast.
+        let second = await denied.beginHold()
+        #expect(second != nil)
+        await waitFor(denied) { if case .failed = $0 { true } else { false } }
         await controller.pollOnce()
-        #expect(controller.model.projection.state != .hidden)
+        #expect(controller.model.projection.state == .hidden)
     }
 }

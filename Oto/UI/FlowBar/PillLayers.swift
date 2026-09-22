@@ -28,13 +28,15 @@ enum PillVisual: Equatable {
     case message
 
     /// Pill case → layer group. Nil renders nothing (hidden).
+    /// v7: failures never reach the pill (concise menu status owns them) —
+    /// `.message` survives only for the transient auto-copy notice, which
+    /// the controller renders directly.
     nonisolated static func forState(_ state: FlowBarState) -> PillVisual? {
         switch state {
         case .hidden: nil
         case .preparing: .bars
         case .recording: .bars
         case .finalizing, .inserting: .dotsSpinner
-        case .failure: .message
         }
     }
 }
@@ -351,16 +353,9 @@ final class PillContentView: NSView {
             // Force motion re-evaluation on the freeze/unfreeze edge.
             motionVisual = nil
         }
+        // Instant sets: label text + frozen statics (never glide).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if currentVisual == .bars {
-            for (i, bar) in barLayers.enumerated() {
-                let level: CGFloat = if reduceMotion { 0.3 } else {
-                    CGFloat(i < values.count ? values[i] : 0)
-                }
-                bar.transform = CATransform3DMakeScale(1, max(0.02, level), 1)
-            }
-        }
         if currentVisual == .message {
             if let text { label.stringValue = text }
             label.alignment = centerText ? .center : .left
@@ -373,19 +368,42 @@ final class PillContentView: NSView {
             }
         }
         CATransaction.commit()
-        if reduceMotion {
-            stopMotionAnimations()
-            motionVisual = currentVisual
-        } else {
-            // Sway owns silent bars; voice (or leaving bars) evicts it.
-            // Model transforms above stay current underneath, so the
-            // handoff is instant — no pop, no lag.
+        if !reduceMotion {
+            // Sway owns silent bars; voice (or leaving bars) evicts it —
+            // BEFORE new transforms land, so the glide below starts from
+            // unmasked model values, never from under the sway.
             if currentVisual == .bars {
                 let silent = (values.max() ?? 0) < VisualizerMath.swayThreshold
                 if silent { startSway() } else { stopSway() }
             } else {
                 stopSway()
             }
+        }
+        if currentVisual == .bars {
+            CATransaction.begin()
+            if reduceMotion {
+                CATransaction.setDisableActions(true)
+            } else {
+                // Buttery (v7): each poll's voice targets glide 0.12s
+                // easeOut from current presentation. Without this the
+                // 6.7Hz poll steps read as stiffness; attack/release still
+                // shape the targets, so voice character is unchanged —
+                // only the stepping is gone.
+                CATransaction.setAnimationDuration(0.12)
+                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+            }
+            for (i, bar) in barLayers.enumerated() {
+                let level: CGFloat = if reduceMotion { 0.3 } else {
+                    CGFloat(i < values.count ? values[i] : 0)
+                }
+                bar.transform = CATransform3DMakeScale(1, max(0.02, level), 1)
+            }
+            CATransaction.commit()
+        }
+        if reduceMotion {
+            stopMotionAnimations()
+            motionVisual = currentVisual
+        } else {
             ensureMotion(for: currentVisual)
         }
         if currentVisual == .dotsSpinner, !reduceMotion { spinner.startAnimation(nil) }

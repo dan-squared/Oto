@@ -102,9 +102,10 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.panelWidth(for: .preparing) == 112)
         #expect(VisualizerMath.panelWidth(for: .finalizing) == 116)
         #expect(VisualizerMath.panelWidth(for: .inserting) == 116)
-        #expect(VisualizerMath.panelWidth(for: .failure) == 200)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
-        // (No end-state widths: completion renders nothing.)
+        // v7: no failure arm (errors never reach the pill); the only wide
+        // pill is the transient notice.
+        #expect(VisualizerMath.noticeWidth == 200)
         // Mini v3: half the v2 area (152×44=6688 → 112×32=3584).
         #expect(VisualizerMath.panelWidth(for: .recording) <= 116)
         #expect(VisualizerMath.pillHeight == 32)
@@ -114,13 +115,16 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.recordDot == 8)
     }
 
-    @Test func swayLoopIsGentleAndNearTheFloor() {
-        // v6 "waves move a bit": the loop breathes between floor and 0.26 —
-        // visible life, never shouty; silence (0.10) reads as sway-worthy.
-        #expect(VisualizerMath.swayValues.first == 0.10)
-        #expect(VisualizerMath.swayValues.max() == 0.26)
-        #expect(VisualizerMath.swayValues.last == VisualizerMath.swayValues.first)
-        #expect(0.10 < VisualizerMath.swayThreshold)
-        #expect(VisualizerMath.swayThreshold < 0.5)
+    @Test func swayLoopIsGentleAndAboveTheFloor() {
+        // v7 "waves move a bit": the loop breathes just above silence —
+        // visible life from frame one, never shouty. Derived from the
+        // floor so the two can never drift apart.
+        let floor = Double(VisualizerMath.floor)
+        #expect(VisualizerMath.swayValues.count == 5)
+        #expect(VisualizerMath.swayValues.first == floor)
+        #expect(VisualizerMath.swayValues.last == floor)
+        #expect(VisualizerMath.swayValues.max() == floor + 0.14)
+        #expect(floor < Double(VisualizerMath.swayThreshold))
+        #expect(Double(VisualizerMath.swayThreshold) < 0.6)
     }
 }

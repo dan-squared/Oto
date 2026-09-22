@@ -17,11 +17,13 @@ import Foundation
 final class FlowBarModel {
     private(set) var projection = FlowBarProjection(
         state: .hidden, sessionID: nil, handsFreeCaption: false,
-        message: nil, showsSettingsLink: false, recoveryAvailable: false
+        recoveryAvailable: false
     )
     private(set) var sample = BarSample.silence
     /// Transient pill copy (auto-copy confirmation). Overrides content and
     /// widens the pill while set; the controller clears it on deadline.
+    /// This is the ONLY text the pill ever carries (v7: errors live in the
+    /// menu, never here).
     private(set) var notice: String?
     /// Set by the controller from the Reduce Motion indicator each poll.
     /// Frozen: levels ignored (bars hold statically), animations off.

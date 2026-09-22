@@ -2,10 +2,11 @@
 //  FlowBarStateTests.swift
 //  OtoTests
 //
-//  Slice 6B/6C1: the projection + routing contracts. Every DictationState
-//  maps to exactly one pill case; recovery-owned failures NEVER reach the
-//  pill (modal/auto-copy own them); completion renders no pixels at all
-//  (v6 — insertion is the confirmation, the loader just melts out).
+//  Slice 6B/6C1 (+v7): the projection + routing contracts. Every
+//  DictationState maps to exactly one pill case; NO failure reaches the
+//  pill (v7 — errors ruin it; modal/auto-copy own recovery failures,
+//  concise menu status owns the rest); completion renders no pixels at
+//  all (v6 — insertion is the confirmation, the loader just melts out).
 //
 
 import CoreGraphics
@@ -32,7 +33,6 @@ struct FlowBarStateTests {
         let projection = FlowBarProjection.project(.idle, recoveryAvailable: false)
         #expect(projection.state == .hidden)
         #expect(projection.sessionID == nil)
-        #expect(projection.message == nil)
     }
 
     @Test func activeStatesProjectOneToOne() {
@@ -62,54 +62,34 @@ struct FlowBarStateTests {
 
     @Test func completionCarriesNoPixels() {
         // Insertion is the confirmation (v6: not even a flash — the loader
-        // melts straight out). Any wording here reopens the "did it
-        // insert?" debate by test — so the test forbids both text and a
-        // dedicated end state.
+        // melts straight out). The projection carries no copy at all.
         let done = FlowBarProjection.project(.completed(context()), recoveryAvailable: false)
         #expect(done.state == .hidden)
-        #expect(done.message == nil)
-        #expect(!done.showsSettingsLink)
         let cancelled = FlowBarProjection.project(.cancelled(context()), recoveryAvailable: false)
         #expect(cancelled.state == .hidden)
-        #expect(cancelled.message == nil)
     }
 
-    @Test func recoveryFailuresNeverReachThePill() {
+    @Test func noFailureReachesThePill() {
+        // v7: error copy ruins the pill — EVERY failure projects hidden.
+        // Recovery failures route to modal/auto-copy; the rest are concise
+        // menu status (`lastSessionSummary`). Session identity still passes
+        // through for routing.
         let ctx = context()
-        for failure: DictationFailure in [.targetGone, .insertionFailed("nope")] {
+        for failure: DictationFailure in [
+            .targetGone, .insertionFailed("nope"), .microphoneDenied,
+            .speechPreparation("assets missing"), .audioCapture("boom"),
+            .noAudioCaptured,
+        ] {
             let projection = FlowBarProjection.project(.failed(ctx, failure), recoveryAvailable: true)
-            #expect(projection.state == .hidden, "failure \(failure) must route to modal/auto-copy, not the pill")
+            #expect(projection.state == .hidden, "failure \(failure) must never reach the pill")
+            #expect(projection.sessionID == ctx.id)
         }
     }
 
-    @Test func terminalFailuresHoldWithHonestCopy() {
-        let ctx = context()
-        let mic = FlowBarProjection.project(.failed(ctx, .microphoneDenied), recoveryAvailable: false)
-        #expect(mic.state == .failure)
-        #expect(mic.message?.contains("Microphone") == true)
-        #expect(mic.showsSettingsLink)
-
-        let prep = FlowBarProjection.project(
-            .failed(ctx, .speechPreparation("assets missing")), recoveryAvailable: false
-        )
-        #expect(prep.state == .failure)
-        #expect(prep.showsSettingsLink)
-
-        let audio = FlowBarProjection.project(
-            .failed(ctx, .audioCapture("boom")), recoveryAvailable: false
-        )
-        #expect(audio.state == .failure)
-        #expect(!audio.showsSettingsLink)
-
-        let silent = FlowBarProjection.project(.failed(ctx, .noAudioCaptured), recoveryAvailable: false)
-        #expect(silent.state == .failure)
-        #expect(silent.message?.contains("microphone") == true)
-    }
-
     @Test func nilContextFailureStillProjects() {
-        // .failed(nil,_) is legal (never force-unwrap, §5E).
+        // .failed(nil,_) is legal (never force-unwrap, §5E) — hidden, nil id.
         let projection = FlowBarProjection.project(.failed(nil, .microphoneDenied), recoveryAvailable: false)
-        #expect(projection.state == .failure)
+        #expect(projection.state == .hidden)
         #expect(projection.sessionID == nil)
     }
 

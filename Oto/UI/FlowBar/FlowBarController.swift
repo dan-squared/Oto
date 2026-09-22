@@ -169,7 +169,9 @@ final class FlowBarController {
         }
         let width: CGFloat
         if hasNotice {
-            width = VisualizerMath.panelWidth(for: .failure)
+            // v7: the ONLY wide pill — auto-copy confirmation. Failure
+            // panels are gone (concise menu status owns errors).
+            width = VisualizerMath.noticeWidth
         } else {
             width = VisualizerMath.panelWidth(for: projection.state)
         }
@@ -192,7 +194,7 @@ final class FlowBarController {
             panel?.render(
                 visual: visual,
                 values: model.sample.values,
-                text: model.notice ?? projection.message,
+                text: model.notice,
                 centerText: model.notice != nil,
                 reduceMotion: model.motionFrozen,
                 animated: !shrink

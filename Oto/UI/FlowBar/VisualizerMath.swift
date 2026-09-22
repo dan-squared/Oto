@@ -42,8 +42,9 @@ enum VisualizerMath {
     nonisolated static let attack: Float = 0.55
     /// Vowels decay — the asymmetry that reads as "real".
     nonisolated static let release: Float = 0.12
-    /// Bars never vanish (silence sits, never bounces — honest).
-    nonisolated static let floor: Float = 0.10
+    /// Bars never vanish (v7: floor 0.30 — silence reads as waves, never
+    /// dots; "start from active waves" holds from frame one).
+    nonisolated static let floor: Float = 0.30
     /// Pill geometry (pt). Mini v3: half the v2 area, reference-matched.
     nonisolated static let pillHeight: CGFloat = 32
     /// Thin-bar system (elements shrink, count stays 8).
@@ -62,8 +63,8 @@ enum VisualizerMath {
     /// Panel widths per pill case (pt). Width motion itself is owned by
     /// the AppKit frame animation; this table is the target.
     /// v6: preparing == recording (112) — starting→recording resizes
-    /// nothing, waves from frame one. No end-state widths: completion
-    /// renders no pixels (vanish path owns the exit).
+    /// nothing, waves from frame one. v7: no failure arm — errors never
+    /// reach the pill; wide pills are notices via `noticeWidth`.
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
@@ -71,7 +72,6 @@ enum VisualizerMath {
         case .recording: 112
         case .finalizing: 116
         case .inserting: 116
-        case .failure: 200
         }
     }
 
@@ -79,13 +79,20 @@ enum VisualizerMath {
 
     /// Voice-silence gate: display levels below this mean no voice, so the
     /// render-server sway owns the bars. First voice poll removes it.
-    /// (Silence sits at `floor` = 0.10; voice clears 0.18 within 1–2 polls.)
-    nonisolated static let swayThreshold: Float = 0.18
-    /// Sway keyframe loop (scaleY): gentle drift near the floor, staggered
-    /// per bar via beginTime. Peaks at 0.26 — alive, never shouty.
-    nonisolated static let swayValues: [Double] = [0.10, 0.18, 0.26, 0.18, 0.10]
+    /// (Silence sits at `floor` = 0.30; live voice clears 0.40 in 1–2
+    /// polls via attack.)
+    nonisolated static let swayThreshold: Float = 0.40
+    /// Sway keyframe loop (scaleY), derived from the floor: gentle drift
+    /// just above silence — alive, never shouty. Peaks at floor + 0.14.
+    nonisolated static var swayValues: [Double] {
+        let f = Double(floor)
+        return [f, f + 0.07, f + 0.14, f + 0.07, f]
+    }
     nonisolated static let swayCycle: Double = 1.8
     nonisolated static let swayStagger: Double = 0.2
+    /// Transient notice (auto-copy confirmation) width — the only wide
+    /// pill left (v7: failure panels are gone).
+    nonisolated static let noticeWidth: CGFloat = 200
 
     // MARK: - Bar shaping
 
