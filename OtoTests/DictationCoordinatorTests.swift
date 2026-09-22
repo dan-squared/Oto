@@ -469,4 +469,68 @@ struct DictationCoordinatorTests {
         }
         #expect(await coordinator.lastSessionSummary() == "failed: insertion failed (denied), transcript kept")
     }
+
+    // MARK: - Media duck (Phase 7, spike-green)
+
+    private func makeDuckSUT(
+        insertionResult: InsertionResult = .inserted
+    ) -> (coordinator: DictationCoordinator, duck: FakeMediaDuck) {
+        let audio = FakeAudioCapture(stubPeak: 1.0)
+        let speech = FakeSpeechService(finalText: "hello oto", finishError: nil, prepareGateOpen: true)
+        let target = FakeTargetCapture(stubTarget: Self.stubTarget)
+        let inserter = FakeTextInsertion(result: insertionResult)
+        let duck = FakeMediaDuck()
+        let coordinator = DictationCoordinator(
+            audio: audio,
+            speech: speech,
+            targetService: target,
+            inserter: inserter,
+            history: nil,
+            micDeniedOverride: { false },
+            mediaDuck: duck
+        )
+        return (coordinator, duck)
+    }
+
+    @Test func duckOnRecordRestoreOnComplete() async {
+        let (coordinator, duck) = makeDuckSUT()
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        #expect(await duck.ducks == [id!])
+        await coordinator.finish(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .completed = terminal else {
+            Issue.record("expected completed, got \(terminal)")
+            return
+        }
+        #expect(await duck.restores == [id!])
+    }
+
+    @Test func cancelRestoresMedia() async {
+        let (coordinator, duck) = makeDuckSUT()
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.cancel(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .cancelled = terminal else {
+            Issue.record("expected cancelled, got \(terminal)")
+            return
+        }
+        #expect(await duck.ducks == [id!])
+        #expect(await duck.restores == [id!])
+    }
+
+    @Test func failedInsertionStillRestoresMedia() async {
+        let (coordinator, duck) = makeDuckSUT(insertionResult: .recoverableFailure(reason: "denied"))
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.finish(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed = terminal else {
+            Issue.record("expected failed, got \(terminal)")
+            return
+        }
+        #expect(await duck.ducks == [id!])
+        #expect(await duck.restores == [id!])
+    }
 }

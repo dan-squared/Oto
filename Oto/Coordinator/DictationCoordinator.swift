@@ -62,6 +62,11 @@ actor DictationCoordinator {
     /// not the MainActor — default project isolation is); tests inject a
     /// pure override so they never touch TCC (nil = real read).
     private let micDeniedOverride: (@Sendable () -> Bool)?
+    /// Phase 7 media duck (spike-green): muted output while recording.
+    /// Nil in tests and when unwired — every call site is optional, so
+    /// duck-off sessions behave exactly as before. Injected (protocol)
+    /// so coordinator tests never touch the HAL.
+    private let mediaDuck: (any MediaDucking)?
 
     /// Phase 1 observability: state transitions are the only visible trace
     /// of fake sessions (no Flow Bar yet). Watch in Console.app.
@@ -74,7 +79,8 @@ actor DictationCoordinator {
         inserter: any TextInserting,
         pipeline: TranscriptPipeline = TranscriptPipeline(),
         history: HistoryStore?,
-        micDeniedOverride: (@Sendable () -> Bool)? = nil
+        micDeniedOverride: (@Sendable () -> Bool)? = nil,
+        mediaDuck: (any MediaDucking)? = nil
     ) {
         self.audio = audio
         self.speech = speech
@@ -83,6 +89,7 @@ actor DictationCoordinator {
         self.pipeline = pipeline
         self.history = history
         self.micDeniedOverride = micDeniedOverride
+        self.mediaDuck = mediaDuck
     }
 
     /// Live rule refresh from the dictionary store (Writing pane saves).
@@ -159,6 +166,7 @@ actor DictationCoordinator {
         log.info("cancelled \(sessionID.uuidString.prefix(8), privacy: .public)")
         await audio.cancel()
         await speech.cancel()
+        await restoreMedia(sessionID: sessionID)
     }
 
     /// One-line human-readable summary of the current/terminal state, for
@@ -295,6 +303,14 @@ actor DictationCoordinator {
         guard case .starting = state else { return }
         state = .recording(context)
         recordingBeganAt = ContinuousClock().now
+        await mediaDuck?.duck(sessionID: sessionID)
+        // Suspension crossed: a cancel may have won mid-duck. Re-check
+        // identity — a late duck with no owner restores immediately, so
+        // no path can leave the user muted.
+        guard currentSessionID == sessionID else {
+            await restoreMedia(sessionID: sessionID)
+            return
+        }
     }
 
     /// Silent-skip decision: true only for whole-session silence with
@@ -312,6 +328,12 @@ actor DictationCoordinator {
         return await audio.sessionPeakAmplitude() < Self.silencePeakThreshold
     }
 
+    /// Media-duck restore funnel: every terminal path calls this, so no
+    /// session can end muted. Nil-duck and already-restored are no-ops.
+    private func restoreMedia(sessionID: UUID) async {
+        await mediaDuck?.restore(sessionID: sessionID)
+    }
+
     private func finalizeSession(sessionID: UUID, context: SessionContext) async {
         await audio.stop()
 
@@ -323,6 +345,7 @@ actor DictationCoordinator {
         // buffer is captured, never on a timer mid-session.
         if await shouldSkipTranscription(context: context) {
             guard currentSessionID == sessionID else { return }
+            await restoreMedia(sessionID: sessionID)
             currentSessionID = nil
             state = .completed(context)
             log.info("completed (silent, loader skipped) \(sessionID.uuidString.prefix(8), privacy: .public)")
@@ -336,6 +359,7 @@ actor DictationCoordinator {
             raw = try await speech.finish()
         } catch {
             guard currentSessionID == sessionID else { return }
+            await restoreMedia(sessionID: sessionID)
             currentSessionID = nil
             // Dead mic surfaces honestly: no transcript exists to keep,
             // so recovery stays empty and the reason names the mic.
@@ -356,6 +380,7 @@ actor DictationCoordinator {
         let clean = pipeline.process(raw, for: context.target)
         guard !clean.isEmpty else {
             // Empty final: complete without insertion (02 timeline).
+            await restoreMedia(sessionID: sessionID)
             currentSessionID = nil
             state = .completed(context)
             log.info("completed (empty, no insertion) \(sessionID.uuidString.prefix(8), privacy: .public)")
@@ -377,6 +402,7 @@ actor DictationCoordinator {
         let alive = await targetService.isAlive(context.target)
         guard currentSessionID == sessionID else { return }
         guard alive else {
+            await restoreMedia(sessionID: sessionID)
             currentSessionID = nil
             recoveryTranscript = Transcript(text: clean)
             state = .failed(context, .targetGone)
@@ -388,6 +414,7 @@ actor DictationCoordinator {
         let result = await inserter.insert(clean, into: context.target)
 
         guard currentSessionID == sessionID else { return }
+        await restoreMedia(sessionID: sessionID)
         currentSessionID = nil
         switch result {
         case .inserted:

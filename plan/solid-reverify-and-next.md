@@ -89,6 +89,26 @@ as a record so later agents inherit the reasoning without re-researching.
    Sandboxed probe: read `'vmvc'` on the default output → attempt set+restore
    → log success or the sandbox denial → record one line here. Owner and
    exact probe code get one line amended into this plan at build start.
+
+   OUTCOME (2026-09-23, executed): **GREEN.** Ad-hoc-signed
+   `app.OtoSandboxSpike` .app (app-sandbox + audio-input, mirroring
+   `Oto.entitlements`) ran the full cycle sandboxed: has/settable/get →
+   write-back → duck to 50% → restore → read-back verified, all
+   OSStatus 0, exit 0. Bare-tool execution can't init a sandbox
+   container (exit 133, zero output) — the .app bundle wrapper is
+   required; recorded so nobody re-derives it. Caveat: ad-hoc, not
+   Developer-ID — sandbox verdict derives from entitlements, so
+   representative; final proof is the real signed build on device.
+   Two corrections applied to the 6C design: (a) ship on
+   AudioObjectGet/SetPropertyData (CoreAudio, current) — the entire
+   AudioHardwareService* family is API_DEPRECATED("no longer
+   supported", macos(10.5, 10.11)); the 'vmvc' fourcc itself stays.
+   (b) `MediaDucking` is explicitly `@MainActor` — the compiler treats
+   it as MainActor-isolated under the project's default isolation +
+   InferIsolatedConformances (an actor fake is rejected; a same-shape
+   scratch protocol in the app target compiles, so the trigger is
+   subtle — recorded, not fully root-caused). Probe deleted after this
+   line was written.
 2. **Media mute ONLY behind a green spike** (6C design unchanged):
    NEW `Oto/Services/MediaDuck.swift` (`@MainActor`, nonisolated HAL calls;
    save → 0.0 on `.recording`, restore on every terminal state, idempotent

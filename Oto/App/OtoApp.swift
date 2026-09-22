@@ -51,6 +51,9 @@ struct OtoApp: App {
     private let historyStore: HistoryStore
 
     init() {
+        // Crash backstop first: a kill mid-dictation leaves the duck flag
+        // set — put the user's volume back before anything else runs.
+        MediaDuck.restoreIfCrashed()
         let relay = AudioBufferRelay()
         let spectrumBox = SpectrumFeedBox()
         let audio = AppleAudioCapture(bufferHandler: { buffer in
@@ -68,7 +71,8 @@ struct OtoApp: App {
             speech: speech,
             targetService: RealTargetCapture(),
             inserter: inserter,
-            history: historyStore
+            history: historyStore,
+            mediaDuck: MediaDuck()
         )
         let analyzer = AudioSpectrumAnalyzer()
         let modalController = NoTargetModalController()

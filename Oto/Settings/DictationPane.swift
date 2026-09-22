@@ -36,6 +36,10 @@ struct DictationPane: View {
     // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
     // pinned equal to it by NoTargetModalTests.
     @AppStorage("app.Oto.noTargetModal") private var catcherEnabled = true
+    // Media-duck kill-switch (Phase 7, spike-green): default ON — bleed
+    // ruins transcripts, resume is automatic. Key owned by
+    // MediaDuckSettings; the literal is pinned equal to it by MediaDuckTests.
+    @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
 
     enum TriggerChoice: String, CaseIterable, Identifiable {
         case rightOptionHold = "Right Option (hold)"
@@ -159,6 +163,13 @@ struct DictationPane: View {
             Section("Catcher") {
                 Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
                 Text("When dictation finishes with no text field to receive it, Oto opens a small window with the transcript and a Copy button. Off: the transcript is copied to the clipboard automatically instead.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Media") {
+                Toggle("Mute media while dictating", isOn: $muteMedia)
+                Text("Oto silences speaker output while you dictate so it can't bleed into the transcript, then restores your exact volume. A relaunch restores it even if Oto was killed mid-dictation.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
