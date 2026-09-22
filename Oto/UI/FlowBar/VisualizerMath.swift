@@ -40,8 +40,18 @@ enum VisualizerMath {
     nonisolated static let release: Float = 0.12
     /// Bars never vanish (silence sits, never bounces — honest).
     nonisolated static let floor: Float = 0.10
-    /// Pill geometry (pt). Mini per references (~3:1, compact).
-    nonisolated static let pillHeight: CGFloat = 44
+    /// Pill geometry (pt). Mini v3: half the v2 area, reference-matched.
+    nonisolated static let pillHeight: CGFloat = 32
+    /// Thin-bar system (elements shrink, count stays 8).
+    nonisolated static let barWidth: CGFloat = 3.5
+    nonisolated static let barPitch: CGFloat = 8.5
+    /// Small red dot, no ring.
+    nonisolated static let recordDot: CGFloat = 8
+    /// Chase dots (reference-proportioned).
+    nonisolated static let chaseDot: CGFloat = 3
+    nonisolated static let chasePitch: CGFloat = 8
+    /// Native spinner footprint.
+    nonisolated static let spinnerSize: CGFloat = 16
     /// Dots in the working chase.
     nonisolated static let dotCount = 9
     /// Spinner step per tick: 60° @ ~6.7 ticks/s ≈ 0.9 s/rev.
@@ -52,13 +62,13 @@ enum VisualizerMath {
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
-        case .preparing: 140
-        case .recording: 152
-        case .finalizing: 140
-        case .inserting: 140
-        case .successFlash: 84
-        case .cancelledFlash: 84
-        case .failure: 260
+        case .preparing: 116
+        case .recording: 112
+        case .finalizing: 116
+        case .inserting: 116
+        case .successFlash: 64
+        case .cancelledFlash: 64
+        case .failure: 200
         }
     }
 

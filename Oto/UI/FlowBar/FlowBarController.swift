@@ -141,14 +141,29 @@ final class FlowBarController {
             return
         }
         if panel == nil {
-            panel = FlowBarPanel(model: model, width: width)
+            panel = FlowBarPanel(width: width)
         }
         panel?.show(
             sessionID: projection.sessionID,
             displayID: Self.targetScreen(of: state),
             width: width
         )
-        panel?.syncContentWidth(model: model)
+        if let visual = PillVisual.forState(projection.state) {
+            panel?.render(
+                visual: visual,
+                values: model.sample.values, tick: model.sample.tick,
+                text: model.notice ?? projection.message,
+                centerText: model.notice != nil,
+                reduceMotion: model.motionFrozen
+            )
+        } else if let notice = model.notice {
+            panel?.render(
+                visual: .message,
+                values: model.sample.values, tick: model.sample.tick,
+                text: notice, centerText: true,
+                reduceMotion: model.motionFrozen
+            )
+        }
     }
 
     private func syncDeadlines(projection: FlowBarProjection) {

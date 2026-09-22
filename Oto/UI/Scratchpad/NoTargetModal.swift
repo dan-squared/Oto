@@ -89,8 +89,15 @@ struct NoTargetModalView: View {
                 .shadow(color: .black.opacity(0.5), radius: 22, y: 6)
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    BarVisualizer(mode: .staticMark, values: [], tick: 0, handsFree: false)
-                        .frame(width: 40, height: 24)
+                    // Static waveform mark (fixed arch, no motion).
+                    HStack(spacing: 3) {
+                        ForEach([0.45, 0.7, 1.0, 0.7, 0.45], id: \.self) { level in
+                            Capsule()
+                                .fill(.white)
+                                .frame(width: 3, height: 24 * level)
+                        }
+                    }
+                    .frame(width: 40, height: 24)
                     Spacer()
                     Text("Select a textbox first, then dictate")
                         .font(.callout)

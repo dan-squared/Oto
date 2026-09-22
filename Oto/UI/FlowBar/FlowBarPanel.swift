@@ -17,23 +17,20 @@
 //
 
 import AppKit
-import SwiftUI
+import QuartzCore
 
 @MainActor
 final class FlowBarPanel {
     nonisolated static let bottomMargin: CGFloat = 28
 
     private let panel: NSPanel
-    private let hosting: NSHostingView<FlowBarView>
+    private let content: PillContentView
     private(set) var pinnedSessionID: UUID?
     private(set) var pinnedScreen: NSScreen?
     /// Which positioning step resolved (1–4). Recorded for the 6B matrix:
     /// single-screen sign-off covers fallbacks only.
     private(set) var lastStep = 0
     private(set) var currentWidth: CGFloat = 0
-    /// Last width pushed into the SwiftUI hierarchy. Rebuilding rootView
-    /// destroys live animations — only rebuild on real change (the lag fix).
-    private var contentWidth: CGFloat = -1
 
     // MARK: - Shared nonactivating recipe (pill + catcher modal)
 
@@ -91,13 +88,10 @@ final class FlowBarPanel {
 
     // MARK: - Pill instance
 
-    init(model: FlowBarModel, width: CGFloat) {
-        hosting = NSHostingView(rootView: FlowBarView(model: model, width: width))
-        hosting.wantsLayer = true
-        hosting.layer?.backgroundColor = NSColor.clear.cgColor
-        panel = Self.makePanel(contentView: hosting, size: NSSize(width: width, height: VisualizerMath.pillHeight))
+    init(width: CGFloat) {
+        content = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: VisualizerMath.pillHeight))
+        panel = Self.makePanel(contentView: content, size: NSSize(width: width, height: VisualizerMath.pillHeight))
         currentWidth = width
-        contentWidth = width
     }
 
     /// Show (or re-pin) for a session. Same session → resize in place.
@@ -124,15 +118,17 @@ final class FlowBarPanel {
         currentWidth = width
     }
 
-    /// Refresh SwiftUI content width to match the frame (no animation —
-    /// the frame animator below is the motion). GUARDED: rebuilding
-    /// rootView destroys the live view hierarchy (restarts Canvas
-    /// animations, drops in-flight transitions) — the 2026-09-22 lag was
-    /// this running on every 150 ms poll. Same width → no-op.
-    func syncContentWidth(model: FlowBarModel) {
-        guard currentWidth != contentWidth else { return }
-        contentWidth = currentWidth
-        hosting.rootView = FlowBarView(model: model, width: currentWidth)
+    /// Push one poll snapshot into the layers: group switch (faded on the
+    /// render server) → layout at the current width (guarded no-op) →
+    /// value sets with implicit actions disabled. No hierarchy exists to
+    /// rebuild — this is why v3 can't lag the v2 way.
+    func render(
+        visual: PillVisual, values: [Float], tick: UInt64,
+        text: String?, centerText: Bool, reduceMotion: Bool
+    ) {
+        content.show(visual: visual)
+        content.layout(width: currentWidth)
+        content.update(values: values, tick: tick, text: text, centerText: centerText, reduceMotion: reduceMotion)
     }
 
     func hide() {

@@ -84,16 +84,20 @@ struct VisualizerMathTests {
     }
 
     @Test func widthsAreMini() {
-        #expect(VisualizerMath.panelWidth(for: .recording) == 152)
-        #expect(VisualizerMath.panelWidth(for: .preparing) == 140)
-        #expect(VisualizerMath.panelWidth(for: .finalizing) == 140)
-        #expect(VisualizerMath.panelWidth(for: .inserting) == 140)
-        #expect(VisualizerMath.panelWidth(for: .successFlash) == 84)
-        #expect(VisualizerMath.panelWidth(for: .cancelledFlash) == 84)
-        #expect(VisualizerMath.panelWidth(for: .failure) == 260)
+        #expect(VisualizerMath.panelWidth(for: .recording) == 112)
+        #expect(VisualizerMath.panelWidth(for: .preparing) == 116)
+        #expect(VisualizerMath.panelWidth(for: .finalizing) == 116)
+        #expect(VisualizerMath.panelWidth(for: .inserting) == 116)
+        #expect(VisualizerMath.panelWidth(for: .successFlash) == 64)
+        #expect(VisualizerMath.panelWidth(for: .cancelledFlash) == 64)
+        #expect(VisualizerMath.panelWidth(for: .failure) == 200)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
-        // Mini by construction: the widest pill stays compact.
-        #expect(VisualizerMath.panelWidth(for: .recording) <= 160)
-        #expect(VisualizerMath.pillHeight == 44)
+        // Mini v3: half the v2 area (152×44=6688 → 112×32=3584).
+        #expect(VisualizerMath.panelWidth(for: .recording) <= 116)
+        #expect(VisualizerMath.pillHeight == 32)
+        // Elements shrink, count stays.
+        #expect(VisualizerMath.barCount == 8)
+        #expect(VisualizerMath.barWidth == 3.5)
+        #expect(VisualizerMath.recordDot == 8)
     }
 }
