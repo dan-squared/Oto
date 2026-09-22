@@ -28,7 +28,8 @@ struct DictationCoordinatorTests {
         insertionResult: InsertionResult = .inserted,
         prepareGateOpen: Bool = true,
         finishError: (any Error)? = nil,
-        micDenied: Bool = false
+        micDenied: Bool = false,
+        audioPeak: Float = 1.0
     ) -> (
         coordinator: DictationCoordinator,
         audio: FakeAudioCapture,
@@ -36,7 +37,7 @@ struct DictationCoordinatorTests {
         target: FakeTargetCapture,
         inserter: FakeTextInsertion
     ) {
-        let audio = FakeAudioCapture()
+        let audio = FakeAudioCapture(stubPeak: audioPeak)
         let speech = FakeSpeechService(
             finalText: finalText,
             finishError: finishError,
@@ -95,6 +96,50 @@ struct DictationCoordinatorTests {
         #expect(calls.count == 1)
         #expect(calls.first?.text == "hello oto")
         #expect(calls.first?.target == Self.stubTarget)
+    }
+
+    // MARK: - Silent skip (no loader for voice-less sessions)
+
+    @Test func silentLongSessionSkipsTranscription() async {
+        // Whole-session silence past the duration guard completes without
+        // transcription — speech.finish never runs, so the loader never
+        // exists. Nothing inserted, same silent vanish as pipeline-empty.
+        let sut = makeSUT(finalText: "hello oto", audioPeak: 0)
+        let id = await sut.coordinator.beginHold()
+        #expect(id != nil)
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        try? await Task.sleep(for: .milliseconds(600))
+        await sut.coordinator.finish(id!)
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .completed = terminal else {
+            Issue.record("expected completed, got \(terminal)")
+            return
+        }
+        #expect(await sut.speech.finishCalls == 0)
+        #expect(await sut.inserter.calls.isEmpty)
+    }
+
+    @Test func silentShortSessionTakesFullPath() async {
+        // Short sessions always transcribe — a quick quiet word (or
+        // not-yet-arrived buffers) must never die silent.
+        let sut = makeSUT(finalText: "hello oto", audioPeak: 0)
+        let id = await sut.coordinator.beginHold()
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        await sut.coordinator.finish(id!)
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .completed = terminal else {
+            Issue.record("expected completed, got \(terminal)")
+            return
+        }
+        #expect(await sut.speech.finishCalls == 1)
+    }
+
+    @Test func silentSkipGateConstantsAreConservative() {
+        // −40 dBFS floor, 500 ms of audio before trust, 120 ms
+        // trailing-edge settle. Device matrix confirms or lowers.
+        #expect(DictationCoordinator.silencePeakThreshold == 0.01)
+        #expect(DictationCoordinator.minimumRecordedAudio == .milliseconds(500))
+        #expect(DictationCoordinator.trailingEdgeSettle == .milliseconds(120))
     }
 
     @Test func micDeniedFailsFastWithoutStartingAudio() async {

@@ -60,4 +60,59 @@ struct RebuildDebounceTests {
         #expect(!strict.shouldRebuildNow(now: last.addingTimeInterval(2.0), lastRebuild: last))
         #expect(strict.shouldRebuildNow(now: last.addingTimeInterval(6.0), lastRebuild: last))
     }
+
+    // MARK: - Session peak (silent-skip voice signal)
+
+    private func pcmBuffer(frames: Int = 4096, fill: Float = 0) -> AVAudioPCMBuffer? {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+            channels: 1, interleaved: false
+        ), let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)
+        ), let channel = buffer.floatChannelData?[0] else { return nil }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        memset(channel, 0, frames * MemoryLayout<Float>.size)
+        if fill != 0 {
+            for f in 0..<frames { channel[f] = fill }
+        }
+        return buffer
+    }
+
+    @Test func silenceNotesZeroPeak() async {
+        // Digital silence contributes nothing — a voice-less session
+        // reads back 0.
+        guard let silent = pcmBuffer() else {
+            Issue.record("could not build a test buffer")
+            return
+        }
+        let capture = await MainActor.run { AppleAudioCapture() }
+        capture.noteBufferPeak(silent)
+        #expect(await capture.sessionPeakAmplitude() == 0)
+    }
+
+    @Test func toneNotesPeakAndHoldsMax() async {
+        // Peak holds the session max across buffers (stride-4 scan hits
+        // a constant fill exactly).
+        guard let loud = pcmBuffer(fill: 0.5), let quiet = pcmBuffer(fill: 0.2) else {
+            Issue.record("could not build test buffers")
+            return
+        }
+        let capture = await MainActor.run { AppleAudioCapture() }
+        capture.noteBufferPeak(loud)
+        #expect(await capture.sessionPeakAmplitude() == 0.5)
+        capture.noteBufferPeak(quiet)
+        #expect(await capture.sessionPeakAmplitude() == 0.5)
+    }
+
+    @Test func peakResetsForNewSession() async {
+        guard let loud = pcmBuffer(fill: 0.5) else {
+            Issue.record("could not build a test buffer")
+            return
+        }
+        let capture = await MainActor.run { AppleAudioCapture() }
+        capture.noteBufferPeak(loud)
+        #expect(await capture.sessionPeakAmplitude() == 0.5)
+        capture.resetSessionPeak()
+        #expect(await capture.sessionPeakAmplitude() == 0)
+    }
 }

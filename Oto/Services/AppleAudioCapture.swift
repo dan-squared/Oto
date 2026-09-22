@@ -57,6 +57,12 @@ actor AppleAudioCapture: AudioCaptureServing {
     private var handlingConfigChange = false
     private var lastRebuild: Date?
     private var pendingRebuild: Task<Void, Never>?
+    /// Voice-presence signal (silent-skip workstream): peak absolute
+    /// sample seen since `start`. Lock-guarded `nonisolated(unsafe)` like
+    /// the relay — the tap closure runs on the realtime thread and must
+    /// not touch actor state (installTap comment below).
+    private let peakLock = NSLock()
+    private nonisolated(unsafe) var sessionPeak: Float = 0
 
     init(
         bufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)? = nil,
@@ -67,6 +73,7 @@ actor AppleAudioCapture: AudioCaptureServing {
     }
 
     func start() async throws {
+        resetSessionPeak()
         try restart()
         isRunning = true
     }
@@ -77,6 +84,38 @@ actor AppleAudioCapture: AudioCaptureServing {
 
     func cancel() async {
         teardown()
+    }
+
+    func sessionPeakAmplitude() async -> Float {
+        peakLock.withLock { sessionPeak }
+    }
+
+    /// Realtime-safe peak note (tap thread only touches the lock + Float).
+    /// Stride-4 scan of every channel: ~1k samples per 4096-frame buffer,
+    /// microseconds — no conversion, no allocation, no logging.
+    nonisolated func noteBufferPeak(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        let frames = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frames > 0, channelCount > 0 else { return }
+        var peak: Float = 0
+        for ch in 0..<channelCount {
+            var f = 0
+            while f < frames {
+                peak = max(peak, abs(channels[ch][f]))
+                f += 4
+            }
+        }
+        guard peak > 0 else { return }
+        peakLock.lock()
+        sessionPeak = max(sessionPeak, peak)
+        peakLock.unlock()
+    }
+
+    nonisolated func resetSessionPeak() {
+        peakLock.lock()
+        sessionPeak = 0
+        peakLock.unlock()
     }
 
     // MARK: - Private
@@ -148,8 +187,12 @@ actor AppleAudioCapture: AudioCaptureServing {
         // bufferSize 4096 (plan/buffer-size.md): power-of-2 inside the
         // documented [100, 400] ms request range for the BT rate
         // (256 ms @16 kHz; 85 ms @48 kHz).
-        try input.installAudioTap(onBus: 0, bufferSize: 4096, format: nil) { readOnly, _ in
-            handler?(AVAudioPCMBuffer(copying: readOnly))
+        try input.installAudioTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] readOnly, _ in
+            let owned = AVAudioPCMBuffer(copying: readOnly)
+            handler?(owned)
+            // Voice-presence peak (silent-skip): realtime-safe, never
+            // touches actor state — see noteBufferPeak.
+            self?.noteBufferPeak(owned)
         }
     }
 

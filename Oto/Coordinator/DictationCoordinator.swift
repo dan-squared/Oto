@@ -39,6 +39,23 @@ actor DictationCoordinator {
     private var currentSessionID: UUID?
     private var sessionContext: SessionContext?
     private var finishRequested = false
+    /// When the current session entered recording (silent-skip duration
+    /// guard). Nil until the starting→recording transition; cleared on
+    /// every begin so a stale instant can never green-light a new session.
+    private var recordingBeganAt: ContinuousClock.Instant?
+    /// Silent-skip gate (no loader for voice-less sessions): peak under
+    /// −40 dBFS with enough recorded audio to trust it. Conservative
+    /// starting point — speech peaks ~0.1–0.5, mic idle noise ~0.001;
+    /// the device matrix confirms or lowers. Tests pin whatever ships.
+    nonisolated static let silencePeakThreshold: Float = 0.01
+    /// Short sessions always take the full path — a quick quiet word
+    /// (or not-yet-arrived buffers) must never die silent.
+    nonisolated static let minimumRecordedAudio: Duration = .milliseconds(500)
+    /// Trailing-edge settle: the tap's last buffers flush just after
+    /// stop, so a word in the final instant still counts. Costs time
+    /// only in the case that saves it (an already-loud peak returns
+    /// before the settle, short sessions never reach it).
+    nonisolated static let trailingEdgeSettle: Duration = .milliseconds(120)
     /// Mic fast-fail gate (no-flash workstream): when denied, preparation
     /// fails with `.microphoneDenied` before audio starts. Production reads
     /// the synchronous record permission on the MainActor (this actor is
@@ -201,6 +218,7 @@ actor DictationCoordinator {
         sessionContext = context
         currentSessionID = context.id
         finishRequested = false
+        recordingBeganAt = nil
         recoveryTranscript = nil
         state = .starting(context)
         log.info("begin \(context.id.uuidString.prefix(8), privacy: .public) mode=\(String(describing: interaction), privacy: .public) target=\(context.target.bundleIdentifier ?? "?", privacy: .public)")
@@ -276,11 +294,41 @@ actor DictationCoordinator {
 
         guard case .starting = state else { return }
         state = .recording(context)
+        recordingBeganAt = ContinuousClock().now
+    }
+
+    /// Silent-skip decision: true only for whole-session silence with
+    /// enough recorded audio to trust the peak. Short sessions and any
+    /// session with voice always return false (full loader path).
+    /// Identity is re-checked by the caller after this suspends.
+    private func shouldSkipTranscription(context: SessionContext) async -> Bool {
+        guard let began = recordingBeganAt,
+              began.duration(to: ContinuousClock().now) > Self.minimumRecordedAudio
+        else { return false }
+        if await audio.sessionPeakAmplitude() >= Self.silencePeakThreshold {
+            return false
+        }
+        try? await Task.sleep(for: Self.trailingEdgeSettle)
+        return await audio.sessionPeakAmplitude() < Self.silencePeakThreshold
     }
 
     private func finalizeSession(sessionID: UUID, context: SessionContext) async {
         await audio.stop()
 
+        guard currentSessionID == sessionID else { return }
+
+        // Silent-skip: whole-session silence completes without
+        // transcription, so the loader never exists. Late speech always
+        // counts — this reads the full-session peak once, after the last
+        // buffer is captured, never on a timer mid-session.
+        if await shouldSkipTranscription(context: context) {
+            guard currentSessionID == sessionID else { return }
+            currentSessionID = nil
+            state = .completed(context)
+            log.info("completed (silent, loader skipped) \(sessionID.uuidString.prefix(8), privacy: .public)")
+            return
+        }
+        // The settle above suspends: cancel may have won while waiting.
         guard currentSessionID == sessionID else { return }
 
         let raw: String
