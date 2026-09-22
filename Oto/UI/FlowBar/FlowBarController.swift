@@ -239,7 +239,7 @@ final class FlowBarController {
         if model.notice != nil {
             if noticeDeadline == nil {
                 noticeDeadline = now.addingTimeInterval(Self.noticeDuration)
-            } else if now >= noticeDeadline! {
+            } else if let deadline = noticeDeadline, now >= deadline {
                 noticeDeadline = nil
                 model.clearNotice()
             }

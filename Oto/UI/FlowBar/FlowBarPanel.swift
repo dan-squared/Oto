@@ -227,7 +227,10 @@ final class FlowBarPanel {
             bottomGhost = ghost
             bottomGhostView = view
         }
-        return [(topGhost!, topGhostView!, .top), (bottomGhost!, bottomGhostView!, .bottom)]
+        guard let topGhost, let topGhostView, let bottomGhost, let bottomGhostView else {
+            return []
+        }
+        return [(topGhost, topGhostView, .top), (bottomGhost, bottomGhostView, .bottom)]
     }
 
     @discardableResult
