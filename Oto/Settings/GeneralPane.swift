@@ -43,6 +43,7 @@ struct GeneralPane: View {
     @State private var loginError: String?
     @State private var showInDock = DockVisibility.isShown()
     @State private var dockError: String?
+    @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .bottom
 
     var body: some View {
         Form {
@@ -84,6 +85,17 @@ struct GeneralPane: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Flow Bar") {
+                Picker("Position", selection: $flowPosition) {
+                    Text("Top").tag(FlowBarPosition.top)
+                    Text("Bottom").tag(FlowBarPosition.bottom)
+                }
+                .pickerStyle(.segmented)
+                Text("Top sits below the notch. You can also drag the pill anytime — it snaps with a tick.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("About") {

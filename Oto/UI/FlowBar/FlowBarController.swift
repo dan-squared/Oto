@@ -14,7 +14,8 @@
 //  hidden poll after a visible state — completion renders no pixels,
 //  insertion is the confirmation (v6); modal/auto-copy fire exactly once
 //  per failure transition (route-key comparison); auto-copy writes once
-//  per key.
+//  per key; while dragging, the finger owns geometry (poll renders, never
+//  moves) and no hide is scheduled or fired (Phase 8).
 //
 
 import AppKit
@@ -151,6 +152,13 @@ final class FlowBarController {
         // visible state melts the loader straight out (generation-guarded);
         // later hidden polls are no-ops. Notices render below, never here.
         if !hasNotice, projection.state == .hidden {
+            // Drag owns the frame: cancel a pending melt instead of
+            // scheduling one — the drop's next poll resumes normal logic.
+            if panel?.isDragging == true {
+                hideTask?.cancel()
+                hideTask = nil
+                return
+            }
             guard hideTask == nil else { return }
             guard panel?.isVisible == true else {
                 panel?.hide()
@@ -163,6 +171,12 @@ final class FlowBarController {
                     nanoseconds: UInt64(Self.vanishDelay * 1_000_000_000)
                 )
                 guard !Task.isCancelled, generation == self.hideGeneration else { return }
+                // A grab landed inside the melt window: skip this cycle and
+                // clear the task so the next poll reschedules — never stuck.
+                if self.panel?.isDragging == true {
+                    self.hideTask = nil
+                    return
+                }
                 self.panel?.hideNow()
             }
             return
@@ -182,14 +196,19 @@ final class FlowBarController {
         if panel == nil {
             panel = FlowBarPanel(width: width)
         }
+        let position = FlowBarPosition.current()
+        let dragging = panel?.isDragging == true
         // Shrink transitions play no fade-out (v4 F1b): the outgoing group
         // would overflow the already-narrower frame mid-fade.
         let shrink = width < (panel?.currentWidth ?? .greatestFiniteMagnitude)
-        panel?.show(
-            sessionID: projection.sessionID,
-            displayID: Self.targetScreen(of: state),
-            width: width
-        )
+        if !dragging {
+            panel?.show(
+                sessionID: projection.sessionID,
+                displayID: Self.targetScreen(of: state),
+                width: width,
+                position: position
+            )
+        }
         if let visual = PillVisual.forState(projection.state) {
             panel?.render(
                 visual: visual,

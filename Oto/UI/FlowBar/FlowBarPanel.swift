@@ -21,8 +21,6 @@ import QuartzCore
 
 @MainActor
 final class FlowBarPanel {
-    nonisolated static let bottomMargin: CGFloat = 28
-
     private let panel: NSPanel
     private let content: PillContentView
     private(set) var pinnedSessionID: UUID?
@@ -31,6 +29,14 @@ final class FlowBarPanel {
     /// single-screen sign-off covers fallbacks only.
     private(set) var lastStep = 0
     private(set) var currentWidth: CGFloat = 0
+    /// Drag-and-snap state (Phase 8). While true the controller renders
+    /// content but never moves geometry — the finger owns the frame.
+    private(set) var isDragging = false
+    private var dragStartSlot = FlowBarPosition.bottom
+    private var topGhost: NSPanel?
+    private var bottomGhost: NSPanel?
+    private var topGhostView: SnapIndicatorView?
+    private var bottomGhostView: SnapIndicatorView?
 
     // MARK: - Shared nonactivating recipe (pill + catcher modal)
 
@@ -92,19 +98,22 @@ final class FlowBarPanel {
         content = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: VisualizerMath.pillHeight))
         panel = Self.makePanel(contentView: content, size: NSSize(width: width, height: VisualizerMath.pillHeight))
         currentWidth = width
+        content.dragDelegate = self
     }
 
     /// Show (or re-pin) for a session. Same session → resize in place.
-    func show(sessionID: UUID?, displayID: CGDirectDisplayID?, width: CGFloat) {
+    /// The slot comes from the setting per poll, so flipping it in
+    /// Settings moves the live pill (Phase 8).
+    func show(sessionID: UUID?, displayID: CGDirectDisplayID?, width: CGFloat, position: FlowBarPosition) {
         if sessionID == pinnedSessionID, pinnedScreen != nil {
-            resize(to: width)
+            resize(to: width, position: position)
             return
         }
         guard let (screen, step) = Self.resolveScreen(displayID: displayID) else { return }
         pinnedSessionID = sessionID
         pinnedScreen = screen
         lastStep = step
-        setFrame(for: width, on: screen, animated: false)
+        setFrame(for: width, on: screen, position: position, animated: false)
         currentWidth = width
         // orderFront, never makeKeyAndOrderFront: showing must not
         // activate Oto or steal the target's focus.
@@ -112,10 +121,16 @@ final class FlowBarPanel {
     }
 
     /// Animated width change on the PINNED screen (no re-resolution).
-    func resize(to width: CGFloat) {
+    func resize(to width: CGFloat, position: FlowBarPosition) {
         guard width != currentWidth, let screen = pinnedScreen else { return }
-        setFrame(for: width, on: screen, animated: true)
+        setFrame(for: width, on: screen, position: position, animated: true)
         currentWidth = width
+    }
+
+    /// Re-slot a live pill (setting flip while visible). Width unchanged.
+    func moveToSlot(_ position: FlowBarPosition, animated: Bool = true) {
+        guard let screen = pinnedScreen else { return }
+        setFrame(for: currentWidth, on: screen, position: position, animated: animated)
     }
 
     /// Push one poll snapshot into the layers: group switch (faded on the
@@ -161,14 +176,8 @@ final class FlowBarPanel {
 
     var isVisible: Bool { panel.isVisible }
 
-    private func setFrame(for width: CGFloat, on screen: NSScreen, animated: Bool) {
-        let visible = screen.visibleFrame
-        let clamped = min(width, visible.width - 16)
-        let x = max(visible.minX + 8, visible.midX - clamped / 2)
-        let frame = NSRect(
-            x: x, y: visible.minY + Self.bottomMargin,
-            width: clamped, height: VisualizerMath.pillHeight
-        )
+    private func setFrame(for width: CGFloat, on screen: NSScreen, position: FlowBarPosition, animated: Bool) {
+        let frame = FlowBarPosition.frame(width: width, on: screen.visibleFrame, position: position)
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 // Liquid-quick (v6): 0.15s easeOut — the window lands fast
@@ -181,5 +190,131 @@ final class FlowBarPanel {
         } else {
             panel.setFrame(frame, display: true)
         }
+    }
+
+    // MARK: - Drag and snap (Phase 8)
+
+    /// Current pill frame, screen space. Used to seed the snap highlight.
+    private var pillFrame: NSRect { panel.frame }
+
+    private func ghostPanels() -> [(NSPanel, SnapIndicatorView, FlowBarPosition)] {
+        if topGhost == nil {
+            let view = SnapIndicatorView(frame: NSRect(
+                x: 0, y: 0, width: currentWidth, height: VisualizerMath.pillHeight
+            ))
+            let ghost = Self.makePanel(
+                contentView: view,
+                size: NSSize(width: currentWidth, height: VisualizerMath.pillHeight)
+            )
+            ghost.ignoresMouseEvents = true
+            topGhost = ghost
+            topGhostView = view
+        }
+        if bottomGhost == nil {
+            let view = SnapIndicatorView(frame: NSRect(
+                x: 0, y: 0, width: currentWidth, height: VisualizerMath.pillHeight
+            ))
+            let ghost = Self.makePanel(
+                contentView: view,
+                size: NSSize(width: currentWidth, height: VisualizerMath.pillHeight)
+            )
+            ghost.ignoresMouseEvents = true
+            bottomGhost = ghost
+            bottomGhostView = view
+        }
+        return [(topGhost!, topGhostView!, .top), (bottomGhost!, bottomGhostView!, .bottom)]
+    }
+
+    private func highlightGhosts(centerY: CGFloat) {
+        guard let screen = pinnedScreen else { return }
+        let nearest = FlowBarPosition.nearest(
+            dropCenterY: centerY, on: screen.visibleFrame
+        )
+        topGhostView?.highlighted = nearest == .top
+        bottomGhostView?.highlighted = nearest == .bottom
+    }
+}
+
+extension FlowBarPanel: PillDragDelegate {
+    func pillDragBegan() {
+        guard !isDragging, let screen = pinnedScreen else { return }
+        isDragging = true
+        dragStartSlot = FlowBarPosition.current()
+        // Ghosts at both slots, sized like the live pill; the slot under
+        // the grab glows first — the user sees the choice immediately.
+        for (ghost, _, position) in ghostPanels() {
+            ghost.setFrame(
+                FlowBarPosition.frame(
+                    width: currentWidth, on: screen.visibleFrame, position: position
+                ),
+                display: true
+            )
+            ghost.alphaValue = 0
+            ghost.orderFront(nil)
+            ghost.animator().alphaValue = 1
+        }
+        highlightGhosts(centerY: pillFrame.midY)
+        // Stay above the ghosts for the whole drag.
+        panel.orderFront(nil)
+    }
+
+    func pillDragMoved(toOrigin screenOrigin: NSPoint) {
+        guard isDragging else { return }
+        panel.setFrame(
+            NSRect(origin: screenOrigin, size: panel.frame.size),
+            display: true
+        )
+        highlightGhosts(centerY: screenOrigin.y + VisualizerMath.pillHeight / 2)
+    }
+
+    func pillDragEnded(moved: Bool) {
+        guard isDragging else { return }
+        isDragging = false
+        for (ghost, _, _) in ghostPanels() {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.12
+                ghost.animator().alphaValue = 0
+            }, completionHandler: {
+                ghost.orderOut(nil)
+            })
+        }
+        guard moved, let screen = pinnedScreen else { return }
+        let target = FlowBarPosition.nearest(
+            dropCenterY: panel.frame.midY, on: screen.visibleFrame
+        )
+        setFrame(for: currentWidth, on: screen, position: target, animated: true)
+        // Snap feedback: one alignment tick per completed drop. Same-slot
+        // drops still tick — the placement registered, the user feels it.
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            .alignment, performanceTime: .default
+        )
+        if target != dragStartSlot {
+            FlowBarPosition.save(target)
+        }
+    }
+}
+
+/// Drop-slot ghost: pill-sized rounded fill that says "release here".
+/// Stroke + fill, no text — the shape IS the affordance.
+final class SnapIndicatorView: NSView {
+    var highlighted = false {
+        didSet { needsDisplay = true }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 1.5, dy: 1.5)
+        let path = NSBezierPath(
+            roundedRect: rect, xRadius: VisualizerMath.pillHeight / 2,
+            yRadius: VisualizerMath.pillHeight / 2
+        )
+        (highlighted
+            ? NSColor.white.withAlphaComponent(0.30)
+            : NSColor.white.withAlphaComponent(0.10)).setFill()
+        path.fill()
+        (highlighted
+            ? NSColor.white.withAlphaComponent(0.75)
+            : NSColor.white.withAlphaComponent(0.35)).setStroke()
+        path.lineWidth = highlighted ? 2 : 1
+        path.stroke()
     }
 }

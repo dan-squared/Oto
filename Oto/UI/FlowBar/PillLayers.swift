@@ -41,6 +41,15 @@ enum PillVisual: Equatable {
     }
 }
 
+/// Drag source (Phase 8): the pill carries no buttons, so every
+/// press-drag is a move. Origins are screen-space, grab-offset corrected.
+@MainActor
+protocol PillDragDelegate: AnyObject {
+    func pillDragBegan()
+    func pillDragMoved(toOrigin screenOrigin: NSPoint)
+    func pillDragEnded(moved: Bool)
+}
+
 @MainActor
 final class PillContentView: NSView {
     nonisolated static let barFullHeight: CGFloat = 20
@@ -66,6 +75,9 @@ final class PillContentView: NSView {
     /// Idle-sway state (v6): true while the render-server sway owns the
     /// bars (silent, unreduced motion). First voice kills it.
     private var swayOn = false
+    weak var dragDelegate: PillDragDelegate?
+    private var dragGrabOffset = NSSize.zero
+    private var dragMoved = false
     nonisolated static let chaseKey = "oto.chase"
     nonisolated static let breatheKey = "oto.breathe"
     nonisolated static let swayKey = "oto.sway"
@@ -429,6 +441,37 @@ final class PillContentView: NSView {
         CATransaction.commit()
         label.isHidden = visual != .message
         if visual != .dotsSpinner { spinner.stopAnimation(nil); spinner.isHidden = true }
+    }
+
+    // MARK: - Drag and snap (Phase 8)
+
+    /// Nonactivating panel: without this, press-drag never reaches us.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 0, let window else { return }
+        // Grab-offset: the pill follows the finger, it never jumps.
+        let mouse = NSEvent.mouseLocation
+        dragGrabOffset = NSSize(
+            width: mouse.x - window.frame.origin.x,
+            height: mouse.y - window.frame.origin.y
+        )
+        dragMoved = false
+        dragDelegate?.pillDragBegan()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let mouse = NSEvent.mouseLocation
+        dragMoved = true
+        dragDelegate?.pillDragMoved(toOrigin: NSPoint(
+            x: mouse.x - dragGrabOffset.width,
+            y: mouse.y - dragGrabOffset.height
+        ))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragDelegate?.pillDragEnded(moved: dragMoved)
+        dragMoved = false
     }
 
     // MARK: - Test hooks (layer model values, no window needed)
