@@ -32,6 +32,10 @@ struct DictationPane: View {
     @State private var axTrusted = false
     @State private var speechText = "Checking…"
     @State private var trialText = ""
+    // Catcher kill-switch (6C1): default ON — the modal teaches the
+    // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
+    // pinned equal to it by NoTargetModalTests.
+    @AppStorage("app.Oto.noTargetModal") private var catcherEnabled = true
 
     enum TriggerChoice: String, CaseIterable, Identifiable {
         case rightOptionHold = "Right Option (hold)"
@@ -150,6 +154,13 @@ struct DictationPane: View {
                     }
                 }
                 LabeledContent("Speech recognition", value: speechText)
+            }
+
+            Section("Catcher") {
+                Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
+                Text("When dictation finishes with no text field to receive it, Oto opens a small window with the transcript and a Copy button. Off: the transcript is copied to the clipboard automatically instead.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Try it") {

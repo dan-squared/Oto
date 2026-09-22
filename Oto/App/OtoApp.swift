@@ -35,6 +35,12 @@ struct OtoApp: App {
     // path — two instances could never diverge in behavior, but one is
     // the honest shape (audit S2).
     private let inserter: RealTextInsertion
+    // Slice 6B/6C1: visualizer feed + pill/modal ownership. The spectrum
+    // box is forked off the SAME bufferHandler closure as the relay
+    // (attaching to the relay would detach speech — single sink).
+    private let spectrumBox: SpectrumFeedBox
+    private let analyzer: AudioSpectrumAnalyzer
+    private let flowController: FlowBarController
     @NSApplicationDelegateAdaptor(DockRestoreDelegate.self) private var dockRestore
     // Phase 6A writing stores. One persistence service; three observable
     // owners passed to Settings. The coordinator receives rule snapshots
@@ -46,8 +52,10 @@ struct OtoApp: App {
 
     init() {
         let relay = AudioBufferRelay()
+        let spectrumBox = SpectrumFeedBox()
         let audio = AppleAudioCapture(bufferHandler: { buffer in
             relay.receive(buffer)
+            spectrumBox.offer(buffer)
         })
         let speech = AppleSpeechService(relay: relay)
         let inserter = RealTextInsertion()
@@ -62,8 +70,20 @@ struct OtoApp: App {
             inserter: inserter,
             history: historyStore
         )
+        let analyzer = AudioSpectrumAnalyzer()
+        let modalController = NoTargetModalController()
+        let flowController = FlowBarController(
+            coordinator: coordinator,
+            analyzer: analyzer,
+            box: spectrumBox,
+            modal: modalController
+        )
         self.coordinator = coordinator
         self.inserter = inserter
+        self.spectrumBox = spectrumBox
+        self.analyzer = analyzer
+        self.flowController = flowController
+        flowController.start()
         self.persistence = persistence
         self.dictionaryStore = dictionaryStore
         self.snippetStore = snippetStore
