@@ -39,44 +39,44 @@ enum VisualizerMath {
     /// Reference pill (8 thin capsule bars + small red dot).
     nonisolated static let barCount = 8
     /// Consonants snap (per ~16 ms analyzer step — drain runs ~60 Hz;
-    /// rescaled from the 33 ms-era 0.55 via α'=1−(1−α)^r, then bumped
-    /// for feel: ≈28 ms snap time-constant).
-    nonisolated static let attack: Float = 0.45
-    /// Vowels decay — the asymmetry that reads as "real" (≈190 ms
-    /// time-constant at the 16 ms step: graceful, never laggy).
-    nonisolated static let release: Float = 0.08
+    /// ≈13 ms snap time-constant: fast enough to track the ~12 Hz tap
+    /// target updates, too data-starved to invent jitter).
+    nonisolated static let attack: Float = 0.55
+    /// Vowels decay — the asymmetry that reads as "real" (graceful,
+    /// never laggy at the 16 ms step).
+    nonisolated static let release: Float = 0.10
     /// Bars never vanish (v7: floor 0.30 — silence reads as waves, never
     /// dots; "start from active waves" holds from frame one).
     nonisolated static let floor: Float = 0.30
-    /// Pill geometry (pt). Compact: 0.75× the v3 mini in every linear
-    /// dimension (112×32=3584 → 84×24=2016). Count stays 8 — elements
-    /// shrink, never vanish (v3 precedent).
-    nonisolated static let pillHeight: CGFloat = 24
+    /// Pill geometry (pt). Relaxed compact: 0.825× the v3 mini in every
+    /// linear dimension (112×32=3584 → 92.4×26.4=2439). Count stays 8 —
+    /// elements shrink, never vanish (v3 precedent).
+    nonisolated static let pillHeight: CGFloat = 26.4
     /// Thin-bar system (elements shrink, count stays 8).
-    nonisolated static let barWidth: CGFloat = 2.625
-    nonisolated static let barPitch: CGFloat = 6.375
+    nonisolated static let barWidth: CGFloat = 2.8875
+    nonisolated static let barPitch: CGFloat = 7.0125
     /// Small red dot, no ring.
-    nonisolated static let recordDot: CGFloat = 6
+    nonisolated static let recordDot: CGFloat = 6.6
     /// Chase dots (reference-proportioned).
-    nonisolated static let chaseDot: CGFloat = 2.25
-    nonisolated static let chasePitch: CGFloat = 6
+    nonisolated static let chaseDot: CGFloat = 2.475
+    nonisolated static let chasePitch: CGFloat = 6.6
     /// Native spinner footprint.
-    nonisolated static let spinnerSize: CGFloat = 12
+    nonisolated static let spinnerSize: CGFloat = 13.2
     /// Dots in the working chase.
     nonisolated static let dotCount = 9
 
     /// Panel widths per pill case (pt). Width motion itself is owned by
     /// the AppKit frame animation; this table is the target.
-    /// v6: preparing == recording (84) — starting→recording resizes
+    /// v6: preparing == recording (92.4) — starting→recording resizes
     /// nothing, waves from frame one. v7: no failure arm — errors never
     /// reach the pill; wide pills are notices via `noticeWidth`.
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
-        case .preparing: 84
-        case .recording: 84
-        case .finalizing: 87
-        case .inserting: 87
+        case .preparing: 92.4
+        case .recording: 92.4
+        case .finalizing: 95.7
+        case .inserting: 95.7
         }
     }
 
@@ -88,16 +88,16 @@ enum VisualizerMath {
     /// polls via attack.)
     nonisolated static let swayThreshold: Float = 0.40
     /// Sway keyframe loop (scaleY), derived from the floor: gentle drift
-    /// just above silence — alive, never shouty. Peaks at floor + 0.14.
+    /// just above silence — alive, never shouty. Peaks at floor + 0.18.
     nonisolated static var swayValues: [Double] {
         let f = Double(floor)
-        return [f, f + 0.07, f + 0.14, f + 0.07, f]
+        return [f, f + 0.09, f + 0.18, f + 0.09, f]
     }
-    nonisolated static let swayCycle: Double = 1.8
+    nonisolated static let swayCycle: Double = 1.6
     nonisolated static let swayStagger: Double = 0.2
     /// Transient notice (auto-copy confirmation) width — the only wide
     /// pill left (v7: failure panels are gone).
-    nonisolated static let noticeWidth: CGFloat = 150
+    nonisolated static let noticeWidth: CGFloat = 165
 
     // MARK: - Bar shaping
 
@@ -107,6 +107,21 @@ enum VisualizerMath {
         let clamped = min(1, max(0, target))
         let rate = clamped > current ? attack : release
         return current + (clamped - current) * rate
+    }
+
+    /// Neighbor coupling: bars move as one wave, not 8 strangers. Each bar
+    /// keeps 0.7 of itself and borrows 0.15 from each neighbor (edge bars
+    /// take 0.3 from their sole neighbor). Weights sum to 1, so coupling
+    /// never clips and uniform input passes through unchanged. Pure —
+    /// applied in FlowBarModel.applyLevels after per-band smoothing.
+    nonisolated static func couple(_ levels: [Float]) -> [Float] {
+        guard levels.count > 1 else { return levels }
+        let last = levels.count - 1
+        return levels.indices.map { i in
+            if i == 0 { return 0.7 * levels[0] + 0.3 * levels[1] }
+            if i == last { return 0.7 * levels[last] + 0.3 * levels[last - 1] }
+            return 0.7 * levels[i] + 0.15 * (levels[i - 1] + levels[i + 1])
+        }
     }
 
     /// Display mapping: floor lift, still 0…1.

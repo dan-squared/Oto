@@ -10,8 +10,8 @@
 //  the render server — zero MainActor work per frame, no timers, no Metal).
 //  Overflow is caged by masksToBounds (sublayers) + clipsToBounds (subviews).
 //
-//  Geometry: compact (84×24 recording). Elements shrink, count stays:
-//  8 thin bars, 9 chase dots, 6px record dot with no ring.
+//  Geometry: relaxed compact (92.4×26.4 recording). Elements shrink, count stays:
+//  8 thin bars, 9 chase dots, 6.6px record dot with no ring.
 //
 
 import AppKit
@@ -52,8 +52,8 @@ protocol PillDragDelegate: AnyObject {
 
 @MainActor
 final class PillContentView: NSView {
-    nonisolated static let barFullHeight: CGFloat = 15
-    nonisolated static let padding: CGFloat = 7.5
+    nonisolated static let barFullHeight: CGFloat = 16.5
+    nonisolated static let padding: CGFloat = 8.25
 
     private let bg = CAShapeLayer()
     private let recordDot = CALayer()
@@ -184,10 +184,10 @@ final class PillContentView: NSView {
 
         // Recording block: dot + gap + bars, centered.
         let barsBlock = CGFloat(VisualizerMath.barCount) * VisualizerMath.barPitch
-        let recordBlock = VisualizerMath.recordDot + 4.5 + barsBlock
+        let recordBlock = VisualizerMath.recordDot + 4.95 + barsBlock
         var x = (width - recordBlock) / 2
         recordDot.position = CGPoint(x: x + VisualizerMath.recordDot / 2, y: midY)
-        x += VisualizerMath.recordDot + 4.5
+        x += VisualizerMath.recordDot + 4.95
         for (i, bar) in barLayers.enumerated() {
             bar.position = CGPoint(x: x + CGFloat(i) * VisualizerMath.barPitch + VisualizerMath.barPitch / 2, y: midY)
         }
@@ -196,13 +196,13 @@ final class PillContentView: NSView {
         let dotsBlock = CGFloat(VisualizerMath.dotCount - 1) * VisualizerMath.chasePitch + VisualizerMath.chaseDot
         var dotsX = (width - dotsBlock) / 2
         if currentVisual == .dotsSpinner {
-            dotsX = (width - (dotsBlock + 6 + VisualizerMath.spinnerSize)) / 2
+            dotsX = (width - (dotsBlock + 6.6 + VisualizerMath.spinnerSize)) / 2
         }
         for (i, dot) in chaseLayers.enumerated() {
             dot.position = CGPoint(x: dotsX + CGFloat(i) * VisualizerMath.chasePitch + VisualizerMath.chaseDot / 2, y: midY)
         }
         spinner.setFrameOrigin(NSPoint(
-            x: dotsX + dotsBlock + 6,
+            x: dotsX + dotsBlock + 6.6,
             y: midY - VisualizerMath.spinnerSize / 2
         ))
 

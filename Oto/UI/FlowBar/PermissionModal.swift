@@ -16,8 +16,9 @@
 //  cleanly in a transparent panel — layer-backed clear container, card as
 //  one CAShapeLayer, depth from the window shadow only. Width is
 //  content-fitted (12.5pt type, 18pt icon, string-measured) and clamped
-//  to maxWidth (460). Corners: 24pt card, 12pt button (inner = outer −
-//  12 gap, Apple's concentric formula).
+//  to maxWidth (460). Corners: 16pt card, 8pt button (button measured
+//  from the reference at r/height ≈ 0.22; the strict outer − 12 gap
+//  would sharpen it to 4, far past the reference).
 //
 
 import AppKit
@@ -52,15 +53,15 @@ final class PermissionCardView: NSView {
     /// Hard ceiling: the card grows to fit its words, never past this.
     nonisolated static let maxWidth: CGFloat = 460
     nonisolated static let height: CGFloat = 60
-    /// Outer card radius. The button radius derives from it via Apple's
-    /// concentric-corner formula (inner = outer − gap), so the two curves
-    /// share a center and read as one family.
-    nonisolated static let cardRadius: CGFloat = 24
+    /// Outer card radius. Reference-matched (less round than the old 24):
+    /// the button radius derives from it with an 8pt gap so it lands on
+    /// the measured reference ratio (r/height ≈ 0.22 → 8pt on 36pt).
+    nonisolated static let cardRadius: CGFloat = 16
     nonisolated static let buttonHeight: CGFloat = 36
-    /// Button corner radius = card radius − uniform inset, floored so a
-    /// future taller card can never invert the curve.
+    /// Button corner radius = card radius − 8, floored so a future taller
+    /// card can never invert the curve.
     nonisolated static var buttonRadius: CGFloat {
-        max(4, cardRadius - (height - buttonHeight) / 2)
+        max(4, cardRadius - 8)
     }
 
     var onGrant: (() -> Void)?

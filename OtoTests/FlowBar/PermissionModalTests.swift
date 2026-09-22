@@ -49,8 +49,10 @@ struct PermissionModalTests {
     }
 
     @Test func buttonRadiusFollowsAppleConcentricFormula() {
-        // Inner = outer − gap: 24pt card minus the 12pt uniform inset.
-        #expect(PermissionCardView.buttonRadius == 12)
+        // Inner = outer − gap: 16pt card minus 8pt (reference-measured
+        // r/height ≈ 0.22 → 8pt on the 36pt button).
+        #expect(PermissionCardView.cardRadius == 16)
+        #expect(PermissionCardView.buttonRadius == 8)
     }
 
     @Test func grantOpensMicrophoneLinkWhenDenied() {

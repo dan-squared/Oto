@@ -24,20 +24,20 @@ struct FlowBarPositionTests {
     }
 
     @Test func bottomSlotIsToday() {
-        let frame = FlowBarPosition.frame(width: 84, on: visible(), position: .bottom)
+        let frame = FlowBarPosition.frame(width: 92.4, on: visible(), position: .bottom)
         // Bottom-center, 28pt margin, today's geometry exactly.
         #expect(frame.minY == 28)
         #expect(abs(frame.midX - 756) < 0.001)
-        #expect(frame.width == 84)
+        #expect(frame.width == 92.4)
         #expect(frame.height == VisualizerMath.pillHeight)
     }
 
     @Test func topSlotSitsBelowTheNotchLine() {
-        let frame = FlowBarPosition.frame(width: 84, on: visible(), position: .top)
+        let frame = FlowBarPosition.frame(width: 92.4, on: visible(), position: .top)
         // Top-center, 12pt under the visible top (= below menu bar + notch).
         #expect(frame.maxY == 932)
         #expect(abs(frame.midX - 756) < 0.001)
-        #expect(frame.width == 84)
+        #expect(frame.width == 92.4)
     }
 
     @Test func tallCardsAnchorByTheirOwnHeight() {

@@ -14,10 +14,37 @@ import Testing
 @MainActor
 struct VisualizerMathTests {
     @Test func attackSnapsFasterThanRelease() {
-        // Rising: 45% of the gap in one ~16 ms step (≈28 ms snap).
-        #expect(abs(VisualizerMath.smoothStep(current: 0, target: 1) - 0.45) < 0.001)
-        // Falling: 8% of the gap — vowels visibly decay (≈190 ms grace).
-        #expect(abs(VisualizerMath.smoothStep(current: 1, target: 0) - 0.92) < 0.001)
+        // Rising: 55% of the gap in one ~16 ms step (≈13 ms snap —
+        // tracks the ~12 Hz tap target updates without inventing jitter).
+        #expect(abs(VisualizerMath.smoothStep(current: 0, target: 1) - 0.55) < 0.001)
+        // Falling: 10% of the gap — vowels visibly decay, grace kept.
+        #expect(abs(VisualizerMath.smoothStep(current: 1, target: 0) - 0.90) < 0.001)
+    }
+
+    @Test func couplingMovesBarsAsOneWave() {
+        // Single hot band spreads 0.15 to each neighbor, keeps 0.7.
+        let out = VisualizerMath.couple([0, 0, 1, 0, 0, 0, 0, 0])
+        #expect(abs(out[2] - 0.7) < 0.0001)
+        #expect(abs(out[1] - 0.15) < 0.0001)
+        #expect(abs(out[3] - 0.15) < 0.0001)
+        #expect(abs(out[0]) < 0.0001)
+        // Edges borrow 0.3 from their sole neighbor.
+        let edge = VisualizerMath.couple([1, 0, 0, 0, 0, 0, 0, 0])
+        #expect(abs(edge[0] - 0.7) < 0.0001)
+        #expect(abs(edge[1] - 0.15) < 0.0001)
+        // Uniform in → uniform out (weights sum to 1, never clip).
+        let flat = VisualizerMath.couple([Float](repeating: 0.5, count: 8))
+        #expect(flat.allSatisfy { abs($0 - 0.5) < 0.0001 })
+        // Coupling never exceeds the input max.
+        let peak = VisualizerMath.couple([0.2, 0.9, 0.4, 0.1, 0, 0.3, 0.6, 0.2])
+        if let m = peak.max() {
+            #expect(m <= 0.9 + 0.0001)
+        } else {
+            Issue.record("coupling returned an empty array")
+        }
+        // Degenerate input passes through.
+        #expect(VisualizerMath.couple([0.4]) == [0.4])
+        #expect(VisualizerMath.couple([]) == [])
     }
 
     @Test func targetsClamp() {
@@ -97,23 +124,23 @@ struct VisualizerMathTests {
     }
 
     @Test func widthsAreMini() {
-        #expect(VisualizerMath.panelWidth(for: .recording) == 84)
+        #expect(VisualizerMath.panelWidth(for: .recording) == 92.4)
         // v6: preparing == recording — waves from frame one, zero resize.
-        #expect(VisualizerMath.panelWidth(for: .preparing) == 84)
-        #expect(VisualizerMath.panelWidth(for: .finalizing) == 87)
-        #expect(VisualizerMath.panelWidth(for: .inserting) == 87)
+        #expect(VisualizerMath.panelWidth(for: .preparing) == 92.4)
+        #expect(VisualizerMath.panelWidth(for: .finalizing) == 95.7)
+        #expect(VisualizerMath.panelWidth(for: .inserting) == 95.7)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
         // v7: no failure arm (errors never reach the pill); the only wide
         // pill is the transient notice.
-        #expect(VisualizerMath.noticeWidth == 150)
-        // Compact: 0.75× the v3 mini in every linear dimension
-        // (112×32=3584 → 84×24=2016).
-        #expect(VisualizerMath.panelWidth(for: .recording) <= 87)
-        #expect(VisualizerMath.pillHeight == 24)
+        #expect(VisualizerMath.noticeWidth == 165)
+        // Relaxed compact: 0.825× the v3 mini in every linear dimension
+        // (112×32=3584 → 92.4×26.4=2439).
+        #expect(VisualizerMath.panelWidth(for: .recording) <= 95.7)
+        #expect(VisualizerMath.pillHeight == 26.4)
         // Elements shrink, count stays.
         #expect(VisualizerMath.barCount == 8)
-        #expect(VisualizerMath.barWidth == 2.625)
-        #expect(VisualizerMath.recordDot == 6)
+        #expect(VisualizerMath.barWidth == 2.8875)
+        #expect(VisualizerMath.recordDot == 6.6)
     }
 
     @Test func swayLoopIsGentleAndAboveTheFloor() {
@@ -124,7 +151,7 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.swayValues.count == 5)
         #expect(VisualizerMath.swayValues.first == floor)
         #expect(VisualizerMath.swayValues.last == floor)
-        #expect(VisualizerMath.swayValues.max() == floor + 0.14)
+        #expect(VisualizerMath.swayValues.max() == floor + 0.18)
         #expect(floor < Double(VisualizerMath.swayThreshold))
         #expect(Double(VisualizerMath.swayThreshold) < 0.6)
     }

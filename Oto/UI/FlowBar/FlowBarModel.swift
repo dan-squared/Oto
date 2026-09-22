@@ -41,6 +41,8 @@ final class FlowBarModel {
 
     /// Raw analyzer band levels → smoothed display sample. Frozen motion
     /// ignores input (the pill holds its last shape, statically).
+    /// Per-band smoothing first (voice character), then neighbor coupling
+    /// (bars move as one wave), then the floor-lift display mapping.
     func applyLevels(_ levels: [Float], tick: UInt64) {
         guard !motionFrozen else { return }
         for i in 0..<VisualizerMath.barCount {
@@ -48,7 +50,7 @@ final class FlowBarModel {
             smoothed[i] = VisualizerMath.smoothStep(current: smoothed[i], target: target)
         }
         sample = BarSample(
-            values: smoothed.map(VisualizerMath.displayValue),
+            values: VisualizerMath.couple(smoothed).map(VisualizerMath.displayValue),
             tick: tick
         )
     }
