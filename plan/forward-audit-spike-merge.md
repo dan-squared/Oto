@@ -146,11 +146,16 @@ itself is a plain fast-forward/PR per Conductor flow — no code work.
   two-green-runs + grep-gates rule (§5.8) is the backstop for every
   step above.
 
-## 9. Open questions
+## 9. Open questions — ANSWERED (merge-now decision)
 
-1. Spike first as a throwaway probe target in this workspace — good,
-   or do you want it as a separate scratch project?
-2. If the spike greens, is mute-default-ON (6C recommendation: speaker
-   bleed ruins transcripts) still your call?
-3. Merge timing: right after the spike result, or hold for the mute
-   build to land too?
+1. Probe location: **separate scratch project outside the repo.**
+   Best for the product: a throwaway probe target inside the Oto project
+   risks shipping cruft and polluting the merge; a minimal scratch app
+   elsewhere keeps `main` pristine and is deleted after the result is
+   recorded here.
+2. Mute default: **ON if the spike greens** (6C recommendation stands —
+   speaker bleed ruins transcripts, resume is automatic, the toggle is
+   one tap away in the Dictation pane).
+3. Merge timing: **now, before the spike** (user call 2026-09-22) — the
+   branch is fully device-confirmed; the spike/mute rides on top of a
+   clean `main`, never blocking it.
