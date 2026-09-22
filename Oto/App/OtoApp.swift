@@ -99,8 +99,7 @@ struct OtoApp: App {
                 coordinator: coordinator,
                 dictionary: dictionaryStore,
                 snippets: snippetStore,
-                history: historyStore,
-                inserter: inserter
+                history: historyStore
             )
         }
         .defaultSize(width: 760, height: 620)

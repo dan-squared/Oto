@@ -49,7 +49,6 @@ struct SettingsRoot: View {
     let dictionary: DictionaryStore
     let snippets: SnippetStore
     let history: HistoryStore
-    let inserter: RealTextInsertion
 
     @State private var selection: SettingsPane = .dictation
 
@@ -70,7 +69,6 @@ struct SettingsRoot: View {
             .tabItem { Label(SettingsPane.writing.title, systemImage: SettingsPane.writing.symbol) }
             PrivacyHistoryPane(
                 history: history,
-                inserter: inserter,
                 permissions: permissions
             )
             .tag(SettingsPane.privacyHistory)

@@ -4,8 +4,8 @@
 //
 //  Phase 6A: opt-in history + privacy behind one toolbar tab. Subsections
 //  ride an in-content segmented Picker (D3). History is off by default and
-//  stores final text only; Reinsert goes through retryPostToFrontmost (the
-//  user-is-the-check path) — never a reconstructed target.
+//  stores final text only; recovery is Copy + manual paste (the person picks
+//  target and timing) — no re-post path in this pane.
 //
 
 import AppKit
@@ -15,7 +15,6 @@ import SwiftUI
 
 struct PrivacyHistoryPane: View {
     let history: HistoryStore
-    let inserter: RealTextInsertion
     let permissions: PermissionsManager
 
     enum PaneSection: String, CaseIterable, Identifiable {
@@ -113,7 +112,6 @@ struct PrivacyHistoryPane: View {
                         .foregroundStyle(.secondary)
                         HStack {
                             Button("Copy") { copyEntry(entry) }
-                            Button("Reinsert") { reinsert(entry) }
                             Spacer()
                             Button("Delete", role: .destructive) {
                                 Task { await history.remove(id: entry.id) }
@@ -165,17 +163,6 @@ struct PrivacyHistoryPane: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.finalText, forType: .string)
         feedback = "Copied — paste with ⌘V."
-    }
-
-    private func reinsert(_ entry: HistoryEntry) {
-        // The person pressed this while facing the target — they are the
-        // check (menu Retry precedent). Never a reconstructed TargetApplication.
-        Task {
-            let posted = await inserter.retryPostToFrontmost(entry.finalText)
-            feedback = posted
-                ? "Posted — check the frontmost app."
-                : "Retry failed — secure input may be blocking it, or the clipboard was unavailable."
-        }
     }
 
     // MARK: - Privacy
