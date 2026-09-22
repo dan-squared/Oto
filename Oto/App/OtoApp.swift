@@ -72,11 +72,13 @@ struct OtoApp: App {
         )
         let analyzer = AudioSpectrumAnalyzer()
         let modalController = NoTargetModalController()
+        let permissionController = PermissionModalController()
         let flowController = FlowBarController(
             coordinator: coordinator,
             analyzer: analyzer,
             box: spectrumBox,
-            modal: modalController
+            modal: modalController,
+            permission: permissionController
         )
         self.coordinator = coordinator
         self.inserter = inserter

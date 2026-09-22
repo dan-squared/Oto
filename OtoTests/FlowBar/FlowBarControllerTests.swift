@@ -33,7 +33,8 @@ struct FlowBarControllerTests {
         controller: FlowBarController,
         coordinator: DictationCoordinator,
         box: SpectrumFeedBox,
-        board: NSPasteboard
+        board: NSPasteboard,
+        permission: PermissionModalController
     ) {
         let board = pasteboard ?? scratchBoard()
         let coordinator = DictationCoordinator(
@@ -47,14 +48,16 @@ struct FlowBarControllerTests {
             history: nil
         )
         let box = SpectrumFeedBox()
+        let permission = PermissionModalController()
         let controller = FlowBarController(
             coordinator: coordinator,
             analyzer: AudioSpectrumAnalyzer(),
             box: box,
             modal: NoTargetModalController(),
+            permission: permission,
             pasteboard: board
         )
-        return (controller, coordinator, box, board)
+        return (controller, coordinator, box, board, permission)
     }
 
     private func waitFor(
@@ -162,6 +165,7 @@ struct FlowBarControllerTests {
             analyzer: AudioSpectrumAnalyzer(),
             box: SpectrumFeedBox(),
             modal: NoTargetModalController(),
+            permission: PermissionModalController(),
             pasteboard: scratchBoard()
         )
         _ = await denied.beginHold()
@@ -184,5 +188,37 @@ struct FlowBarControllerTests {
         await waitFor(denied) { if case .failed = $0 { true } else { false } }
         await controller.pollOnce()
         #expect(controller.model.projection.state == .hidden)
+    }
+
+    @Test func micDeniedShowsPermissionModalAtSlot() async throws {
+        // Mic-denied owns a card, never the pill: the permission modal
+        // renders at the slot while the projection stays hidden.
+        let denied = DictationCoordinator(
+            audio: FakeAudioCapture(),
+            speech: FakeSpeechService(finalText: "x", prepareError: SpeechReadiness.microphoneDenied),
+            targetService: FakeTargetCapture(stubTarget: TargetApplication(
+                bundleIdentifier: "com.example.FakeTarget",
+                processIdentifier: 1234
+            )),
+            inserter: FakeTextInsertion(result: .inserted),
+            history: nil
+        )
+        let controller = FlowBarController(
+            coordinator: denied,
+            analyzer: AudioSpectrumAnalyzer(),
+            box: SpectrumFeedBox(),
+            modal: NoTargetModalController(),
+            permission: PermissionModalController(),
+            pasteboard: scratchBoard()
+        )
+        defer { Task { @MainActor in controller.permission.hide() } }
+        _ = await denied.beginHold()
+        await waitFor(denied) { if case .failed = $0 { true } else { false } }
+        await controller.pollOnce()
+        #expect(controller.permission.isVisible)
+        #expect(controller.model.projection.state == .hidden)
+        // Second poll: once per transition — no reshow, no duplicate.
+        await controller.pollOnce()
+        #expect(controller.permission.isVisible)
     }
 }

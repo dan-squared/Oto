@@ -36,11 +36,14 @@ final class FlowBarController {
     private let box: SpectrumFeedBox
     /// Internal for headless transition tests (@testable).
     let modal: NoTargetModalController
+    /// Mic-denied mini modal (pill-slot card, not the pill).
+    let permission: PermissionModalController
     private let pasteboard: NSPasteboard
 
     private var panel: FlowBarPanel?
     private var pollTask: Task<Void, Never>?
     private var lastRouteKey: String?
+    private var lastPermissionKey: String?
     private var noticeDeadline: Date?
     private var analyzerRecording = false
     /// Fade-hide generation: any state change invalidates a pending hide
@@ -55,12 +58,14 @@ final class FlowBarController {
         analyzer: AudioSpectrumAnalyzer,
         box: SpectrumFeedBox,
         modal: NoTargetModalController,
+        permission: PermissionModalController,
         pasteboard: NSPasteboard = .general
     ) {
         self.coordinator = coordinator
         self.analyzer = analyzer
         self.box = box
         self.modal = modal
+        self.permission = permission
         self.pasteboard = pasteboard
         self.model = FlowBarModel()
     }
@@ -70,6 +75,7 @@ final class FlowBarController {
         // Prewarm (v4 F3b): first-show construction moves to launch, so
         // transitions only ever setFrame + orderFront.
         modal.prewarm()
+        permission.prewarm()
         if panel == nil {
             panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .recording))
         }
@@ -86,6 +92,7 @@ final class FlowBarController {
         analyzerRecording = false
         panel?.cancelSnapFeedback()
         panel?.hide()
+        permission.hide()
     }
 
     // MARK: - Poll
@@ -125,6 +132,7 @@ final class FlowBarController {
         // Recovery routing BEFORE analyzer sync (v4 F3c): the modal must
         // not wait behind an awaited stop (~35ms) on the same poll.
         syncRecovery(state: state, recovery: recovery)
+        syncPermissionModal(state: state)
         await syncAnalyzer(state: state)
         syncPanel(state: state, projection: projection)
         syncDeadlines(projection: projection)
@@ -269,6 +277,35 @@ final class FlowBarController {
             pasteboard.setString(text, forType: .string)
             model.showNotice("Copied — paste with ⌘V.")
         }
+    }
+
+    // MARK: - Permission modal (mic-denied pill-slot card)
+
+    /// Mic-denied owns a card, never the pill: show once per failure
+    /// transition at the current slot (hiding any pill flash), hide the
+    /// moment state leaves `.failed` (a retry reshows it if still denied).
+    /// Separate key from recovery routing — different surface, different lifecycle.
+    private func syncPermissionModal(state: DictationState) {
+        let key: String?
+        if case .failed(let context, .microphoneDenied) = state {
+            key = context?.id.uuidString ?? "nil-context"
+        } else {
+            key = nil
+        }
+        guard key != lastPermissionKey else { return }
+        lastPermissionKey = key
+        guard key != nil else {
+            permission.hide()
+            return
+        }
+        // Kill the pill flash first: the card replaces it, never joins it.
+        hideTask?.cancel()
+        hideTask = nil
+        panel?.hide()
+        permission.show(
+            displayID: Self.targetScreen(of: state),
+            position: FlowBarPosition.current()
+        )
     }
 
     private nonisolated static func targetScreen(of state: DictationState) -> CGDirectDisplayID? {
