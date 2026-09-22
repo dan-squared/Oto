@@ -50,6 +50,16 @@ final class PermissionCardView: NSView {
     /// Hard ceiling: the card grows to fit its words, never past this.
     nonisolated static let maxWidth: CGFloat = 415
     nonisolated static let height: CGFloat = 60
+    /// Outer card radius. The button radius derives from it via Apple's
+    /// concentric-corner formula (inner = outer − gap), so the two curves
+    /// share a center and read as one family.
+    nonisolated static let cardRadius: CGFloat = 18
+    nonisolated static let buttonHeight: CGFloat = 36
+    /// Button corner radius = card radius − uniform inset, floored so a
+    /// future taller card can never invert the curve.
+    nonisolated static var buttonRadius: CGFloat {
+        max(4, cardRadius - (height - buttonHeight) / 2)
+    }
 
     var onGrant: (() -> Void)?
 
@@ -58,6 +68,7 @@ final class PermissionCardView: NSView {
     private let title = NSTextField(labelWithString: "Microphone Permission Required")
     private let button = NSButton()
     private(set) var contentSize: NSSize = .zero
+    private var didClampTitle = false
 
     init(onGrant: (() -> Void)?) {
         self.onGrant = onGrant
@@ -71,7 +82,7 @@ final class PermissionCardView: NSView {
         icon.imageScaling = .scaleProportionallyUpOrDown
         addSubview(icon)
 
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.font = .systemFont(ofSize: 12.5, weight: .semibold)
         title.textColor = .labelColor
         title.lineBreakMode = .byTruncatingTail
         title.maximumNumberOfLines = 1
@@ -79,7 +90,7 @@ final class PermissionCardView: NSView {
 
         button.isBordered = false
         button.wantsLayer = true
-        button.layer?.cornerRadius = 14
+        button.layer?.cornerRadius = Self.buttonRadius
         button.target = self
         button.action = #selector(didTapGrant)
         addSubview(button)
@@ -114,43 +125,53 @@ final class PermissionCardView: NSView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         button.attributedTitle = NSAttributedString(string: "Grant Permission", attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .font: NSFont.systemFont(ofSize: 12.5, weight: .semibold),
             .foregroundColor: dark ? NSColor.black : NSColor.white,
             .paragraphStyle: paragraph,
         ])
     }
 
     /// Measure the words, fit the card, clamp to maxWidth. Title truncates
-    /// only as a fallback that the 13pt metrics should never reach.
+    /// only as a fallback that the 12.5pt metrics should never reach
+    /// (measured: ~400pt all-in against the 415 ceiling).
     private func relayout() {
-        let pad: CGFloat = 12
+        let pad: CGFloat = 11
         let iconSide: CGFloat = 18
-        let gapIcon: CGFloat = 8
-        let gapButton: CGFloat = 10
-        let buttonHPad: CGFloat = 16
-        let buttonH: CGFloat = 36
+        let gapIcon: CGFloat = 7
+        let gapButton: CGFloat = 9
+        let buttonHPad: CGFloat = 15
+        let buttonH = Self.buttonHeight
         let h = Self.height
 
-        let titleW = ceil(title.intrinsicContentSize.width)
+        let titleSize = title.intrinsicContentSize
+        let titleW = ceil(titleSize.width)
         let buttonW = ceil(button.intrinsicContentSize.width) + buttonHPad * 2
 
         var width = pad + iconSide + gapIcon + titleW + gapButton + buttonW + pad
         var fittedTitleW = titleW
+        didClampTitle = false
         if width > Self.maxWidth {
             fittedTitleW = max(0, titleW - (width - Self.maxWidth))
             width = Self.maxWidth
+            didClampTitle = fittedTitleW < titleW
         }
 
         contentSize = NSSize(width: width, height: h)
         setFrameSize(contentSize)
         bg.path = CGPath(
             roundedRect: CGRect(origin: .zero, size: contentSize),
-            cornerWidth: 18, cornerHeight: 18, transform: nil
+            cornerWidth: Self.cardRadius, cornerHeight: Self.cardRadius, transform: nil
         )
 
         let midY = h / 2
         icon.frame = CGRect(x: pad, y: midY - iconSide / 2, width: iconSide, height: iconSide)
-        title.frame = CGRect(x: pad + iconSide + gapIcon, y: 0, width: fittedTitleW, height: h)
+        // Centered block, not full-height: a full-height label draws its
+        // text high while the icon sits at midY — the pair must share a center.
+        let titleH = ceil(titleSize.height)
+        title.frame = CGRect(
+            x: pad + iconSide + gapIcon, y: midY - titleH / 2,
+            width: fittedTitleW, height: titleH
+        )
         button.frame = CGRect(
             x: width - pad - buttonW, y: midY - buttonH / 2,
             width: buttonW, height: buttonH
@@ -166,6 +187,8 @@ final class PermissionCardView: NSView {
 
     func titleText() -> String { title.stringValue }
     func contentWidth() -> CGFloat { contentSize.width }
+    /// True when the 415 ceiling clipped the title — must stay false.
+    func titleClipped() -> Bool { didClampTitle }
 }
 
 @Observable @MainActor
