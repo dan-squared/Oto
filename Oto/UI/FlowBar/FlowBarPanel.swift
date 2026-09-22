@@ -33,6 +33,9 @@ final class FlowBarPanel {
     /// content but never moves geometry — the finger owns the frame.
     private(set) var isDragging = false
     private var dragStartSlot = FlowBarPosition.bottom
+    private var lastTickedSlot: FlowBarPosition?
+    private var tickGate = SnapTickGate()
+    private var landTask: Task<Void, Never>?
     private var topGhost: NSPanel?
     private var bottomGhost: NSPanel?
     private var topGhostView: SnapIndicatorView?
@@ -180,10 +183,12 @@ final class FlowBarPanel {
         let frame = FlowBarPosition.frame(width: width, on: screen.visibleFrame, position: position)
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                // Liquid-quick (v6): 0.15s easeOut — the window lands fast
-                // with a soft settle, matched by the bg-path morph in
-                // PillContentView.layout. (Was 0.28, then 0.20: floaty.)
-                context.duration = 0.15
+                // Liquid-quick (v6, v8b): easeOut over snapDuration — the
+                // window lands fast with a soft settle, matched by the
+                // bg-path morph in PillContentView.layout AND the land tick
+                // below. One constant drives both, by design.
+                // (Was 0.28, then 0.20: floaty.)
+                context.duration = FlowBarPosition.snapDuration
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().setFrame(frame, display: true)
             }
@@ -225,13 +230,33 @@ final class FlowBarPanel {
         return [(topGhost!, topGhostView!, .top), (bottomGhost!, bottomGhostView!, .bottom)]
     }
 
-    private func highlightGhosts(centerY: CGFloat) {
-        guard let screen = pinnedScreen else { return }
+    @discardableResult
+    private func highlightGhosts(centerY: CGFloat) -> FlowBarPosition {
+        guard let screen = pinnedScreen else { return .bottom }
         let nearest = FlowBarPosition.nearest(
             dropCenterY: centerY, on: screen.visibleFrame
         )
         topGhostView?.highlighted = nearest == .top
         bottomGhostView?.highlighted = nearest == .bottom
+        return nearest
+    }
+
+    /// Tick when the drag ENTERS a new slot (v8b F2): the detent thunk,
+    /// synced to the same frame the ghost highlight swaps. Suppressed
+    /// inside the refractory window — wiggle can't machine-gun.
+    private func tickOnSlotEntry(_ nearest: FlowBarPosition) {
+        guard nearest != lastTickedSlot else { return }
+        lastTickedSlot = nearest
+        guard SnapTickGate.shouldTick(&tickGate, now: ContinuousClock().now, slotChanged: true) else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            .levelChange, performanceTime: .default
+        )
+    }
+
+    /// A new grab supersedes any pending land tick (v8b).
+    func cancelSnapFeedback() {
+        landTask?.cancel()
+        landTask = nil
     }
 }
 
@@ -240,6 +265,9 @@ extension FlowBarPanel: PillDragDelegate {
         guard !isDragging, let screen = pinnedScreen else { return }
         isDragging = true
         dragStartSlot = FlowBarPosition.current()
+        cancelSnapFeedback()
+        SnapTickGate.reset(&tickGate)
+        lastTickedSlot = dragStartSlot
         // Ghosts at both slots, sized like the live pill; the slot under
         // the grab glows first — the user sees the choice immediately.
         for (ghost, _, position) in ghostPanels() {
@@ -264,7 +292,10 @@ extension FlowBarPanel: PillDragDelegate {
             NSRect(origin: screenOrigin, size: panel.frame.size),
             display: true
         )
-        highlightGhosts(centerY: screenOrigin.y + VisualizerMath.pillHeight / 2)
+        let nearest = highlightGhosts(
+            centerY: screenOrigin.y + VisualizerMath.pillHeight / 2
+        )
+        tickOnSlotEntry(nearest)
     }
 
     func pillDragEnded(moved: Bool) {
@@ -283,11 +314,19 @@ extension FlowBarPanel: PillDragDelegate {
             dropCenterY: panel.frame.midY, on: screen.visibleFrame
         )
         setFrame(for: currentWidth, on: screen, position: target, animated: true)
-        // Snap feedback: one alignment tick per completed drop. Same-slot
-        // drops still tick — the placement registered, the user feels it.
-        NSHapticFeedbackManager.defaultPerformer.perform(
-            .alignment, performanceTime: .default
-        )
+        // Land tick on ARRIVAL (v8b F1): the glide above runs snapDuration,
+        // so this fires exactly as the pill settles — never at finger lift.
+        // Same-slot drops still tick: the placement registered, felt.
+        landTask?.cancel()
+        landTask = Task {
+            try? await Task.sleep(
+                nanoseconds: UInt64(FlowBarPosition.snapDuration * 1_000_000_000)
+            )
+            guard !Task.isCancelled else { return }
+            NSHapticFeedbackManager.defaultPerformer.perform(
+                .alignment, performanceTime: .now
+            )
+        }
         if target != dragStartSlot {
             FlowBarPosition.save(target)
         }

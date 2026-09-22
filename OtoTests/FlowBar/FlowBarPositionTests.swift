@@ -68,6 +68,43 @@ struct FlowBarPositionTests {
         #expect(FlowBarPosition.current(defaults: defaults) == .bottom)
     }
 
+    @Test func tickGateFiresOncePerEntry() {
+        // v8b: the threshold tick is edge-triggered — entering a slot
+        // ticks, staying silent, and silence never ticks.
+        // (Mutating calls hoisted: #expect captures immutably.)
+        var gate = SnapTickGate()
+        let t0 = ContinuousClock().now
+        let first = SnapTickGate.shouldTick(&gate, now: t0, slotChanged: true)
+        #expect(first)
+        let repeatInsideWindow = SnapTickGate.shouldTick(&gate, now: t0, slotChanged: true)
+        #expect(!repeatInsideWindow)
+        var fresh = SnapTickGate()
+        let silent = SnapTickGate.shouldTick(&fresh, now: t0, slotChanged: false)
+        #expect(!silent)
+    }
+
+    @Test func tickGateRearmsAfterTheWindow() async throws {
+        // Past the 100ms refractory window, the next entry ticks again.
+        var gate = SnapTickGate()
+        let first = SnapTickGate.shouldTick(&gate, now: ContinuousClock().now, slotChanged: true)
+        #expect(first)
+        try await Task.sleep(for: .milliseconds(120))
+        let rearmed = SnapTickGate.shouldTick(&gate, now: ContinuousClock().now, slotChanged: true)
+        #expect(rearmed)
+    }
+
+    @Test func tickGateResetRearmsImmediately() {
+        // A new grab re-arms instantly (no stale suppression leaks across
+        // drags).
+        var gate = SnapTickGate()
+        let t0 = ContinuousClock().now
+        let first = SnapTickGate.shouldTick(&gate, now: t0, slotChanged: true)
+        #expect(first)
+        SnapTickGate.reset(&gate)
+        let rearmed = SnapTickGate.shouldTick(&gate, now: t0, slotChanged: true)
+        #expect(rearmed)
+    }
+
     @Test func rawValuesAreStable() {
         // The strings ARE the persisted format — renaming breaks upgrades.
         #expect(FlowBarPosition.top.rawValue == "top")

@@ -20,6 +20,12 @@ enum FlowBarPosition: String, Sendable {
     nonisolated static let defaultsKey = "app.Oto.flowBarPosition"
     nonisolated static let topMargin: CGFloat = 12
     nonisolated static let bottomMargin: CGFloat = 28
+    /// Drop-glide length (s). The land tick uses the SAME constant — the
+    /// animation and the tick can never drift apart (v8b F1).
+    nonisolated static let snapDuration: Double = 0.15
+    /// Minimum gap between mid-drag threshold ticks. Boundary wiggle
+    /// inside this window stays silent — no machine-gun (v8b).
+    nonisolated static let tickRefractory: Duration = .milliseconds(100)
 
     /// Upgrade default: absent key means Bottom (current behavior, forever).
     nonisolated static func current(defaults: UserDefaults = .standard) -> FlowBarPosition {
@@ -53,10 +59,35 @@ enum FlowBarPosition: String, Sendable {
         )
     }
 
+
+
     /// Snap split: the slot whose half holds the pill's center Y.
     /// The exact midpoint belongs to Top (a dropped pill straddling the
     /// line reads as "up there", not "down here").
     nonisolated static func nearest(dropCenterY y: CGFloat, on visible: NSRect) -> FlowBarPosition {
         y < visible.midY ? .bottom : .top
+    }
+}
+
+/// Debounce for mid-drag threshold ticks (Phase 8b): edge-triggered,
+/// with a refractory window so boundary wiggle can't machine-gun. Pure so
+/// the cadence is headless-tested; the panel owns pixels. Static +
+/// nonisolated throughout (default-MainActor would otherwise isolate the
+/// instance and lock tests out — VisualizerMath precedent).
+struct SnapTickGate: Sendable {
+    var lastFire: ContinuousClock.Instant?
+
+    nonisolated static func shouldTick(
+        _ gate: inout SnapTickGate, now: ContinuousClock.Instant, slotChanged: Bool
+    ) -> Bool {
+        guard slotChanged else { return false }
+        if let last = gate.lastFire,
+           now - last < FlowBarPosition.tickRefractory { return false }
+        gate.lastFire = now
+        return true
+    }
+
+    nonisolated static func reset(_ gate: inout SnapTickGate) {
+        gate.lastFire = nil
     }
 }

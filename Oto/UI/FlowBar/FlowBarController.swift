@@ -84,6 +84,7 @@ final class FlowBarController {
         hideTask = nil
         await analyzer.stop()
         analyzerRecording = false
+        panel?.cancelSnapFeedback()
         panel?.hide()
     }
 
