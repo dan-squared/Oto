@@ -35,7 +35,6 @@ final class FlowBarController {
 
     private var panel: FlowBarPanel?
     private var pollTask: Task<Void, Never>?
-    private var dismissedSessionID: UUID?
     private var consumedFlashID: UUID?
     private var lastRouteKey: String?
     private var flashDeadline: Date?
@@ -56,7 +55,7 @@ final class FlowBarController {
         self.box = box
         self.modal = modal
         self.pasteboard = pasteboard
-        self.model = FlowBarModel(coordinator: coordinator)
+        self.model = FlowBarModel()
     }
 
     func start() {
@@ -70,15 +69,6 @@ final class FlowBarController {
         pollTask = nil
         await analyzer.stop()
         analyzerRecording = false
-        panel?.hide()
-    }
-
-    /// Failure-panel Dismiss intent. The state stays failed (recovery is
-    /// untouched); only this session's panel is suppressed until the state
-    /// moves on.
-    func dismissFailure() {
-        dismissedSessionID = model.projection.sessionID
-        flashDeadline = nil
         panel?.hide()
     }
 
@@ -96,18 +86,7 @@ final class FlowBarController {
     func pollOnce() async {
         let state = await coordinator.state
         let recovery = await coordinator.recoveryText()
-        var projection = FlowBarProjection.project(state, recoveryAvailable: recovery != nil)
-
-        // Dismiss suppression: same failed session stays hidden.
-        if projection.state == .failure, projection.sessionID == dismissedSessionID {
-            projection = FlowBarProjection(
-                state: .hidden, sessionID: nil, handsFreeCaption: false,
-                message: nil, showsSettingsLink: false,
-                recoveryAvailable: projection.recoveryAvailable
-            )
-        } else if projection.sessionID != dismissedSessionID {
-            dismissedSessionID = nil
-        }
+        let projection = FlowBarProjection.project(state, recoveryAvailable: recovery != nil)
 
         model.motionFrozen = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         model.update(projection: projection)
@@ -162,14 +141,14 @@ final class FlowBarController {
             return
         }
         if panel == nil {
-            panel = FlowBarPanel(model: model, controller: self, width: width)
+            panel = FlowBarPanel(model: model, width: width)
         }
         panel?.show(
             sessionID: projection.sessionID,
             displayID: Self.targetScreen(of: state),
             width: width
         )
-        panel?.syncContentWidth(model: model, controller: self)
+        panel?.syncContentWidth(model: model)
     }
 
     private func syncDeadlines(projection: FlowBarProjection) {

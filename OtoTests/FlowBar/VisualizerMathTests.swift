@@ -47,22 +47,22 @@ struct VisualizerMathTests {
     @Test func silenceMapsToZerosNeverNaN() {
         let zeros = [Float](repeating: 0, count: 256)
         let levels = VisualizerMath.bandLevels(
-            magnitudes: zeros, edges: VisualizerMath.bandEdges(count: 10), binHz: 31.25
+            magnitudes: zeros, edges: VisualizerMath.bandEdges(count: 8), binHz: 31.25
         )
-        #expect(levels.count == 10)
+        #expect(levels.count == 8)
         #expect(levels.allSatisfy { $0 == 0 && !$0.isNaN })
     }
 
     @Test func singleToneDominatesOneBand() {
-        // All energy in bin 14 (≈440 Hz @ 31.25 Hz/bin): band 3
-        // (318–505 Hz) must own it, neighbors stay near zero.
+        // All energy in bin 14 (≈440 Hz @ 31.25 Hz/bin): band 2
+        // (253–450 Hz at 8 bands) must own it, neighbors stay near zero.
         var mags = [Float](repeating: 0, count: 256)
         mags[14] = 1
         let levels = VisualizerMath.bandLevels(
-            magnitudes: mags, edges: VisualizerMath.bandEdges(count: 10), binHz: 31.25
+            magnitudes: mags, edges: VisualizerMath.bandEdges(count: 8), binHz: 31.25
         )
-        #expect(argmax(levels) == 3)
-        #expect(levels[3] > 0.9)
+        #expect(argmax(levels) == 2)
+        #expect(levels[2] > 0.9)
     }
 
     @Test func chaseHeadIsBrightestAndWraps() {
@@ -83,18 +83,17 @@ struct VisualizerMathTests {
         #expect(abs((a1 - a0) - Double.pi / 3) < 0.000001)
     }
 
-    @Test func widthsAreCompact() {
-        #expect(VisualizerMath.panelWidth(for: .recording) == 232)
-        #expect(VisualizerMath.panelWidth(for: .preparing) == 208)
-        #expect(VisualizerMath.panelWidth(for: .finalizing) == 208)
-        #expect(VisualizerMath.panelWidth(for: .inserting) == 208)
-        #expect(VisualizerMath.panelWidth(for: .successFlash) == 128)
-        #expect(VisualizerMath.panelWidth(for: .cancelledFlash) == 128)
-        #expect(VisualizerMath.panelWidth(for: .failure) == 280)
+    @Test func widthsAreMini() {
+        #expect(VisualizerMath.panelWidth(for: .recording) == 152)
+        #expect(VisualizerMath.panelWidth(for: .preparing) == 140)
+        #expect(VisualizerMath.panelWidth(for: .finalizing) == 140)
+        #expect(VisualizerMath.panelWidth(for: .inserting) == 140)
+        #expect(VisualizerMath.panelWidth(for: .successFlash) == 84)
+        #expect(VisualizerMath.panelWidth(for: .cancelledFlash) == 84)
+        #expect(VisualizerMath.panelWidth(for: .failure) == 260)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
-        // "Little, not big": nothing exceeds the old minimum's neighborhood.
-        for state: [FlowBarState] in [[.recording], [.failure]] {
-            #expect(VisualizerMath.panelWidth(for: state[0]) <= 280)
-        }
+        // Mini by construction: the widest pill stays compact.
+        #expect(VisualizerMath.panelWidth(for: .recording) <= 160)
+        #expect(VisualizerMath.pillHeight == 44)
     }
 }

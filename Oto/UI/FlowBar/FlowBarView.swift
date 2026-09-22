@@ -11,9 +11,12 @@
 
 import SwiftUI
 
+/// Button-free by design (2026-09-22): every intent stays reachable
+/// without pill chrome — hold-to-talk ends on key-up, hands-free toggles
+/// on second shortcut press, cancel rides the shortcut monitor's Escape.
+/// The pill shows state only; failure recovery lives in the menu + modal.
 struct FlowBarView: View {
     let model: FlowBarModel
-    let controller: FlowBarController
     /// Current panel width (controller-driven, matches the frame).
     let width: CGFloat
 
@@ -52,11 +55,8 @@ struct FlowBarView: View {
                 )
                 .transition(.opacity)
             case .finalizing, .inserting:
-                HStack(spacing: 8) {
-                    BarVisualizer(mode: .dotsSpinner, values: [], tick: model.sample.tick, handsFree: false)
-                    stopCancelButtons
-                }
-                .transition(.opacity)
+                BarVisualizer(mode: .dotsSpinner, values: [], tick: model.sample.tick, handsFree: false)
+                    .transition(.opacity)
             case .successFlash, .cancelledFlash:
                 BarVisualizer(mode: .flash, values: [], tick: model.sample.tick, handsFree: false)
                     .transition(.opacity)
@@ -67,40 +67,15 @@ struct FlowBarView: View {
         }
     }
 
-    private var stopCancelButtons: some View {
-        HStack(spacing: 4) {
-            Button { Task { await model.stop() } } label: {
-                Image(systemName: "stop.fill")
-            }
-            .keyboardShortcut(.defaultAction)
-            Button { Task { await model.cancel() } } label: {
-                Image(systemName: "xmark")
-            }
-            .keyboardShortcut(.cancelAction)
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(.white.opacity(0.85))
-        .font(.caption)
-    }
-
     private var failureRow: some View {
         HStack(spacing: 10) {
             BarVisualizer(mode: .failureDot, values: [], tick: model.sample.tick, handsFree: false)
-                .frame(width: 28)
+                .frame(width: 26)
             Text(model.projection.message ?? "Something went wrong.")
                 .font(.caption)
                 .foregroundStyle(.white)
                 .lineLimit(2)
             Spacer(minLength: 0)
-            if model.projection.showsSettingsLink {
-                SettingsLink { Text("Settings") }
-                    .font(.caption)
-            }
-            Button("Dismiss") { controller.dismissFailure() }
-                .keyboardShortcut(.cancelAction)
-                .font(.caption)
         }
-        .buttonStyle(.borderless)
-        .tint(.white)
     }
 }

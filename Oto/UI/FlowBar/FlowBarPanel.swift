@@ -31,6 +31,9 @@ final class FlowBarPanel {
     /// single-screen sign-off covers fallbacks only.
     private(set) var lastStep = 0
     private(set) var currentWidth: CGFloat = 0
+    /// Last width pushed into the SwiftUI hierarchy. Rebuilding rootView
+    /// destroys live animations — only rebuild on real change (the lag fix).
+    private var contentWidth: CGFloat = -1
 
     // MARK: - Shared nonactivating recipe (pill + catcher modal)
 
@@ -52,6 +55,11 @@ final class FlowBarPanel {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
+        // Layer-backed + clear all the way down: a non-layer hosting view
+        // in a transparent panel can render a hairline window-shaped
+        // backdrop (seen 2026-09-22). This kills it at the source.
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor.clear.cgColor
         panel.contentView = contentView
         return panel
     }
@@ -83,10 +91,13 @@ final class FlowBarPanel {
 
     // MARK: - Pill instance
 
-    init(model: FlowBarModel, controller: FlowBarController, width: CGFloat) {
-        hosting = NSHostingView(rootView: FlowBarView(model: model, controller: controller, width: width))
+    init(model: FlowBarModel, width: CGFloat) {
+        hosting = NSHostingView(rootView: FlowBarView(model: model, width: width))
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = NSColor.clear.cgColor
         panel = Self.makePanel(contentView: hosting, size: NSSize(width: width, height: VisualizerMath.pillHeight))
         currentWidth = width
+        contentWidth = width
     }
 
     /// Show (or re-pin) for a session. Same session → resize in place.
@@ -114,9 +125,14 @@ final class FlowBarPanel {
     }
 
     /// Refresh SwiftUI content width to match the frame (no animation —
-    /// the frame animator below is the motion).
-    func syncContentWidth(model: FlowBarModel, controller: FlowBarController) {
-        hosting.rootView = FlowBarView(model: model, controller: controller, width: currentWidth)
+    /// the frame animator below is the motion). GUARDED: rebuilding
+    /// rootView destroys the live view hierarchy (restarts Canvas
+    /// animations, drops in-flight transitions) — the 2026-09-22 lag was
+    /// this running on every 150 ms poll. Same width → no-op.
+    func syncContentWidth(model: FlowBarModel) {
+        guard currentWidth != contentWidth else { return }
+        contentWidth = currentWidth
+        hosting.rootView = FlowBarView(model: model, width: currentWidth)
     }
 
     func hide() {

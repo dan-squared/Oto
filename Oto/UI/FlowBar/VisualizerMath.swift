@@ -32,16 +32,16 @@ struct BarSample: Equatable, Sendable {
 enum VisualizerMath {
     // MARK: - Constants (the whole look, in one place)
 
-    /// Matches the reference pill (10 capsule bars).
-    nonisolated static let barCount = 10
+    /// Reference pill (8 thin capsule bars + small red dot).
+    nonisolated static let barCount = 8
     /// Consonants snap.
     nonisolated static let attack: Float = 0.55
     /// Vowels decay — the asymmetry that reads as "real".
     nonisolated static let release: Float = 0.12
     /// Bars never vanish (silence sits, never bounces — honest).
     nonisolated static let floor: Float = 0.10
-    /// Pill geometry (pt). Compact per "little, not big".
-    nonisolated static let pillHeight: CGFloat = 60
+    /// Pill geometry (pt). Mini per references (~3:1, compact).
+    nonisolated static let pillHeight: CGFloat = 44
     /// Dots in the working chase.
     nonisolated static let dotCount = 9
     /// Spinner step per tick: 60° @ ~6.7 ticks/s ≈ 0.9 s/rev.
@@ -52,13 +52,13 @@ enum VisualizerMath {
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
-        case .preparing: 208
-        case .recording: 232
-        case .finalizing: 208
-        case .inserting: 208
-        case .successFlash: 128
-        case .cancelledFlash: 128
-        case .failure: 280
+        case .preparing: 140
+        case .recording: 152
+        case .finalizing: 140
+        case .inserting: 140
+        case .successFlash: 84
+        case .cancelledFlash: 84
+        case .failure: 260
         }
     }
 

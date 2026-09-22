@@ -99,8 +99,8 @@ final class SpectrumEngine: @unchecked Sendable {
     private nonisolated(unsafe) var mags: [Float]
     private nonisolated(unsafe) var scratch: [Float]
     private nonisolated(unsafe) var window: [Float]
-    private nonisolated(unsafe) let edges: [Float]
-    private nonisolated(unsafe) let binHz: Float
+    private nonisolated let edges: [Float]
+    private nonisolated let binHz: Float
 
     nonisolated init() {
         setup = vDSP_create_fftsetup(Self.log2n, FFTRadix(kFFTRadix2))

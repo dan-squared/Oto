@@ -38,7 +38,7 @@ centered with even padding, pill wider than tall (~3.5–4:1).
 
 ### Recording (img3: red dot + live bars)
 
-- 10 capsule bars (Q1), white, driven ONLY by analyzer band energies.
+- 8 thin capsule bars (Q1 revised 2026-09-22: 10→8 for mini proportions), white, driven ONLY by analyzer band energies.
   Realism rules: **fast attack (~0.55) / slow release (~0.12)** per bar
   (consonants snap, vowels decay — this asymmetry is what reads as
   "real"); floor 10% so bars never vanish; clamp 0…1; pad 0.12.
@@ -164,5 +164,5 @@ centered with even padding, pill wider than tall (~3.5–4:1).
 - Q4. Success: **neutral mini flash, no gradient, no text (decided
   2026-09-22 — gradient dropped; insertion is the confirmation)** /
   "Done" text pill.
-- Q5. Widths: **compact per-state animated 232/208/128/280×60**.
+- Q5. Widths: **mini per-state animated 152/140/84/260×44 (revised 2026-09-22 to match references)**.
 - Q6. Silence: **flat floor bars** (honest).

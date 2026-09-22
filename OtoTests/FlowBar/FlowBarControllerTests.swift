@@ -141,10 +141,10 @@ struct FlowBarControllerTests {
         }
     }
 
-    @Test func dismissSuppressesFailurePanelUntilStateMoves() async throws {
-        // Microphone-denied fails fast (prepare throws on open gate — a
-        // CLOSED gate suspends forever, it does not fail; tested here by
-        // construction, not assumption).
+    @Test func failureHoldsWithoutButtonsUntilStateMoves() async throws {
+        // Button-free pill: failure holds (no Dismiss intent exists) until
+        // the state moves on. Recovery itself is untouched (menu + modal).
+        // Microphone-denied fails fast (prepare throws on open gate).
         let denied = DictationCoordinator(
             audio: FakeAudioCapture(),
             speech: FakeSpeechService(finalText: "x", prepareError: SpeechReadiness.microphoneDenied),
@@ -167,11 +167,12 @@ struct FlowBarControllerTests {
         await controller.pollOnce()
         #expect(controller.model.projection.state == .failure)
 
-        controller.dismissFailure()
+        // Still failed two polls later: holds with no timeout, no buttons.
         await controller.pollOnce()
-        #expect(controller.model.projection.state == .hidden)
+        await controller.pollOnce()
+        #expect(controller.model.projection.state == .failure)
 
-        // New session clears the suppression.
+        // New session replaces it.
         _ = await denied.beginHold()
         await controller.pollOnce()
         #expect(controller.model.projection.state != .hidden)

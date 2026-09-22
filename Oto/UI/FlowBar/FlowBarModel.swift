@@ -6,7 +6,8 @@
 //  the smoothed display sample, and transient notices. Smoothing lives here
 //  (analyzer publishes raw band levels; the model shapes them with
 //  attack/release) so frozen motion, silence, and notices all funnel
-//  through one @MainActor owner. Intents go to the coordinator only.
+//  through one @MainActor owner. Button-free: the model carries no intents
+//  (stop/cancel/finish stay on the shortcut layer + coordinator).
 //
 
 import Foundation
@@ -27,11 +28,8 @@ final class FlowBarModel {
     var motionFrozen = false
 
     private var smoothed = [Float](repeating: 0, count: VisualizerMath.barCount)
-    private let coordinator: DictationCoordinator
 
-    init(coordinator: DictationCoordinator) {
-        self.coordinator = coordinator
-    }
+    init() {}
 
     // MARK: - Poll inputs (controller only)
 
@@ -66,17 +64,5 @@ final class FlowBarModel {
 
     func clearNotice() {
         notice = nil
-    }
-
-    // MARK: - Intents (view buttons → coordinator, session-checked there)
-
-    func stop() async {
-        guard let id = projection.sessionID else { return }
-        await coordinator.finish(id)
-    }
-
-    func cancel() async {
-        guard let id = projection.sessionID else { return }
-        await coordinator.cancel(id)
     }
 }

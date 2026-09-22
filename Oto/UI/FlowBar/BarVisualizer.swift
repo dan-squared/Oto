@@ -52,8 +52,10 @@ struct BarVisualizer: View {
 
     private func drawBars(in context: inout GraphicsContext, size: CGSize) {
         let count = VisualizerMath.barCount
-        let dotDiameter: CGFloat = 14
-        let gap: CGFloat = 6
+        // Small dot (reference-proportioned) + thin bars with airy gaps
+        // (bar ≈ half the slot — the reference airiness).
+        let dotDiameter: CGFloat = 10
+        let gapFraction: CGFloat = 0.5
         // Left red dot (breathe frozen upstream under Reduce Motion).
         let dotOpacity = reduceMotion ? 1 : VisualizerMath.breatheOpacity(tick: tick)
         let dotRect = CGRect(
@@ -71,10 +73,10 @@ struct BarVisualizer: View {
         }
         context.opacity = 1
         // Voice bars fill the remainder.
-        let barsOrigin = dotDiameter + 12
+        let barsOrigin = dotDiameter + 10
         let barsWidth = max(0, size.width - barsOrigin)
         let slot = barsWidth / CGFloat(count)
-        let barWidth = max(2, slot - gap)
+        let barWidth = max(2, slot * (1 - gapFraction))
         for i in 0..<count {
             let level = i < values.count ? CGFloat(values[i]) : 0
             let height = max(3, level * size.height)
@@ -93,11 +95,11 @@ struct BarVisualizer: View {
         in context: inout GraphicsContext, size: CGSize, spinner: Bool, dim: Double = 1
     ) {
         let count = VisualizerMath.dotCount
-        let dotDiameter: CGFloat = 5
-        let pitch: CGFloat = 13
+        let dotDiameter: CGFloat = 4
+        let pitch: CGFloat = 11
         let total = CGFloat(count - 1) * pitch + dotDiameter
         var origin = (size.width - total) / 2
-        if spinner { origin -= 12 }
+        if spinner { origin -= 10 }
         let y = (size.height - dotDiameter) / 2
         for i in 0..<count {
             let opacity = (reduceMotion ? 0.6 : VisualizerMath.dotOpacity(index: i, tick: tick)) * dim
@@ -131,7 +133,7 @@ struct BarVisualizer: View {
             path.move(to: p1)
             path.addLine(to: p2)
             context.opacity = 0.25 + 0.75 * fade
-            context.stroke(path, with: .color(.white), lineWidth: 2.5)
+            context.stroke(path, with: .color(.white), lineWidth: 2)
         }
         context.opacity = 1
     }
@@ -139,7 +141,7 @@ struct BarVisualizer: View {
     // MARK: - Small marks
 
     private func drawDot(in context: inout GraphicsContext, size: CGSize, color: Color) {
-        let diameter: CGFloat = 12
+        let diameter: CGFloat = 10
         let rect = CGRect(
             x: 16, y: (size.height - diameter) / 2,
             width: diameter, height: diameter
