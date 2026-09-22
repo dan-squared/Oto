@@ -40,6 +40,15 @@ struct FlowBarPositionTests {
         #expect(frame.width == 112)
     }
 
+    @Test func tallCardsAnchorByTheirOwnHeight() {
+        // 60pt permission card at Top: maxY stays 12pt under the visible
+        // top — never pushed up under the menu bar by a pill-height anchor.
+        let frame = FlowBarPosition.frame(width: 400, height: 60, on: visible(), position: .top)
+        #expect(frame.maxY == 932)
+        #expect(frame.minY == 872)
+        #expect(frame.height == 60)
+    }
+
     @Test func widePillsClampInsideTheScreen() {
         let frame = FlowBarPosition.frame(width: 4000, on: visible(), position: .top)
         #expect(frame.width == 1496)

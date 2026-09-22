@@ -3,16 +3,22 @@
 //  Oto
 //
 //  Mic-denied mini modal: when dictation fails with .microphoneDenied, the
-//  pill stays out of the way and this 388-wide card renders at the pill slot
-//  instead (no flash-on-then-melt). One action: "Grant Permission" prompts
-//  the system mic dialog when status is notDetermined, otherwise deep-links
+//  pill stays out of the way and this card renders at the pill slot instead
+//  (no flash-on-then-melt). One action: "Grant Permission" prompts the
+//  system mic dialog when status is notDetermined, otherwise deep-links
 //  System Settings at Privacy & Security → Microphone (with fallbacks).
-//  Appearance-aware: follows the system light/dark scheme, no in-app toggle.
-//  Auto-dismiss: 5s visible, then fades out (no close button, by design).
+//  Appearance-aware: semantic colors + effectiveAppearance repaint, no
+//  in-app toggle. Auto-dismiss: 5s visible, then fades out (no close
+//  button, by design).
+//
+//  Rendered as AppKit/CALayer (PillContentView precedent), NOT SwiftUI
+//  hosting: the pill's two frame passes proved this recipe composites
+//  cleanly in a transparent panel — layer-backed clear container, card as
+//  one CAShapeLayer, depth from the window shadow only. Width is
+//  content-fitted (13pt type, 18pt icon) and clamped to maxWidth.
 //
 
 import AppKit
-import SwiftUI
 
 /// Grant-button routing. Pure so the branch is headless-tested without
 /// touching TCC: undetermined → the system prompt ("access giving window");
@@ -36,16 +42,141 @@ enum MicSettingsLink {
     }
 }
 
+/// The card itself: clear container + one shape layer + label + real button.
+/// No self-drawn shadow (window owns depth — pill v5 gotcha); no hosting view
+/// (pill v2 frame-bug class — never again).
+@MainActor
+final class PermissionCardView: NSView {
+    /// Hard ceiling: the card grows to fit its words, never past this.
+    nonisolated static let maxWidth: CGFloat = 415
+    nonisolated static let height: CGFloat = 60
+
+    var onGrant: (() -> Void)?
+
+    private let bg = CAShapeLayer()
+    private let icon = NSImageView()
+    private let title = NSTextField(labelWithString: "Microphone Permission Required")
+    private let button = NSButton()
+    private(set) var contentSize: NSSize = .zero
+
+    init(onGrant: (() -> Void)?) {
+        self.onGrant = onGrant
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.addSublayer(bg)
+
+        icon.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: nil)
+        icon.contentTintColor = .systemRed
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(icon)
+
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.textColor = .labelColor
+        title.lineBreakMode = .byTruncatingTail
+        title.maximumNumberOfLines = 1
+        addSubview(title)
+
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 14
+        button.target = self
+        button.action = #selector(didTapGrant)
+        addSubview(button)
+
+        applyAppearance()
+        relayout()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("PermissionCardView has no nib")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyAppearance()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(button.frame, cursor: .pointingHand)
+    }
+
+    private func applyAppearance() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        bg.fillColor = (dark
+            ? NSColor(red: 0.055, green: 0.055, blue: 0.065, alpha: 1)
+            : NSColor.white).cgColor
+        button.layer?.backgroundColor = (dark
+            ? NSColor(red: 0.93, green: 0.90, blue: 0.84, alpha: 1)
+            : NSColor(white: 0.11, alpha: 1)).cgColor
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        button.attributedTitle = NSAttributedString(string: "Grant Permission", attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: dark ? NSColor.black : NSColor.white,
+            .paragraphStyle: paragraph,
+        ])
+    }
+
+    /// Measure the words, fit the card, clamp to maxWidth. Title truncates
+    /// only as a fallback that the 13pt metrics should never reach.
+    private func relayout() {
+        let pad: CGFloat = 12
+        let iconSide: CGFloat = 18
+        let gapIcon: CGFloat = 8
+        let gapButton: CGFloat = 10
+        let buttonHPad: CGFloat = 16
+        let buttonH: CGFloat = 36
+        let h = Self.height
+
+        let titleW = ceil(title.intrinsicContentSize.width)
+        let buttonW = ceil(button.intrinsicContentSize.width) + buttonHPad * 2
+
+        var width = pad + iconSide + gapIcon + titleW + gapButton + buttonW + pad
+        var fittedTitleW = titleW
+        if width > Self.maxWidth {
+            fittedTitleW = max(0, titleW - (width - Self.maxWidth))
+            width = Self.maxWidth
+        }
+
+        contentSize = NSSize(width: width, height: h)
+        setFrameSize(contentSize)
+        bg.path = CGPath(
+            roundedRect: CGRect(origin: .zero, size: contentSize),
+            cornerWidth: 18, cornerHeight: 18, transform: nil
+        )
+
+        let midY = h / 2
+        icon.frame = CGRect(x: pad, y: midY - iconSide / 2, width: iconSide, height: iconSide)
+        title.frame = CGRect(x: pad + iconSide + gapIcon, y: 0, width: fittedTitleW, height: h)
+        button.frame = CGRect(
+            x: width - pad - buttonW, y: midY - buttonH / 2,
+            width: buttonW, height: buttonH
+        )
+        window?.invalidateCursorRects(for: self)
+    }
+
+    @objc private func didTapGrant() {
+        onGrant?()
+    }
+
+    // MARK: - Test hooks (no window needed)
+
+    func titleText() -> String { title.stringValue }
+    func contentWidth() -> CGFloat { contentSize.width }
+}
+
 @Observable @MainActor
 final class PermissionModalController {
-    nonisolated static let width: CGFloat = 388
-    nonisolated static let height: CGFloat = 60
+    nonisolated static let height: CGFloat = PermissionCardView.height
     /// Visible window: long enough to read + reach the button (macOS banner
     /// persistence class), short enough to never linger. Then fades out.
     nonisolated static let visibleDuration: Double = 5.0
 
     private var panel: NSPanel?
-    private var hosting: NSHostingView<PermissionModalView>?
+    private var contentWidth: CGFloat = 0
     private var hideTask: Task<Void, Never>?
     private var showGeneration: UInt64 = 0
     /// Internal for tests: prewarm stability.
@@ -59,17 +190,17 @@ final class PermissionModalController {
         status == .notDetermined ? .systemPrompt : .openSettings
     }
 
-    /// Build panel + hosting once, off the transition path (catcher precedent).
+    /// Build panel + card once, off the transition path (catcher precedent).
     /// Never orders front — pure construction cost moved to launch.
     func prewarm() {
         if panel == nil {
-            let hosting = NSHostingView(rootView: PermissionModalView(grant: { [weak self] in
+            let card = PermissionCardView(onGrant: { [weak self] in
                 self?.grant()
-            }))
-            self.hosting = hosting
+            })
+            contentWidth = card.contentSize.width
             panel = FlowBarPanel.makePanel(
-                contentView: hosting,
-                size: NSSize(width: Self.width, height: Self.height)
+                contentView: card,
+                size: NSSize(width: contentWidth, height: Self.height)
             )
         }
     }
@@ -78,7 +209,7 @@ final class PermissionModalController {
         prewarm()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let frame = FlowBarPosition.frame(
-            width: Self.width, on: screen.visibleFrame, position: position
+            width: contentWidth, height: Self.height, on: screen.visibleFrame, position: position
         )
         // A fresh show supersedes any pending fade: full 5s, never truncated.
         showGeneration += 1
@@ -130,51 +261,5 @@ final class PermissionModalController {
                 if opener(url) { break }
             }
         }
-    }
-}
-
-struct PermissionModalView: View {
-    let grant: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        ZStack {
-            // Explicit clear root: the hosting view must paint nothing
-            // behind the card (the pill's v2 frame bug class — never again).
-            Color.clear
-            RoundedRectangle(cornerRadius: 18)
-                .fill(colorScheme == .dark
-                    ? Color(red: 0.055, green: 0.055, blue: 0.065)
-                    : Color.white)
-                .shadow(
-                    color: .black.opacity(colorScheme == .dark ? 0.5 : 0.15),
-                    radius: 18, y: 4
-                )
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.circle")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.red)
-                Text("Microphone Permission Required")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Button("Grant Permission") { grant() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(colorScheme == .dark ? .black : .white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(colorScheme == .dark
-                        ? Color(red: 0.93, green: 0.90, blue: 0.84)
-                        : Color(white: 0.11))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .padding(.horizontal, 14)
-        }
-        .frame(
-            width: PermissionModalController.width,
-            height: PermissionModalController.height
-        )
     }
 }

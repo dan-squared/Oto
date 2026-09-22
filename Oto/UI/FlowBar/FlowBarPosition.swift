@@ -37,25 +37,29 @@ enum FlowBarPosition: String, Sendable {
         defaults.set(position.rawValue, forKey: defaultsKey)
     }
 
-    /// Slot frame for a pill width on a screen's visible frame. Same
+    /// Slot frame for a card width/height on a screen's visible frame. Same
     /// clamp/center math the panel always used; only Y is slot-dependent.
     /// `visibleFrame` already excludes the menu bar (and the notch lives
     /// inside the menu strip), so Top truly sits below the notch on every Mac.
+    /// Height-aware: taller cards (permission modal) anchor by their own
+    /// height — a fixed pill-height anchor would push their tops under the
+    /// menu bar. Defaults to the pill so existing callers are untouched.
     nonisolated static func frame(
-        width: CGFloat, on visible: NSRect, position: FlowBarPosition
+        width: CGFloat, height: CGFloat = VisualizerMath.pillHeight,
+        on visible: NSRect, position: FlowBarPosition
     ) -> NSRect {
         let clamped = min(width, visible.width - 16)
         let x = max(visible.minX + 8, visible.midX - clamped / 2)
         let y: CGFloat
         switch position {
         case .top:
-            y = visible.maxY - VisualizerMath.pillHeight - Self.topMargin
+            y = visible.maxY - height - Self.topMargin
         case .bottom:
             y = visible.minY + Self.bottomMargin
         }
         return NSRect(
             x: x, y: y,
-            width: clamped, height: VisualizerMath.pillHeight
+            width: clamped, height: height
         )
     }
 
