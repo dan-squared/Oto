@@ -76,7 +76,7 @@ struct FlowBarStateTests {
         // through for routing.
         let ctx = context()
         for failure: DictationFailure in [
-            .targetGone, .insertionFailed("nope"), .microphoneDenied,
+            .targetGone, .insertionFailed("nope"), .noTextField, .microphoneDenied,
             .speechPreparation("assets missing"), .audioCapture("boom"),
             .noAudioCaptured,
         ] {
@@ -105,6 +105,16 @@ struct FlowBarStateTests {
             .failed(ctx, .insertionFailed("x")), recoveryText: "kept words", modalEnabled: false
         )
         #expect(auto == .autoCopy(sessionKey: ctx.id.uuidString, text: "kept words"))
+        // Void-case divert: no focused field routes exactly like the other
+        // recovery failures — modal when enabled, auto-copy when not.
+        let voidModal = RecoveryRouter.route(
+            .failed(ctx, .noTextField), recoveryText: "void words", modalEnabled: true
+        )
+        #expect(voidModal == .catcher(sessionKey: ctx.id.uuidString, text: "void words"))
+        let voidAuto = RecoveryRouter.route(
+            .failed(ctx, .noTextField), recoveryText: "void words", modalEnabled: false
+        )
+        #expect(voidAuto == .autoCopy(sessionKey: ctx.id.uuidString, text: "void words"))
     }
 
     @Test func routerStaysSilentOtherwise() {

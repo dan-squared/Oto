@@ -155,6 +155,9 @@ final class RealTextInsertion: TextInserting {
     private let events: InsertionEvents
     private let timings: InsertionTimings
     private let pasteboard: NSPasteboard
+    /// Void-paste guard (catcher fix): read-only editable-focus check,
+    /// injected so tests script verdicts without AX. Defaults live.
+    private let focusCheck: any FocusChecking
     /// Insertion trail: gates, reactivate attempts, restores. Pids and bundle
     /// IDs only — transcript text is never logged.
     private let log = Logger(subsystem: "app.Oto", category: "insertion")
@@ -162,11 +165,13 @@ final class RealTextInsertion: TextInserting {
     init(
         events: InsertionEvents = .live,
         timings: InsertionTimings = InsertionTimings(),
-        pasteboard: NSPasteboard = .general
+        pasteboard: NSPasteboard = .general,
+        focusCheck: any FocusChecking = LiveFocusCheck()
     ) {
         self.events = events
         self.timings = timings
         self.pasteboard = pasteboard
+        self.focusCheck = focusCheck
     }
 
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult {
@@ -223,6 +228,20 @@ final class RealTextInsertion: TextInserting {
         // default trigger is a held modifier; the release precedes us, but
         // some apps track modifiers from the raw stream themselves).
         await waitForModifiersToClear()
+
+        // Void-paste guard (catcher fix): focus without an editable field
+        // means nowhere to paste — divert to recovery instead of posting
+        // into the void. Sited AFTER focus is meaningful (reactivated +
+        // settled) and BEFORE the clipboard is touched, so divert leaves
+        // the clipboard byte-identical. `.unknown` (AX error/timeout)
+        // proceeds exactly as before: exotic trees never regress.
+        switch await focusCheck.editableFocus(for: pid) {
+        case .editable, .unknown:
+            break
+        case .noField:
+            log.info("diverted: no editable focus in target \(pid, privacy: .public), clipboard untouched")
+            return .noEditableField
+        }
 
         let saved = PasteboardSnapshot.capture(pasteboard)
         let receipt = placeOnClipboard(text)

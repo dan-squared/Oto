@@ -201,6 +201,7 @@ actor DictationCoordinator {
             case .microphoneDenied: reason = "microphone denied"
             case .noAudioCaptured: reason = "no audio captured — check the microphone"
             case .targetGone: reason = "target app closed"
+            case .noTextField: reason = "no text field focused"
             case .insertionFailed(let detail): reason = "insertion failed (\(detail))"
             }
             let kept = recoveryTranscript == nil ? "" : ", transcript kept"
@@ -425,6 +426,13 @@ actor DictationCoordinator {
             recoveryTranscript = Transcript(text: clean)
             state = .failed(context, .insertionFailed(reason))
             log.info("failed insertion, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public) reason=\(reason, privacy: .public)")
+        case .noEditableField:
+            // Void-paste divert: focus with nowhere to paste. Same
+            // recoverability as insertion failure, distinct case so the
+            // catcher (and only the catcher) fires for it.
+            recoveryTranscript = Transcript(text: clean)
+            state = .failed(context, .noTextField)
+            log.info("failed no-text-field, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
         }
     }
 }

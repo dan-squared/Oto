@@ -19,6 +19,12 @@ private func scratchBoard() -> NSPasteboard {
     NSPasteboard(name: NSPasteboard.Name("oto-insert-\(UUID().uuidString)"))
 }
 
+/// Scriptable focus verdicts (catcher void-case fix): no AX, no hardware.
+struct StubFocusCheck: FocusChecking {
+    let verdict: EditableFocus
+    nonisolated func editableFocus(for pid: pid_t) async -> EditableFocus { verdict }
+}
+
 /// Test-only Sendable counter for the scripted `@Sendable` event hooks.
 /// Swift 6 region isolation forbids mutating captured vars inside
 /// concurrently-executing closures; the lock is the sharing proof, and the
@@ -399,5 +405,55 @@ struct RealTextInsertionTests {
         board.setString("theirs", forType: .string)
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(board.string(forType: .string) == "theirs")
+    }
+
+    // MARK: - Void-paste divert (catcher fix)
+
+    @Test func focusRoleMapping() {
+        // Text roles proceed; everything present-but-not-editable diverts;
+        // a missing role is unknown (legacy path), never a guess.
+        #expect(EditableFocus.classify(role: "AXTextField") == .editable)
+        #expect(EditableFocus.classify(role: "AXTextArea") == .editable)
+        #expect(EditableFocus.classify(role: "AXButton") == .noField)
+        #expect(EditableFocus.classify(role: "AXStaticText") == .noField)
+        #expect(EditableFocus.classify(role: "AXWebArea") == .noField)
+        #expect(EditableFocus.classify(role: nil) == .unknown)
+        #expect(LiveFocusCheck.timeoutNanoseconds == 300_000_000)
+    }
+
+    @Test func noEditableFocusDivertsPreClipboard() async {
+        // Finder/desktop shape: focus with nowhere to paste diverts before
+        // the clipboard is touched and posts nothing — recovery owns it.
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let before = board.changeCount
+        let hid = HookCount()
+        let service = RealTextInsertion(
+            events: scriptedEvents(postedHID: { hid.bump() }),
+            timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .noField)
+        )
+        #expect(await service.insert("void words", into: anyTarget()) == .noEditableField)
+        #expect(board.changeCount == before)
+        #expect(board.string(forType: .string) == "mine")
+        #expect(board.string(forType: PasteboardReceipt.markerType) == nil)
+        #expect(hid.count == 0)
+    }
+
+    @Test func unknownFocusTakesLegacyPath() async {
+        // AX error/timeout must never regress insertion: unknown proceeds
+        // through the full legacy path (write → verify → post).
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let hid = HookCount()
+        let service = RealTextInsertion(
+            events: scriptedEvents(postedHID: { hid.bump() }),
+            timings: fastTimings(restore: 0), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .unknown)
+        )
+        #expect(await service.insert("legacy words", into: anyTarget()) == .inserted)
+        #expect(hid.count == 1)
     }
 }

@@ -157,7 +157,7 @@ enum RecoveryRouter {
     ) -> RecoveryRoute? {
         guard case .failed(let context, let failure) = dictation else { return nil }
         switch failure {
-        case .targetGone, .insertionFailed:
+        case .targetGone, .insertionFailed, .noTextField:
             break
         default:
             return nil

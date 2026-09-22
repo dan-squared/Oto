@@ -215,6 +215,14 @@ final class FlowBarPanel {
 
     var isVisible: Bool { panel.isVisible }
 
+    /// Current pill frame for the catcher morph (v4): nil unless the pill
+    /// is visibly up. The controller snapshots this BEFORE the vanish
+    /// path runs (recovery routes before panel sync).
+    var frameForMorph: NSRect? {
+        guard panel.isVisible else { return nil }
+        return panel.frame
+    }
+
     private func setFrame(for width: CGFloat, on screen: NSScreen, position: FlowBarPosition, animated: Bool) {
         let frame = FlowBarPosition.frame(width: width, on: screen.visibleFrame, position: position)
         if animated {

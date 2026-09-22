@@ -533,4 +533,34 @@ struct DictationCoordinatorTests {
         #expect(await duck.ducks == [id!])
         #expect(await duck.restores == [id!])
     }
+
+    // MARK: - Void-paste divert (catcher fix)
+
+    @Test func noEditableFieldFailsWithKeptTranscript() async {
+        // Finder/desktop shape through the full pipeline: the inserter
+        // diverts, the coordinator keeps the transcript under a distinct
+        // failure the catcher (and only the catcher) fires for.
+        let audio = FakeAudioCapture(stubPeak: 1.0)
+        let speech = FakeSpeechService(finalText: "void words", finishError: nil, prepareGateOpen: true)
+        let target = FakeTargetCapture(stubTarget: Self.stubTarget)
+        let inserter = FakeTextInsertion(result: .noEditableField)
+        let coordinator = DictationCoordinator(
+            audio: audio,
+            speech: speech,
+            targetService: target,
+            inserter: inserter,
+            history: nil,
+            micDeniedOverride: { false }
+        )
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.finish(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed(_, .noTextField) = terminal else {
+            Issue.record("expected failed(noTextField), got \(terminal)")
+            return
+        }
+        #expect(await coordinator.recoveryText() == "void words")
+        #expect(await coordinator.lastSessionSummary() == "failed: no text field focused, transcript kept")
+    }
 }
