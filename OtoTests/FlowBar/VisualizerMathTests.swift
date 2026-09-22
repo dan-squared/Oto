@@ -75,12 +75,25 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.dotOpacity(index: 0, tick: 4) >= 0.25)
     }
 
-    @Test func spinnerAdvancesEvenly() {
-        let a0 = VisualizerMath.spinnerAngle(tick: 0)
-        let a1 = VisualizerMath.spinnerAngle(tick: 1)
-        let a2 = VisualizerMath.spinnerAngle(tick: 2)
-        #expect(abs((a1 - a0) - (a2 - a1)) < 0.000001)
-        #expect(abs((a1 - a0) - Double.pi / 3) < 0.000001)
+    @Test func chaseGlidesContinuouslyAndWraps() {
+        // v5: the render-server wave samples this curve. Fractional head —
+        // dot 0 peaks at head 0, rests at 0.25 mid-cycle, wraps (head 8.5
+        // is 0.5 away, nearly bright again).
+        #expect(VisualizerMath.dotOpacityContinuous(index: 0, head: 0) > 0.99)
+        #expect(abs(VisualizerMath.dotOpacityContinuous(index: 0, head: 4.5) - 0.25) < 0.001)
+        #expect(VisualizerMath.dotOpacityContinuous(index: 0, head: 8.5) > 0.8)
+        // Legacy tick wrapper agrees with the integer head.
+        #expect(VisualizerMath.dotOpacity(index: 2, tick: 2)
+            == VisualizerMath.dotOpacityContinuous(index: 2, head: 2))
+        #expect(VisualizerMath.dotOpacity(index: 2, tick: 2)
+            == VisualizerMath.dotOpacity(index: 2, tick: 11))
+    }
+
+    @Test func breatheSpansFullRangeOnTwoSecondPeriod() {
+        // Phase 0 → 1.0 (peak), phase 60 (half of 120-frame 2 s period) →
+        // 0.55 (trough). Same range the CABasicAnimation interpolates.
+        #expect(abs(VisualizerMath.breatheOpacityContinuous(phase: 0) - 1.0) < 0.001)
+        #expect(abs(VisualizerMath.breatheOpacityContinuous(phase: 60) - 0.55) < 0.001)
     }
 
     @Test func widthsAreMini() {

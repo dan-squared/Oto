@@ -21,8 +21,11 @@ import Foundation
 @MainActor
 final class FlowBarController {
     nonisolated static let pollInterval: UInt64 = 150_000_000
-    nonisolated static let successFlashDuration: Double = 1.0
-    nonisolated static let cancelledFlashDuration: Double = 0.8
+    // Liquid-quick finish (v5): the flash holds just long enough to read as
+    // confirmation (~0.35s), then melts out in 0.12s — total vanish <0.55s.
+    // (Was 1.0/0.8: the pill lingered past the "done" feeling.)
+    nonisolated static let successFlashDuration: Double = 0.35
+    nonisolated static let cancelledFlashDuration: Double = 0.30
     nonisolated static let noticeDuration: Double = 2.0
 
     let model: FlowBarModel
@@ -179,7 +182,7 @@ final class FlowBarController {
         if let visual = PillVisual.forState(projection.state) {
             panel?.render(
                 visual: visual,
-                values: model.sample.values, tick: model.sample.tick,
+                values: model.sample.values,
                 text: model.notice ?? projection.message,
                 centerText: model.notice != nil,
                 reduceMotion: model.motionFrozen,
@@ -188,7 +191,7 @@ final class FlowBarController {
         } else if let notice = model.notice {
             panel?.render(
                 visual: .message,
-                values: model.sample.values, tick: model.sample.tick,
+                values: model.sample.values,
                 text: notice, centerText: true,
                 reduceMotion: model.motionFrozen,
                 animated: !shrink

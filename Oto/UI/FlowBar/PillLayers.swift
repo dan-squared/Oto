@@ -2,13 +2,13 @@
 //  PillLayers.swift
 //  Oto
 //
-//  Slice 6B v3: the pill's GPU renderer. One layer-backed NSView, zero
-//  SwiftUI: background + bars + dots are CALayers (render-server
-//  composited), the spinner is a native NSProgressIndicator, text is a
-//  static NSTextField. The MainActor sets properties at ≤30 Hz; Core
-//  Animation interpolates on the render server — no per-frame MainActor
-//  work, no view-hierarchy diffs, no transparency stack (the v2 lag and
-//  the hosting-view backdrop die together, by construction).
+//  Slice 6B v5: the pill's GPU renderer. One layer-backed NSView, zero
+//  SwiftUI: background + bars + dots are CALayers, the spinner is a native
+//  NSProgressIndicator, text is a static NSTextField. Motion is two clocks:
+//  DATA (bar levels, ≤30 Hz property sets with actions disabled) and MOTION
+//  (chase glide + red-dot breathe as infinite CAAnimations interpolating on
+//  the render server — zero MainActor work per frame, no timers, no Metal).
+//  Overflow is caged by masksToBounds (sublayers) + clipsToBounds (subviews).
 //
 //  Geometry: mini (112×32 recording). Elements shrink, count stays:
 //  8 thin bars, 9 chase dots, 8px record dot with no ring.
@@ -52,16 +52,39 @@ final class PillContentView: NSView {
     private let label = NSTextField(labelWithString: "")
     private var currentWidth: CGFloat = 0
     private var currentVisual: PillVisual?
+    /// Render-server motion state (v5): the chase glide and the red-dot
+    /// breathe are CAAnimations interpolating on the render server — zero
+    /// per-frame MainActor work. `motionVisual` tracks which visual owns
+    /// installed animations so the 150 ms poll never restarts them.
+    /// Data (bar levels, label) and motion (chase/breathe) are independent
+    /// clocks by design: the analyzer stops outside recording, but the
+    /// loader must stay alive.
+    private var motionVisual: PillVisual?
+    private var frozenMotion = false
+    nonisolated static let chaseKey = "oto.chase"
+    nonisolated static let breatheKey = "oto.breathe"
+    /// One chase cycle: 9 dots at ~6.7 dots/s (the old tick feel, gliding).
+    nonisolated static let chaseCycle: Double = 1.35
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         // Overflow is structurally impossible: nothing paints outside the
-        // pill silhouette, whatever a transition does (v4 F1a).
+        // pill silhouette, whatever a transition does. TWO levels, because
+        // they clip different things: clipsToBounds clips subviews
+        // (spinner, label); masksToBounds clips sublayers (bg, bars, chase
+        // and flash dots — all the artwork). v4 set only the first, which
+        // is why dots still escaped the constricted frame. (v5 F1.)
         clipsToBounds = true
+        layer?.masksToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
         bg.fillColor = CGColor(red: 0.055, green: 0.055, blue: 0.065, alpha: 1)
+        // No self-drawn shadow: with masksToBounds (overflow clip, v5 F1)
+        // a sublayer shadow would be clipped invisible — and a same-layer
+        // shadow is clipped with it (classic masksToBounds gotcha). The
+        // drop shadow comes from the window (hasShadow, follows the pill
+        // alpha via the WindowServer), which masksToBounds never touches.
         layer?.addSublayer(bg)
 
         recordDot.backgroundColor = NSColor.systemRed.cgColor
@@ -130,10 +153,25 @@ final class PillContentView: NSView {
         currentWidth = width
         setFrameSize(NSSize(width: width, height: VisualizerMath.pillHeight))
         let h = VisualizerMath.pillHeight
-        bg.path = CGPath(
+        let newPath = CGPath(
             roundedRect: CGRect(x: 0, y: 0, width: width, height: h),
             cornerWidth: h / 2, cornerHeight: h / 2, transform: nil
         )
+        if bg.path != nil {
+            // Liquid chrome (v5 F4): the silhouette morphs over the same
+            // 0.20s easeOut as the window frame (FlowBarPanel.setFrame), so
+            // pill and window move as one. First layout snaps (no path yet).
+            // Element positions snap to the final geometry instantly — with
+            // the outgoing group already dead (shrink) or fading in (growth),
+            // the eye reads content-leading-chrome-following as liquid.
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.20)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+            bg.path = newPath
+            CATransaction.commit()
+        } else {
+            bg.path = newPath
+        }
         let midY = h / 2
 
         // Recording block: dot + gap + bars, centered.
@@ -183,35 +221,143 @@ final class PillContentView: NSView {
     /// already-narrower frame (v4 F1b).
     func show(visual: PillVisual, animated: Bool = true) {
         if visual != currentVisual || !animated {
+            // Stop render-server motion FIRST (an attached infinite opacity
+            // animation would override the fade-out below and the dying
+            // group would never leave) — EXCEPT dots ↔ dotsSpinner, which
+            // share one wave: restarting it on preparing→finalizing would
+            // visibly rewind mid-flight.
+            let keepWave = animated && isChase(currentVisual) && isChase(visual)
+            if !keepWave { stopMotionAnimations() }
             showOnly(visual, animated: animated)
             currentVisual = visual
         }
+        ensureMotion(for: visual)
     }
 
-    /// Per-frame values. No implicit actions (already-smoothed model data);
-    /// the spinner/visibility in `show` above carries the motion.
-    func update(values: [Float], tick: UInt64, text: String?, centerText: Bool, reduceMotion: Bool) {
-        let frozenTick: UInt64 = reduceMotion ? 0 : tick
+    private func isChase(_ visual: PillVisual?) -> Bool {
+        visual == .dots || visual == .dotsSpinner
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { stopMotionAnimations() }
+    }
+
+    // MARK: - Render-server motion (v5: true GPU, zero per-frame CPU)
+
+    /// Idempotent: installs the motion for `visual` unless it already runs.
+    /// The poll calls `show` every 150 ms — restarting a CAAnimation there
+    /// would rewind the wave 6.7×/s (visible stutter). The `motionVisual`
+    /// guard makes re-entry free.
+    private func ensureMotion(for visual: PillVisual?) {
+        guard motionVisual != visual else { return }
+        stopMotionAnimations()
+        guard !frozenMotion else {
+            motionVisual = visual
+            return
+        }
+        switch visual {
+        case .bars:
+            startBreatheAnimation()
+        case .dots, .dotsSpinner:
+            startChaseAnimation()
+        case .flash, .message, .none:
+            break
+        }
+        motionVisual = visual
+    }
+
+    /// Traveling brightness wave: every dot runs the SAME 12-sample pulse
+    /// (sampled from VisualizerMath so pixels agree with the tested model),
+    /// staggered by one dot-step via beginTime. At commit time the wave is
+    /// already mid-flight — no spin-up pop. Interpolated on the render
+    /// server at display refresh; the MainActor does nothing per frame.
+    private func startChaseAnimation() {
+        let cycle = Self.chaseCycle
+        let step = cycle / Double(VisualizerMath.dotCount)
+        let samples = 12
+        let values: [NSNumber] = (0..<samples).map { j in
+            NSNumber(value: VisualizerMath.dotOpacityContinuous(
+                index: 0, head: Double(j) * Double(VisualizerMath.dotCount) / Double(samples)
+            ))
+        }
+        let keyTimes: [NSNumber] = (0..<samples).map { j in
+            NSNumber(value: Double(j) / Double(samples - 1))
+        }
+        let t0 = CACurrentMediaTime()
+        for (i, dot) in chaseLayers.enumerated() {
+            let anim = CAKeyframeAnimation(keyPath: "opacity")
+            anim.values = values
+            anim.keyTimes = keyTimes
+            anim.duration = cycle
+            anim.repeatCount = .infinity
+            anim.isRemovedOnCompletion = false
+            // Negative stagger: dot i is already i steps into its cycle,
+            // so dot 0 is brightest and the tail falls off — instantly.
+            anim.beginTime = t0 - Double(i) * step
+            dot.opacity = 1
+            dot.add(anim, forKey: Self.chaseKey)
+        }
+    }
+
+    /// Red-dot breathe: 2 s period (1 s out, 1 s back), 1.0 ↔ 0.55 — the
+    /// same range as VisualizerMath.breatheOpacityContinuous.
+    private func startBreatheAnimation() {
+        let anim = CABasicAnimation(keyPath: "opacity")
+        anim.fromValue = 1.0
+        anim.toValue = 0.55
+        anim.duration = 1.0
+        anim.autoreverses = true
+        anim.repeatCount = .infinity
+        anim.isRemovedOnCompletion = false
+        recordDot.opacity = 1
+        recordDot.add(anim, forKey: Self.breatheKey)
+    }
+
+    private func stopMotionAnimations() {
+        chaseLayers.forEach { $0.removeAnimation(forKey: Self.chaseKey) }
+        recordDot.removeAnimation(forKey: Self.breatheKey)
+        motionVisual = nil
+    }
+
+    /// Per-data-push values (voice clock, ≤30 Hz). Touches ONLY data-driven
+    /// properties: bar scales + label text. Chase/breathe live on the render
+    /// server (see above) and are never poked here — data rate and motion
+    /// rate are independent clocks by design.
+    func update(values: [Float], text: String?, centerText: Bool, reduceMotion: Bool) {
+        if reduceMotion != frozenMotion {
+            frozenMotion = reduceMotion
+            // Force motion re-evaluation on the freeze/unfreeze edge.
+            motionVisual = nil
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        switch currentVisual {
-        case .bars:
+        if currentVisual == .bars {
             for (i, bar) in barLayers.enumerated() {
                 let level: CGFloat = if reduceMotion { 0.3 } else {
                     CGFloat(i < values.count ? values[i] : 0)
                 }
                 bar.transform = CATransform3DMakeScale(1, max(0.02, level), 1)
             }
-            recordDot.opacity = reduceMotion ? 1 : Float(VisualizerMath.breatheOpacity(tick: frozenTick))
-        case .dots, .dotsSpinner, .flash, .none:
-            for (i, dot) in chaseLayers.enumerated() {
-                dot.opacity = reduceMotion ? 0.6 : Float(VisualizerMath.dotOpacity(index: i, tick: frozenTick))
-            }
-        case .message:
+        }
+        if currentVisual == .message {
             if let text { label.stringValue = text }
             label.alignment = centerText ? .center : .left
         }
+        if reduceMotion {
+            // Frozen: statics only, no animations (Reduce Motion contract).
+            if currentVisual == .bars { recordDot.opacity = 1 }
+            if currentVisual == .dots || currentVisual == .dotsSpinner {
+                chaseLayers.forEach { $0.opacity = 0.6 }
+            }
+        }
         CATransaction.commit()
+        if reduceMotion {
+            stopMotionAnimations()
+            motionVisual = currentVisual
+        } else {
+            ensureMotion(for: currentVisual)
+        }
         if currentVisual == .dotsSpinner, !reduceMotion { spinner.startAnimation(nil) }
         else { spinner.stopAnimation(nil) }
         spinner.isHidden = reduceMotion || currentVisual != .dotsSpinner
@@ -246,4 +392,17 @@ final class PillContentView: NSView {
     func barScaleY(_ i: Int) -> CGFloat { barLayers[i].transform.m22 }
     func spinnerHidden() -> Bool { spinner.isHidden }
     func labelText() -> String { label.stringValue }
+    func chaseHasAnimation() -> Bool {
+        chaseLayers.allSatisfy { $0.animation(forKey: Self.chaseKey) != nil }
+    }
+    func chaseAnimationCount() -> Int {
+        chaseLayers.filter { $0.animation(forKey: Self.chaseKey) != nil }.count
+    }
+    func chaseBeginTime(_ i: Int) -> TimeInterval {
+        chaseLayers[i].animation(forKey: Self.chaseKey)?.beginTime ?? -1
+    }
+    func breatheHasAnimation() -> Bool {
+        recordDot.animation(forKey: Self.breatheKey) != nil
+    }
+    func contentMaskedToBounds() -> Bool { layer?.masksToBounds == true }
 }

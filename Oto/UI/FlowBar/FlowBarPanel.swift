@@ -123,17 +123,18 @@ final class FlowBarPanel {
     /// value sets with implicit actions disabled. No hierarchy exists to
     /// rebuild — this is why v3 can't lag the v2 way.
     func render(
-        visual: PillVisual, values: [Float], tick: UInt64,
+        visual: PillVisual, values: [Float],
         text: String?, centerText: Bool, reduceMotion: Bool, animated: Bool
     ) {
         content.show(visual: visual, animated: animated)
         content.layout(width: currentWidth)
-        content.update(values: values, tick: tick, text: text, centerText: centerText, reduceMotion: reduceMotion)
+        content.update(values: values, text: text, centerText: centerText, reduceMotion: reduceMotion)
     }
 
-    /// Render-server fade of the whole content (v4 finishing). Completion
-    /// runs after the fade; the caller owns orderOut + generation guards.
-    func fadeContentOut(duration: TimeInterval = 0.18) {
+    /// Render-server fade of the whole content (v5 liquid-quick vanish:
+    /// 0.12s easeIn). Completion runs after the fade; the caller owns
+    /// orderOut + generation guards.
+    func fadeContentOut(duration: TimeInterval = 0.12) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -170,8 +171,11 @@ final class FlowBarPanel {
         )
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.28
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                // Liquid-quick (v5): 0.20s easeOut — the window lands fast
+                // with a soft settle, matched by the bg-path morph in
+                // PillContentView.layout. (Was 0.28 easeInEaseOut: floaty.)
+                context.duration = 0.20
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().setFrame(frame, display: true)
             }
         } else {

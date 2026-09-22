@@ -24,7 +24,7 @@ final class FlowBarModel {
     /// widens the pill while set; the controller clears it on deadline.
     private(set) var notice: String?
     /// Set by the controller from the Reduce Motion indicator each poll.
-    /// Frozen: levels ignored (bars hold), tick held (chase/spinner still).
+    /// Frozen: levels ignored (bars hold statically), animations off.
     var motionFrozen = false
 
     private var smoothed = [Float](repeating: 0, count: VisualizerMath.barCount)

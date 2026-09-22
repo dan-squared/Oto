@@ -6,15 +6,19 @@
 //  Views own no constants; the analyzer owns no smoothing. Realism comes
 //  from real band data shaped here: fast attack / slow release (consonants
 //  snap, vowels decay), a hard floor (bars never vanish), log-mapped band
-//  levels, and deterministic chase/spinner phases off the sample tick.
+//  levels, and a continuous chase/breathe curve sampled by the render-server
+//  animations (the legacy tick wrappers pin the same curve at integer
+//  phases — deterministic, no wall-clock in tests).
 //
 
 import CoreGraphics
 import Foundation
 
 /// One visualizer frame. Raw band levels 0…1 (count == barCount);
-/// `tick` advances once per publish and drives all indeterminate motion
-/// (dots chase, spinner, breathe) — deterministic, no wall-clock in views.
+/// `tick` advances once per publish (analyzer → model smoothing clock).
+/// Indeterminate motion (chase, breathe) ignores it — the pill's
+/// render-server animations sample VisualizerMath's continuous curve, so
+/// the loader stays alive with no audio and costs zero MainActor time.
 struct BarSample: Equatable, Sendable {
     // Explicit nonisolated equality (FlowBarState.swift precedent).
     nonisolated static func == (lhs: BarSample, rhs: BarSample) -> Bool {
@@ -54,8 +58,6 @@ enum VisualizerMath {
     nonisolated static let spinnerSize: CGFloat = 16
     /// Dots in the working chase.
     nonisolated static let dotCount = 9
-    /// Spinner step per tick: 60° @ ~6.7 ticks/s ≈ 0.9 s/rev.
-    nonisolated static let spinnerStep = Double.pi / 3
 
     /// Panel widths per pill case (pt). Width motion itself is owned by
     /// the AppKit frame animation; this table is the target.
@@ -127,25 +129,31 @@ enum VisualizerMath {
         }
     }
 
-    // MARK: - Indeterminate motion (all f(tick), no wall-clock)
+    // MARK: - Indeterminate motion (display-link phase, no wall-clock)
 
     /// Dots-chase opacity: the head dot is brightest, tail falls off over
     /// ~3 dots. Head advances one dot per tick, wraps.
     nonisolated static func dotOpacity(index: Int, tick: UInt64, count: Int = dotCount) -> Double {
+        dotOpacityContinuous(index: index, head: Double(tick % UInt64(count)), count: count)
+    }
+
+    /// Continuous chase head (fractional — display-link driven). The
+    /// integer version above is one sample of this function.
+    nonisolated static func dotOpacityContinuous(index: Int, head: Double, count: Int = dotCount) -> Double {
         guard count > 0 else { return 0.25 }
-        let head = Int(tick % UInt64(count))
-        var distance = abs(index - head)
-        distance = min(distance, count - distance)
-        return 0.25 + 0.75 * max(0, 1 - Double(distance) / 3)
+        var distance = abs(Double(index) - head)
+        distance = min(distance, Double(count) - distance)
+        return 0.25 + 0.75 * max(0, 1 - distance / 3)
     }
 
-    /// Spinner angle (radians) for a tick.
-    nonisolated static func spinnerAngle(tick: UInt64) -> Double {
-        Double(tick) * spinnerStep
+    /// Red-dot breathe opacity: 2 s period on the 60 fps display-link phase.
+    nonisolated static func breatheOpacityContinuous(phase: Double) -> Double {
+        0.55 + 0.45 * (0.5 + 0.5 * cos(phase * Double.pi * 2 / 120))
     }
 
-    /// Red-dot breathe opacity: 2 s period at ~6.7 ticks/s.
+    /// Legacy tick-based breathe (analyzer clock). Superseded by the
+    /// display-link phase above; kept for API stability, unused by views.
     nonisolated static func breatheOpacity(tick: UInt64) -> Double {
-        0.55 + 0.45 * (0.5 + 0.5 * cos(Double(tick) * Double.pi / 6.7))
+        breatheOpacityContinuous(phase: Double(tick) * 4)
     }
 }
