@@ -28,7 +28,8 @@ struct FlowBarControllerTests {
 
     private func makeSUT(
         insertionResult: InsertionResult = .inserted,
-        pasteboard: NSPasteboard? = nil
+        pasteboard: NSPasteboard? = nil,
+        micDenied: Bool = false
     ) -> (
         controller: FlowBarController,
         coordinator: DictationCoordinator,
@@ -45,7 +46,8 @@ struct FlowBarControllerTests {
                 processIdentifier: 1234
             )),
             inserter: FakeTextInsertion(result: insertionResult),
-            history: nil
+            history: nil,
+            micDeniedOverride: { false }
         )
         let box = SpectrumFeedBox()
         let permission = PermissionModalController()
@@ -55,7 +57,8 @@ struct FlowBarControllerTests {
             box: box,
             modal: NoTargetModalController(),
             permission: permission,
-            pasteboard: board
+            pasteboard: board,
+            isMicDenied: { micDenied }
         )
         return (controller, coordinator, box, board, permission)
     }
@@ -158,7 +161,8 @@ struct FlowBarControllerTests {
                 processIdentifier: 1234
             )),
             inserter: FakeTextInsertion(result: .inserted),
-            history: nil
+            history: nil,
+            micDeniedOverride: { false }
         )
         let controller = FlowBarController(
             coordinator: denied,
@@ -166,7 +170,8 @@ struct FlowBarControllerTests {
             box: SpectrumFeedBox(),
             modal: NoTargetModalController(),
             permission: PermissionModalController(),
-            pasteboard: scratchBoard()
+            pasteboard: scratchBoard(),
+            isMicDenied: { false }
         )
         _ = await denied.beginHold()
         await waitFor(denied) { if case .failed = $0 { true } else { false } }
@@ -201,7 +206,8 @@ struct FlowBarControllerTests {
                 processIdentifier: 1234
             )),
             inserter: FakeTextInsertion(result: .inserted),
-            history: nil
+            history: nil,
+            micDeniedOverride: { false }
         )
         let controller = FlowBarController(
             coordinator: denied,
@@ -209,7 +215,8 @@ struct FlowBarControllerTests {
             box: SpectrumFeedBox(),
             modal: NoTargetModalController(),
             permission: PermissionModalController(),
-            pasteboard: scratchBoard()
+            pasteboard: scratchBoard(),
+            isMicDenied: { false }
         )
         defer { Task { @MainActor in controller.permission.hide() } }
         _ = await denied.beginHold()
@@ -220,5 +227,43 @@ struct FlowBarControllerTests {
         // Second poll: once per transition — no reshow, no duplicate.
         await controller.pollOnce()
         #expect(controller.permission.isVisible)
+    }
+
+    @Test func micGateSuppressesPillEntirelyWhenDenied() async throws {
+        // No-flash workstream: with mic denied the pill never renders —
+        // not during starting, not during recording. (Fakes don't gate on
+        // mic, so recording is reachable here and still pill-free.)
+        let sut = makeSUT(micDenied: true)
+        let id = await sut.coordinator.beginHold()
+        #expect(id != nil)
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+        #expect(!sut.controller.isLiveValues)
+        // The gate is view-layer only: state truth still projects.
+        #expect(sut.controller.model.projection.state == .recording)
+        await sut.coordinator.finish(id!)
+        await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
+    }
+
+    @Test func liveValuesLinkRunsWhileBarsAreLive() async throws {
+        // Fluid-waves workstream: the vsync link owns bar transforms while
+        // bars show, and dies with the vanish path.
+        let sut = makeSUT()
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        #expect(sut.controller.isLiveValues)
+        await sut.coordinator.finish(id!)
+        await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        try? await Task.sleep(for: .milliseconds(300))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isLiveValues)
+        #expect(!sut.controller.isPillVisible)
     }
 }

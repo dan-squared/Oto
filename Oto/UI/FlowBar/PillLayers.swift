@@ -5,13 +5,13 @@
 //  Slice 6B v5: the pill's GPU renderer. One layer-backed NSView, zero
 //  SwiftUI: background + bars + dots are CALayers, the spinner is a native
 //  NSProgressIndicator, text is a static NSTextField. Motion is two clocks:
-//  DATA (bar levels, ≤30 Hz property sets with actions disabled) and MOTION
+//  DATA (bar levels, ~60 Hz vsync sets with actions disabled) and MOTION
 //  (chase glide + red-dot breathe as infinite CAAnimations interpolating on
 //  the render server — zero MainActor work per frame, no timers, no Metal).
 //  Overflow is caged by masksToBounds (sublayers) + clipsToBounds (subviews).
 //
-//  Geometry: mini (112×32 recording). Elements shrink, count stays:
-//  8 thin bars, 9 chase dots, 8px record dot with no ring.
+//  Geometry: compact (84×24 recording). Elements shrink, count stays:
+//  8 thin bars, 9 chase dots, 6px record dot with no ring.
 //
 
 import AppKit
@@ -52,8 +52,8 @@ protocol PillDragDelegate: AnyObject {
 
 @MainActor
 final class PillContentView: NSView {
-    nonisolated static let barFullHeight: CGFloat = 20
-    nonisolated static let padding: CGFloat = 10
+    nonisolated static let barFullHeight: CGFloat = 15
+    nonisolated static let padding: CGFloat = 7.5
 
     private let bg = CAShapeLayer()
     private let recordDot = CALayer()
@@ -184,10 +184,10 @@ final class PillContentView: NSView {
 
         // Recording block: dot + gap + bars, centered.
         let barsBlock = CGFloat(VisualizerMath.barCount) * VisualizerMath.barPitch
-        let recordBlock = VisualizerMath.recordDot + 6 + barsBlock
+        let recordBlock = VisualizerMath.recordDot + 4.5 + barsBlock
         var x = (width - recordBlock) / 2
         recordDot.position = CGPoint(x: x + VisualizerMath.recordDot / 2, y: midY)
-        x += VisualizerMath.recordDot + 6
+        x += VisualizerMath.recordDot + 4.5
         for (i, bar) in barLayers.enumerated() {
             bar.position = CGPoint(x: x + CGFloat(i) * VisualizerMath.barPitch + VisualizerMath.barPitch / 2, y: midY)
         }
@@ -196,13 +196,13 @@ final class PillContentView: NSView {
         let dotsBlock = CGFloat(VisualizerMath.dotCount - 1) * VisualizerMath.chasePitch + VisualizerMath.chaseDot
         var dotsX = (width - dotsBlock) / 2
         if currentVisual == .dotsSpinner {
-            dotsX = (width - (dotsBlock + 8 + VisualizerMath.spinnerSize)) / 2
+            dotsX = (width - (dotsBlock + 6 + VisualizerMath.spinnerSize)) / 2
         }
         for (i, dot) in chaseLayers.enumerated() {
             dot.position = CGPoint(x: dotsX + CGFloat(i) * VisualizerMath.chasePitch + VisualizerMath.chaseDot / 2, y: midY)
         }
         spinner.setFrameOrigin(NSPoint(
-            x: dotsX + dotsBlock + 8,
+            x: dotsX + dotsBlock + 6,
             y: midY - VisualizerMath.spinnerSize / 2
         ))
 
@@ -359,7 +359,7 @@ final class PillContentView: NSView {
     /// properties: bar scales + label text. Chase/breathe live on the render
     /// server (see above) and are never poked here — data rate and motion
     /// rate are independent clocks by design.
-    func update(values: [Float], text: String?, centerText: Bool, reduceMotion: Bool) {
+    func update(values: [Float], text: String?, centerText: Bool, reduceMotion: Bool, liveValues: Bool = false) {
         if reduceMotion != frozenMotion {
             frozenMotion = reduceMotion
             // Force motion re-evaluation on the freeze/unfreeze edge.
@@ -391,7 +391,7 @@ final class PillContentView: NSView {
                 stopSway()
             }
         }
-        if currentVisual == .bars {
+        if currentVisual == .bars, !liveValues {
             CATransaction.begin()
             if reduceMotion {
                 CATransaction.setDisableActions(true)
@@ -401,6 +401,8 @@ final class PillContentView: NSView {
                 // 6.7Hz poll steps read as stiffness; attack/release still
                 // shape the targets, so voice character is unchanged —
                 // only the stepping is gone.
+                // (Live display-link path skips this block entirely —
+                // setLiveLevels below owns transforms at vsync.)
                 CATransaction.setAnimationDuration(0.12)
                 CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
             }
@@ -421,6 +423,20 @@ final class PillContentView: NSView {
         if currentVisual == .dotsSpinner, !reduceMotion { spinner.startAnimation(nil) }
         else { spinner.stopAnimation(nil) }
         spinner.isHidden = reduceMotion || currentVisual != .dotsSpinner
+    }
+
+    /// Vsync values path (display link owns delivery): instant 1:1 sets,
+    /// no glide. At 60/120 Hz the data IS the motion — a 0.12s glide
+    /// would smear it. Actions disabled, no allocation, MainActor-only.
+    func setLiveLevels(_ values: [Float]) {
+        guard currentVisual == .bars else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, bar) in barLayers.enumerated() {
+            let level: CGFloat = i < values.count ? CGFloat(values[i]) : 0
+            bar.transform = CATransform3DMakeScale(1, max(0.02, level), 1)
+        }
+        CATransaction.commit()
     }
 
     /// Group visibility with a render-server fade. Model values flip

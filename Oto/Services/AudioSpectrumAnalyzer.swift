@@ -6,7 +6,7 @@
 //  bufferHandler (`relay.receive` + `box.offer`) — attaching to the relay
 //  would DETACH speech (single sink, AudioBufferRelay.swift:72), so the
 //  fork is the only low-risk feed. Own converter instance (never shares
-//  the speech path's), vDSP bands off the main thread, ≤30 Hz immutable
+//  the speech path's), vDSP bands off the main thread, ~60 Hz immutable
 //  publish. `stop()` guarantees silence after (tested).
 //
 //  Threading: the box is realtime-safe (lock-shaped, @unchecked Sendable,
@@ -67,7 +67,7 @@ final class SpectrumFeedBox: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Consume-once: the analyzer drains at ≤30 Hz; anything not taken is
+    /// Consume-once: the analyzer drains at ~60 Hz; anything not taken is
     /// stale by definition.
     nonisolated func takeLatest() -> AVAudioPCMBuffer? {
         lock.lock()
@@ -165,7 +165,8 @@ final class SpectrumEngine: @unchecked Sendable {
     }
 }
 
-/// Owns the analyzer loop. `start` arms the box + spawns the ≤30 Hz drain;
+/// Owns the analyzer loop. `start` arms the box + spawns the ~60 Hz drain
+/// (16 ms: vsync-grade band levels for the display-link render path);
 /// `stop` cancels, awaits termination, disarms, and publishes silence —
 /// post-stop reads are silent, guaranteed (tested). Zero changes to the
 /// tap/relay/debounce/speech paths.
@@ -195,7 +196,7 @@ actor AudioSpectrumAnalyzer {
 
     private func drain() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(33))
+            try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled else { break }
             guard let box, let model else { continue }
             guard let buffer = box.takeLatest() else { continue }

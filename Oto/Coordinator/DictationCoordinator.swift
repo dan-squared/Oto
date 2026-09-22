@@ -39,6 +39,12 @@ actor DictationCoordinator {
     private var currentSessionID: UUID?
     private var sessionContext: SessionContext?
     private var finishRequested = false
+    /// Mic fast-fail gate (no-flash workstream): when denied, preparation
+    /// fails with `.microphoneDenied` before audio starts. Production reads
+    /// the synchronous record permission on the MainActor (this actor is
+    /// not the MainActor — default project isolation is); tests inject a
+    /// pure override so they never touch TCC (nil = real read).
+    private let micDeniedOverride: (@Sendable () -> Bool)?
 
     /// Phase 1 observability: state transitions are the only visible trace
     /// of fake sessions (no Flow Bar yet). Watch in Console.app.
@@ -50,7 +56,8 @@ actor DictationCoordinator {
         targetService: any TargetCapturing,
         inserter: any TextInserting,
         pipeline: TranscriptPipeline = TranscriptPipeline(),
-        history: HistoryStore?
+        history: HistoryStore?,
+        micDeniedOverride: (@Sendable () -> Bool)? = nil
     ) {
         self.audio = audio
         self.speech = speech
@@ -58,6 +65,7 @@ actor DictationCoordinator {
         self.inserter = inserter
         self.pipeline = pipeline
         self.history = history
+        self.micDeniedOverride = micDeniedOverride
     }
 
     /// Live rule refresh from the dictionary store (Writing pane saves).
@@ -206,6 +214,25 @@ actor DictationCoordinator {
               let context = sessionContext,
               context.id == sessionID
         else { return }
+
+        // Mic fast-fail (no-flash workstream): denial is knowable before
+        // any audio spins up — fail without starting the engine so neither
+        // work nor pill pixels are spent on a session that cannot record.
+        // Cancel still wins (identity re-check, same as every path here).
+        let micDenied: Bool
+        if let override = micDeniedOverride {
+            micDenied = override()
+        } else {
+            micDenied = await MainActor.run {
+                PermissionsManager().microphoneStatus() == .denied
+            }
+        }
+        if micDenied {
+            guard currentSessionID == sessionID else { return }
+            currentSessionID = nil
+            state = .failed(context, .microphoneDenied)
+            return
+        }
 
         do {
             try await audio.start()

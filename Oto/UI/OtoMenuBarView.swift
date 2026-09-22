@@ -20,6 +20,7 @@ struct OtoMenuBarView: View {
     @State private var status = "idle — no session yet"
     @State private var recoveryAvailable = false
     @State private var feedback: String?
+    @State private var escapeUnavailable = false
 
     var body: some View {
         Text(feedback ?? status)
@@ -30,9 +31,18 @@ struct OtoMenuBarView: View {
                 // here so a previous "Posted" line never greets the next open.
                 feedback = nil
                 dispatch.refreshAvailability()
+                escapeUnavailable = !dispatch.isEscapeCancelAvailable
                 status = await coordinator.lastSessionSummary()
                 recoveryAvailable = await coordinator.recoveryText() != nil
             }
+
+        // Escape rides the HID tap (needs Accessibility); combo triggers
+        // work without it — so on a combo with no tap, dictation works
+        // while Escape cancel silently wouldn't. Name it (menu row only,
+        // never a new surface) instead of failing silent.
+        if escapeUnavailable {
+            Text("Escape cancel unavailable — grant Accessibility in Settings")
+        }
 
         // Recovery lives here until the Flow Bar (Phase 6): 02 demands a
         // product home for Copy/Retry, and the diagnostics section is dead. Shown only while

@@ -29,6 +29,11 @@ final class FlowBarPanel {
     /// single-screen sign-off covers fallbacks only.
     private(set) var lastStep = 0
     private(set) var currentWidth: CGFloat = 0
+    /// Vsync values-link state (fluid waves). Nil unless bars are live.
+    private var valuesLink: CADisplayLink?
+    private var liveSource: FlowBarModel?
+    /// Test hook: display link active (bars rendering at vsync).
+    var isLiveValues: Bool { valuesLink != nil }
     /// Drag-and-snap state (Phase 8). While true the controller renders
     /// content but never moves geometry — the finger owns the frame.
     private(set) var isDragging = false
@@ -142,11 +147,40 @@ final class FlowBarPanel {
     /// rebuild — this is why v3 can't lag the v2 way.
     func render(
         visual: PillVisual, values: [Float],
-        text: String?, centerText: Bool, reduceMotion: Bool, animated: Bool
+        text: String?, centerText: Bool, reduceMotion: Bool, animated: Bool,
+        liveValues: Bool = false
     ) {
         content.show(visual: visual, animated: animated)
         content.layout(width: currentWidth)
-        content.update(values: values, text: text, centerText: centerText, reduceMotion: reduceMotion)
+        content.update(values: values, text: text, centerText: centerText, reduceMotion: reduceMotion, liveValues: liveValues)
+    }
+
+    // MARK: - Vsync values loop (fluid waves)
+
+    /// While a source is set, a display-vsync link pushes the latest
+    /// sample to the bars every frame with implicit actions disabled —
+    /// 1:1 motion at the display rate. The 150 ms controller poll keeps
+    /// group switching + geometry and passes liveValues:true to render
+    /// while the link owns transforms, so the two clocks never fight.
+    /// Nil source stops the link. Link: `NSView.displayLink` (macOS
+    /// spelling — `+displayLinkWithTarget:selector:` is iOS-only).
+    func setLiveValues(_ source: FlowBarModel?) {
+        guard source != nil else {
+            valuesLink?.invalidate()
+            valuesLink = nil
+            liveSource = nil
+            return
+        }
+        liveSource = source
+        guard valuesLink == nil else { return }
+        let link = content.displayLink(target: self, selector: #selector(pushLiveValues(_:)))
+        link.add(to: .main, forMode: .common)
+        valuesLink = link
+    }
+
+    @objc private func pushLiveValues(_ link: CADisplayLink) {
+        guard let source = liveSource else { return }
+        content.setLiveLevels(source.sample.values)
     }
 
     /// Render-server fade of the whole content (v5 liquid-quick vanish:
@@ -167,6 +201,7 @@ final class FlowBarPanel {
 
     /// Order out + leave the content visible for next show.
     func hideNow() {
+        setLiveValues(nil)
         panel.orderOut(nil)
         content.alphaValue = 1
     }
@@ -174,6 +209,7 @@ final class FlowBarPanel {
     func hide() {
         // Cancel-before-orderOut invariant (09 §2.2 class): tasks die in
         // the controller before this runs; orderOut is the last step.
+        setLiveValues(nil)
         panel.orderOut(nil)
     }
 

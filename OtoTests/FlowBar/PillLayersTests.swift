@@ -26,9 +26,9 @@ struct PillLayersTests {
     }
 
     @Test func barsGroupShowsBarsOnly() {
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 112, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 84, height: 24))
         pill.show(visual: .bars)
-        pill.layout(width: 112)
+        pill.layout(width: 84)
         pill.update(values: [1, 0, 0, 0, 0, 0, 0, 0], text: nil, centerText: false, reduceMotion: false)
         #expect(pill.barOpacity(0) == 1)
         #expect(pill.dotOpacity() == 1)
@@ -47,9 +47,9 @@ struct PillLayersTests {
         // v6 "waves move a bit" (v7: from the raised floor): silence sways
         // gently on the render server; the first voice poll evicts it and
         // live values show through.
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 112, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 84, height: 24))
         pill.show(visual: .bars)
-        pill.layout(width: 112)
+        pill.layout(width: 84)
         pill.update(
             values: [Float](repeating: VisualizerMath.floor, count: VisualizerMath.barCount),
             text: nil, centerText: false, reduceMotion: false
@@ -67,9 +67,9 @@ struct PillLayersTests {
     @Test func swayDiesOnGroupSwitch() {
         // Leaving bars kills the sway with everything else — a dying wave
         // must never outlive its group (same overflow class as v4 F1b).
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 112, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 84, height: 24))
         pill.show(visual: .bars)
-        pill.layout(width: 112)
+        pill.layout(width: 84)
         pill.update(
             values: [Float](repeating: 0.10, count: VisualizerMath.barCount),
             text: nil, centerText: false, reduceMotion: false
@@ -81,9 +81,9 @@ struct PillLayersTests {
     }
 
     @Test func dotsSpinnerShowsChaseAndNativeSpinner() {
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 87, height: 24))
         pill.show(visual: .dotsSpinner)
-        pill.layout(width: 116)
+        pill.layout(width: 87)
         pill.update(values: [], text: nil, centerText: false, reduceMotion: false)
         // Pixels glide on the render server (v5); the model holds 1 under
         // the wave. Presence + full coverage is the contract.
@@ -94,9 +94,9 @@ struct PillLayersTests {
     }
 
     @Test func dotsWithoutSpinnerHidesNativeSpinner() {
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 87, height: 24))
         pill.show(visual: .dots)
-        pill.layout(width: 116)
+        pill.layout(width: 87)
         pill.update(values: [], text: nil, centerText: false, reduceMotion: false)
         #expect(pill.spinnerHidden())
         #expect(pill.chaseHasAnimation())
@@ -106,9 +106,9 @@ struct PillLayersTests {
         // v5 stutter guard: the 150 ms poll re-calls show/update with the
         // same visual 6.7×/s. Restarting the CAAnimation there would rewind
         // the wave every poll. beginTime must survive a repoll untouched.
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 87, height: 24))
         pill.show(visual: .dotsSpinner)
-        pill.layout(width: 116)
+        pill.layout(width: 87)
         pill.update(values: [], text: nil, centerText: false, reduceMotion: false)
         let t1 = pill.chaseBeginTime(3)
         pill.show(visual: .dotsSpinner)
@@ -117,9 +117,9 @@ struct PillLayersTests {
     }
 
     @Test func messageShowsLabelOnly() {
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 200, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 150, height: 24))
         pill.show(visual: .message)
-        pill.layout(width: 200)
+        pill.layout(width: 150)
         pill.update(values: [], text: "No audio heard.", centerText: false, reduceMotion: false)
         #expect(pill.labelText() == "No audio heard.")
         #expect(pill.barOpacity(0) == 0)
@@ -129,9 +129,9 @@ struct PillLayersTests {
     }
 
     @Test func reduceMotionFreezesEverything() {
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 112, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 84, height: 24))
         pill.show(visual: .bars)
-        pill.layout(width: 112)
+        pill.layout(width: 84)
         pill.update(values: [1, 1, 1, 1, 1, 1, 1, 1], text: nil, centerText: false, reduceMotion: true)
         #expect(abs(pill.barScaleY(0) - 0.3) < 0.001)
         #expect(!pill.breatheHasAnimation())
@@ -146,7 +146,7 @@ struct PillLayersTests {
         // v4 set clipsToBounds (subviews); v5 adds masksToBounds (sublayers
         // — all the artwork). The second is the one that actually cages the
         // dots; assert both so neither regresses.
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 64, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 48, height: 24))
         #expect(pill.clipsToBounds)
         #expect(pill.contentMaskedToBounds())
     }
@@ -156,13 +156,13 @@ struct PillLayersTests {
         // must zero the outgoing group AND remove its render-server wave,
         // so no animation overrides the kill. Loader → message exercises
         // the same path the old loader → flash did.
-        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 87, height: 24))
         pill.show(visual: .dotsSpinner)
-        pill.layout(width: 116)
+        pill.layout(width: 87)
         pill.update(values: [], text: nil, centerText: false, reduceMotion: false)
         #expect(pill.chaseHasAnimation())
         pill.show(visual: .message, animated: false)
-        pill.layout(width: 200)
+        pill.layout(width: 150)
         #expect(!pill.chaseHasAnimation())
         #expect(pill.chaseOpacity(3) == 0)
         #expect(pill.labelText() == "")

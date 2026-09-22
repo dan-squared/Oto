@@ -14,10 +14,10 @@ import Testing
 @MainActor
 struct VisualizerMathTests {
     @Test func attackSnapsFasterThanRelease() {
-        // Rising: 55% of the gap in one step.
-        #expect(abs(VisualizerMath.smoothStep(current: 0, target: 1) - 0.55) < 0.001)
-        // Falling: 12% of the gap — vowels visibly decay.
-        #expect(abs(VisualizerMath.smoothStep(current: 1, target: 0) - 0.88) < 0.001)
+        // Rising: 45% of the gap in one ~16 ms step (≈28 ms snap).
+        #expect(abs(VisualizerMath.smoothStep(current: 0, target: 1) - 0.45) < 0.001)
+        // Falling: 8% of the gap — vowels visibly decay (≈190 ms grace).
+        #expect(abs(VisualizerMath.smoothStep(current: 1, target: 0) - 0.92) < 0.001)
     }
 
     @Test func targetsClamp() {
@@ -97,22 +97,23 @@ struct VisualizerMathTests {
     }
 
     @Test func widthsAreMini() {
-        #expect(VisualizerMath.panelWidth(for: .recording) == 112)
+        #expect(VisualizerMath.panelWidth(for: .recording) == 84)
         // v6: preparing == recording — waves from frame one, zero resize.
-        #expect(VisualizerMath.panelWidth(for: .preparing) == 112)
-        #expect(VisualizerMath.panelWidth(for: .finalizing) == 116)
-        #expect(VisualizerMath.panelWidth(for: .inserting) == 116)
+        #expect(VisualizerMath.panelWidth(for: .preparing) == 84)
+        #expect(VisualizerMath.panelWidth(for: .finalizing) == 87)
+        #expect(VisualizerMath.panelWidth(for: .inserting) == 87)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
         // v7: no failure arm (errors never reach the pill); the only wide
         // pill is the transient notice.
-        #expect(VisualizerMath.noticeWidth == 200)
-        // Mini v3: half the v2 area (152×44=6688 → 112×32=3584).
-        #expect(VisualizerMath.panelWidth(for: .recording) <= 116)
-        #expect(VisualizerMath.pillHeight == 32)
+        #expect(VisualizerMath.noticeWidth == 150)
+        // Compact: 0.75× the v3 mini in every linear dimension
+        // (112×32=3584 → 84×24=2016).
+        #expect(VisualizerMath.panelWidth(for: .recording) <= 87)
+        #expect(VisualizerMath.pillHeight == 24)
         // Elements shrink, count stays.
         #expect(VisualizerMath.barCount == 8)
-        #expect(VisualizerMath.barWidth == 3.5)
-        #expect(VisualizerMath.recordDot == 8)
+        #expect(VisualizerMath.barWidth == 2.625)
+        #expect(VisualizerMath.recordDot == 6)
     }
 
     @Test func swayLoopIsGentleAndAboveTheFloor() {

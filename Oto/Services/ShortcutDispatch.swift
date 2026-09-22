@@ -255,6 +255,24 @@ final class ShortcutDispatch {
         }
     }
 
+    /// Escape-cancel availability (escape workstream): Escape rides the
+    /// HID tap, which needs Accessibility trust — but combo triggers work
+    /// without AX. So on a combo with a dead tap, dictation works while
+    /// Escape cancel silently doesn't; the menu surfaces that instead of
+    /// lying. HID-trigger configs are dead as a whole without the tap
+    /// (calibration already reports it), so no second warning there.
+    var isEscapeCancelAvailable: Bool {
+        if case .combo = configuration.trigger.kind {
+            return hidMonitor.isLive
+        }
+        return true
+    }
+
+    /// Test hooks: drive Escape→cancel without hardware. Seeding mirrors
+    /// what route(.begin) stores on a real key-down.
+    func seedActiveSessionForTests(_ id: UUID) { activeSessionID = id }
+    func receiveEscapeForTests() { receiveEscape() }
+
     private func route(_ action: ShortcutTransition, mode: InteractionMode) {
         switch action {
         case .ignore, .reset:

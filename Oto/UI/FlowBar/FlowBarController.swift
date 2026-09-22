@@ -39,6 +39,10 @@ final class FlowBarController {
     /// Mic-denied mini modal (pill-slot card, not the pill).
     let permission: PermissionModalController
     private let pasteboard: NSPasteboard
+    /// Mic-denied gate (no-flash workstream): when true the pill never
+    /// shows — the permission card owns the surface. Injectable so tests
+    /// never touch TCC; production reads the synchronous record permission.
+    private let isMicDenied: () -> Bool
 
     private var panel: FlowBarPanel?
     private var pollTask: Task<Void, Never>?
@@ -59,7 +63,8 @@ final class FlowBarController {
         box: SpectrumFeedBox,
         modal: NoTargetModalController,
         permission: PermissionModalController,
-        pasteboard: NSPasteboard = .general
+        pasteboard: NSPasteboard = .general,
+        isMicDenied: @escaping () -> Bool = { PermissionsManager().microphoneStatus() == .denied }
     ) {
         self.coordinator = coordinator
         self.analyzer = analyzer
@@ -67,6 +72,7 @@ final class FlowBarController {
         self.modal = modal
         self.permission = permission
         self.pasteboard = pasteboard
+        self.isMicDenied = isMicDenied
         self.model = FlowBarModel()
     }
 
@@ -96,6 +102,10 @@ final class FlowBarController {
     }
 
     // MARK: - Poll
+
+    /// Test hooks: pill surface state without exposing the panel.
+    var isPillVisible: Bool { panel?.isVisible ?? false }
+    var isLiveValues: Bool { panel?.isLiveValues ?? false }
 
     private func pollLoop() async {
         while !Task.isCancelled {
@@ -190,6 +200,15 @@ final class FlowBarController {
             }
             return
         }
+        // Mic gate: denied owns the card, never the pill — not even during
+        // starting (the flash this kills: preparing bars showed for the
+        // whole audio.start + speech.prepare window before the failure
+        // existed). Card lifecycle stays in syncPermissionModal; transient
+        // notices still render (they confirm a finished session, not a live one).
+        if !hasNotice, isMicDenied() {
+            panel?.hide()
+            return
+        }
         let width: CGFloat
         if hasNotice {
             // v7: the ONLY wide pill — auto-copy confirmation. Failure
@@ -219,15 +238,21 @@ final class FlowBarController {
             )
         }
         if let visual = PillVisual.forState(projection.state) {
+            // Vsync values loop owns bar transforms while bars are live;
+            // the poll keeps group switching + geometry only (liveValues).
+            let live = visual == .bars && !model.motionFrozen
+            panel?.setLiveValues(live ? model : nil)
             panel?.render(
                 visual: visual,
                 values: model.sample.values,
                 text: model.notice,
                 centerText: model.notice != nil,
                 reduceMotion: model.motionFrozen,
-                animated: !shrink
+                animated: !shrink,
+                liveValues: live
             )
         } else if let notice = model.notice {
+            panel?.setLiveValues(nil)
             panel?.render(
                 visual: .message,
                 values: model.sample.values,

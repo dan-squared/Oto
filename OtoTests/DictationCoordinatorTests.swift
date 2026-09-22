@@ -27,7 +27,8 @@ struct DictationCoordinatorTests {
         finalText: String = "hello oto",
         insertionResult: InsertionResult = .inserted,
         prepareGateOpen: Bool = true,
-        finishError: (any Error)? = nil
+        finishError: (any Error)? = nil,
+        micDenied: Bool = false
     ) -> (
         coordinator: DictationCoordinator,
         audio: FakeAudioCapture,
@@ -48,7 +49,8 @@ struct DictationCoordinatorTests {
             speech: speech,
             targetService: target,
             inserter: inserter,
-            history: nil
+            history: nil,
+            micDeniedOverride: { micDenied }
         )
         return (coordinator, audio, speech, target, inserter)
     }
@@ -93,6 +95,19 @@ struct DictationCoordinatorTests {
         #expect(calls.count == 1)
         #expect(calls.first?.text == "hello oto")
         #expect(calls.first?.target == Self.stubTarget)
+    }
+
+    @Test func micDeniedFailsFastWithoutStartingAudio() async {
+        // No-flash workstream: denial is knowable upfront — preparation
+        // fails with .microphoneDenied before audio.start() ever runs.
+        let (coordinator, audio, _, _, _) = makeSUT(micDenied: true)
+        _ = await coordinator.beginHold()
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed(_, .microphoneDenied) = terminal else {
+            Issue.record("expected microphoneDenied, got \(terminal)")
+            return
+        }
+        #expect(await audio.startCalls == 0)
     }
 
     // MARK: - 2. Release during preparation finishes when ready

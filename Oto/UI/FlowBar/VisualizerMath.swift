@@ -38,40 +38,45 @@ enum VisualizerMath {
 
     /// Reference pill (8 thin capsule bars + small red dot).
     nonisolated static let barCount = 8
-    /// Consonants snap.
-    nonisolated static let attack: Float = 0.55
-    /// Vowels decay — the asymmetry that reads as "real".
-    nonisolated static let release: Float = 0.12
+    /// Consonants snap (per ~16 ms analyzer step — drain runs ~60 Hz;
+    /// rescaled from the 33 ms-era 0.55 via α'=1−(1−α)^r, then bumped
+    /// for feel: ≈28 ms snap time-constant).
+    nonisolated static let attack: Float = 0.45
+    /// Vowels decay — the asymmetry that reads as "real" (≈190 ms
+    /// time-constant at the 16 ms step: graceful, never laggy).
+    nonisolated static let release: Float = 0.08
     /// Bars never vanish (v7: floor 0.30 — silence reads as waves, never
     /// dots; "start from active waves" holds from frame one).
     nonisolated static let floor: Float = 0.30
-    /// Pill geometry (pt). Mini v3: half the v2 area, reference-matched.
-    nonisolated static let pillHeight: CGFloat = 32
+    /// Pill geometry (pt). Compact: 0.75× the v3 mini in every linear
+    /// dimension (112×32=3584 → 84×24=2016). Count stays 8 — elements
+    /// shrink, never vanish (v3 precedent).
+    nonisolated static let pillHeight: CGFloat = 24
     /// Thin-bar system (elements shrink, count stays 8).
-    nonisolated static let barWidth: CGFloat = 3.5
-    nonisolated static let barPitch: CGFloat = 8.5
+    nonisolated static let barWidth: CGFloat = 2.625
+    nonisolated static let barPitch: CGFloat = 6.375
     /// Small red dot, no ring.
-    nonisolated static let recordDot: CGFloat = 8
+    nonisolated static let recordDot: CGFloat = 6
     /// Chase dots (reference-proportioned).
-    nonisolated static let chaseDot: CGFloat = 3
-    nonisolated static let chasePitch: CGFloat = 8
+    nonisolated static let chaseDot: CGFloat = 2.25
+    nonisolated static let chasePitch: CGFloat = 6
     /// Native spinner footprint.
-    nonisolated static let spinnerSize: CGFloat = 16
+    nonisolated static let spinnerSize: CGFloat = 12
     /// Dots in the working chase.
     nonisolated static let dotCount = 9
 
     /// Panel widths per pill case (pt). Width motion itself is owned by
     /// the AppKit frame animation; this table is the target.
-    /// v6: preparing == recording (112) — starting→recording resizes
+    /// v6: preparing == recording (84) — starting→recording resizes
     /// nothing, waves from frame one. v7: no failure arm — errors never
     /// reach the pill; wide pills are notices via `noticeWidth`.
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
-        case .preparing: 112
-        case .recording: 112
-        case .finalizing: 116
-        case .inserting: 116
+        case .preparing: 84
+        case .recording: 84
+        case .finalizing: 87
+        case .inserting: 87
         }
     }
 
@@ -92,7 +97,7 @@ enum VisualizerMath {
     nonisolated static let swayStagger: Double = 0.2
     /// Transient notice (auto-copy confirmation) width — the only wide
     /// pill left (v7: failure panels are gone).
-    nonisolated static let noticeWidth: CGFloat = 200
+    nonisolated static let noticeWidth: CGFloat = 150
 
     // MARK: - Bar shaping
 

@@ -40,7 +40,8 @@ struct CoordinatorHistoryTests {
             speech: speech,
             targetService: target,
             inserter: inserter,
-            history: history
+            history: history,
+            micDeniedOverride: { false }
         )
         return (coordinator, speech, inserter)
     }
