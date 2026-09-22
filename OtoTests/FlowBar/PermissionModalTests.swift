@@ -28,13 +28,13 @@ struct PermissionModalTests {
     }
 
     @Test func geometryAndTimeoutPinned() {
-        #expect(PermissionCardView.maxWidth == 415)
+        #expect(PermissionCardView.maxWidth == 460)
         #expect(PermissionModalController.visibleDuration == 5.0)
     }
 
     @Test func widthFitsTheWords() {
-        // 12.5pt title + 18pt icon + button, fitted and clamped: the full
-        // words render (no truncation) inside the 415 ceiling.
+        // 12.5pt title + 18pt icon + button, string-measured, fitted and
+        // clamped: the full words render (no truncation) inside the 460 ceiling.
         let card = PermissionCardView(onGrant: nil)
         #expect(card.titleText() == "Microphone Permission Required")
         #expect(!card.titleClipped())
@@ -42,9 +42,15 @@ struct PermissionModalTests {
         #expect(card.contentWidth() > 300)
     }
 
+    @Test func titleCenteredOnIcon() {
+        // The centered-block fix: title and icon share a midline.
+        let card = PermissionCardView(onGrant: nil)
+        #expect(abs(card.titleMidY() - card.iconMidY()) < 0.5)
+    }
+
     @Test func buttonRadiusFollowsAppleConcentricFormula() {
-        // Inner = outer − gap: 18pt card minus the 12pt uniform inset.
-        #expect(PermissionCardView.buttonRadius == 6)
+        // Inner = outer − gap: 24pt card minus the 12pt uniform inset.
+        #expect(PermissionCardView.buttonRadius == 12)
     }
 
     @Test func grantOpensMicrophoneLinkWhenDenied() {

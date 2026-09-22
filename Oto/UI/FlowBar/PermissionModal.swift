@@ -15,7 +15,9 @@
 //  hosting: the pill's two frame passes proved this recipe composites
 //  cleanly in a transparent panel — layer-backed clear container, card as
 //  one CAShapeLayer, depth from the window shadow only. Width is
-//  content-fitted (13pt type, 18pt icon) and clamped to maxWidth.
+//  content-fitted (12.5pt type, 18pt icon, string-measured) and clamped
+//  to maxWidth (460). Corners: 24pt card, 12pt button (inner = outer −
+//  12 gap, Apple's concentric formula).
 //
 
 import AppKit
@@ -48,12 +50,12 @@ enum MicSettingsLink {
 @MainActor
 final class PermissionCardView: NSView {
     /// Hard ceiling: the card grows to fit its words, never past this.
-    nonisolated static let maxWidth: CGFloat = 415
+    nonisolated static let maxWidth: CGFloat = 460
     nonisolated static let height: CGFloat = 60
     /// Outer card radius. The button radius derives from it via Apple's
     /// concentric-corner formula (inner = outer − gap), so the two curves
     /// share a center and read as one family.
-    nonisolated static let cardRadius: CGFloat = 18
+    nonisolated static let cardRadius: CGFloat = 24
     nonisolated static let buttonHeight: CGFloat = 36
     /// Button corner radius = card radius − uniform inset, floored so a
     /// future taller card can never invert the curve.
@@ -133,7 +135,14 @@ final class PermissionCardView: NSView {
 
     /// Measure the words, fit the card, clamp to maxWidth. Title truncates
     /// only as a fallback that the 12.5pt metrics should never reach
-    /// (measured: ~400pt all-in against the 415 ceiling).
+    /// (measured: ~421pt all-in against the 460 ceiling).
+    ///
+    /// Both widths come from the attributed strings at their exact fonts,
+    /// not from NSButton/NSTextField intrinsics: a borderless button's
+    /// intrinsic carries bezel padding that varies by machine and pushed
+    /// the old math over the ceiling (user saw "Requir…"). The +4 on the
+    /// title covers NSTextField cell slop so the tight string measure
+    /// never under-sizes the field.
     private func relayout() {
         let pad: CGFloat = 11
         let iconSide: CGFloat = 18
@@ -143,9 +152,10 @@ final class PermissionCardView: NSView {
         let buttonH = Self.buttonHeight
         let h = Self.height
 
-        let titleSize = title.intrinsicContentSize
-        let titleW = ceil(titleSize.width)
-        let buttonW = ceil(button.intrinsicContentSize.width) + buttonHPad * 2
+        let typeface = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+        let titleW = ceil(Self.textWidth(title.stringValue, font: typeface)) + 4
+        let titleH = ceil(Self.textHeight(title.stringValue, font: typeface))
+        let buttonW = ceil(Self.textWidth("Grant Permission", font: typeface)) + buttonHPad * 2
 
         var width = pad + iconSide + gapIcon + titleW + gapButton + buttonW + pad
         var fittedTitleW = titleW
@@ -167,7 +177,6 @@ final class PermissionCardView: NSView {
         icon.frame = CGRect(x: pad, y: midY - iconSide / 2, width: iconSide, height: iconSide)
         // Centered block, not full-height: a full-height label draws its
         // text high while the icon sits at midY — the pair must share a center.
-        let titleH = ceil(titleSize.height)
         title.frame = CGRect(
             x: pad + iconSide + gapIcon, y: midY - titleH / 2,
             width: fittedTitleW, height: titleH
@@ -187,8 +196,28 @@ final class PermissionCardView: NSView {
 
     func titleText() -> String { title.stringValue }
     func contentWidth() -> CGFloat { contentSize.width }
-    /// True when the 415 ceiling clipped the title — must stay false.
+    /// True when the 460 ceiling clipped the title — must stay false.
     func titleClipped() -> Bool { didClampTitle }
+    func titleMidY() -> CGFloat { title.frame.midY }
+    func iconMidY() -> CGFloat { icon.frame.midY }
+
+    /// Deterministic string measure at an exact font. Used for layout so
+    /// machine-dependent control padding can't change the card width.
+    nonisolated static func textSize(_ string: String, font: NSFont) -> NSSize {
+        let attr = NSAttributedString(string: string, attributes: [.font: font])
+        return attr.boundingRect(
+            with: NSSize(width: 10_000, height: 10_000),
+            options: [.usesLineFragmentOrigin]
+        ).size
+    }
+
+    nonisolated static func textWidth(_ string: String, font: NSFont) -> CGFloat {
+        textSize(string, font: font).width
+    }
+
+    nonisolated static func textHeight(_ string: String, font: NSFont) -> CGFloat {
+        textSize(string, font: font).height
+    }
 }
 
 @Observable @MainActor
