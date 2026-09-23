@@ -213,9 +213,9 @@ final class NoTargetModalController {
     }
 }
 
-/// ✕ press/hover response (v6: slight, never a restyle). Hover brightens
-/// dim→ink with a 6% grow; press sinks to 94%. Copy keeps the system
-/// `.bordered` style — its hover/press already come from AppKit.
+/// ✕ press/hover response (v7: bouncy on click ONLY, never resize on
+/// hover). Hover brightens dim→ink (0.12s easeOut); click squishes to
+/// 0.88 on a quick spring with one visible rebound, then back.
 struct CatcherXStyle: ButtonStyle {
     var base: Color
     var hover: Color
@@ -224,17 +224,48 @@ struct CatcherXStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(hovering ? hover : base)
-            .scaleEffect(configuration.isPressed ? 0.94 : hovering ? 1.06 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
             .animation(.easeOut(duration: 0.12), value: hovering)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .animation(
+                .spring(response: 0.22, dampingFraction: 0.5),
+                value: configuration.isPressed
+            )
+    }
+}
+
+/// Copy press/hover response (v7): rest pixels identical to the system
+/// `.bordered` gray button — only motion is custom. Hover squishes to
+/// 0.97 (springs back on leave), click to 0.92 with one rebound.
+/// Disabled ("Copied") passes through with the same look.
+struct CatcherCopyStyle: ButtonStyle {
+    var hovering: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+            .background(.gray.opacity(configuration.isPressed ? 0.45 : 0.35), in: RoundedRectangle(cornerRadius: 8))
+            .foregroundStyle(.white)
+            .scaleEffect(configuration.isPressed ? 0.92 : hovering ? 0.97 : 1.0)
+            .animation(
+                .spring(response: 0.28, dampingFraction: 0.55),
+                value: hovering
+            )
+            .animation(
+                .spring(response: 0.28, dampingFraction: 0.55),
+                value: configuration.isPressed
+            )
     }
 }
 
 struct NoTargetModalView: View {
     let controller: NoTargetModalController
     @Environment(\.colorScheme) private var scheme
-    /// ✕ hover state (v6: slight brighten + grow — never a full restyle).
+    /// ✕ hover state (v7: brighten only — never resize on hover).
     @State private var xHovering = false
+    /// Copy hover state (v7: subtle spring squish, bounces back).
+    @State private var copyHovering = false
 
     var body: some View {
         // v4 minimal surface (reference minus logo/hint/circled-X):
@@ -263,8 +294,8 @@ struct NoTargetModalView: View {
                         Button(controller.copied ? "Copied" : "Copy") {
                             controller.copy()
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.gray)
+                        .buttonStyle(CatcherCopyStyle(hovering: copyHovering && !controller.copied))
+                        .onHover { copyHovering = $0 }
                         .disabled(controller.copied)
                     }
                 }
