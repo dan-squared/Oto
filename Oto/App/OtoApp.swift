@@ -53,6 +53,10 @@ struct OtoApp: App {
     init() {
         // Crash backstop first: a kill mid-dictation leaves the duck flag
         // set — put the user's volume back before anything else runs.
+        // One-shot migrations precede it (audit F7): Container-scoped
+        // state from the sandboxed era would otherwise be invisible.
+        LocalPersistence.migrateSandboxedStoreIfNeeded()
+        MediaDuck.migrateSandboxedFlagIfNeeded()
         MediaDuck.restoreIfCrashed()
         let relay = AudioBufferRelay()
         let spectrumBox = SpectrumFeedBox()

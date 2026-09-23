@@ -51,7 +51,9 @@ struct InsertionEvents: Sendable {
     /// THE delivery route: full 4-event Cmd-V into the HID tap (where hardware
     /// events enter — the device-proven path). Addressed `postToPid` delivery
     /// was tried and reverted: it drives no paste in any tested app (§9).
-    var postPaste: @Sendable () async -> Void
+    /// Returns false when no event could be created (nil source/event) so
+    /// callers fail closed instead of claiming a post that never existed.
+    var postPaste: @Sendable () async -> Bool
     var sleep: @Sendable (UInt64) async -> Void
 
     static var live: InsertionEvents {
@@ -83,8 +85,8 @@ struct InsertionEvents: Sendable {
     /// as genuine typing. Pattern follows Yap (MIT) as Oto-owned code.
     /// `NX_DEVICELCMDKEYMASK` — "left command physically down": Qt/Java apps
     /// read the device-dependent bits and ignore a bare command flag.
-    static func postFullCommandV(step: UInt64 = 10_000_000) async {
-        guard let source = CGEventSource(stateID: .privateState) else { return }
+    static func postFullCommandV(step: UInt64 = 10_000_000) async -> Bool {
+        guard let source = CGEventSource(stateID: .privateState) else { return false }
         source.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitSystemDefinedEvents],
             state: .eventSuppressionStateSuppressionInterval
@@ -94,10 +96,14 @@ struct InsertionEvents: Sendable {
         )
         let commandKey = CGKeyCode(kVK_Command)
         let vKey = CGKeyCode(kVK_ANSI_V)
+        var posted = true
         func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) {
             guard let event = CGEvent(
                 keyboardEventSource: source, virtualKey: key, keyDown: down
-            ) else { return }
+            ) else {
+                posted = false
+                return
+            }
             event.flags = flags
             event.post(tap: .cghidEventTap)
         }
@@ -108,6 +114,7 @@ struct InsertionEvents: Sendable {
         post(vKey, down: false, flags: commandFlags)
         try? await Task.sleep(nanoseconds: step)
         post(commandKey, down: false, flags: [])
+        return posted
     }
 }
 
@@ -209,12 +216,12 @@ final class RealTextInsertion: TextInserting {
             )
         }
 
-        // Sandbox-valid proxy, not a courtesy: `reactivate` answers true when
-        // the target is already frontmost (or activation succeeded, the
-        // non-sandboxed future). A `false` here is the sandboxed norm after an
-        // app switch — posting anyway would land in the WRONG app (02 forbids
-        // substituting the frontmost app), so fail closed with recovery. The
-        // menu retry button is the escape hatch.
+        // Activation proxy, not a courtesy: `reactivate` answers true when
+        // the target is already frontmost (or activation succeeded). A
+        // `false` here means activation was refused — posting anyway would
+        // land in the WRONG app (02 forbids substituting the frontmost
+        // app), so fail closed with recovery. The menu retry button is
+        // the escape hatch.
         let accepted = events.reactivate(pid)
         log.info("reactivate: target \(pid, privacy: .public) activate=\(accepted, privacy: .public)")
         guard accepted else {
@@ -268,24 +275,57 @@ final class RealTextInsertion: TextInserting {
             ))
         }
 
-        await events.postPaste()
+        // Re-gate immediately pre-post (audit F4): trust and secure input
+        // were read hundreds of ms ago (settle + drain + focus + verify
+        // windows). A revocation in between — or an apiDisabled focus
+        // read — would vanish silently while reporting success. Posting
+        // into a revoked state is refused exactly like the entry gates.
+        guard events.isTrusted() else {
+            log.info("refused: accessibility revoked pre-post, clipboard restored")
+            PasteboardSnapshot.restore(saved, to: pasteboard)
+            return .recoverableFailure(reason:
+                "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
+            )
+        }
+        if events.secureInputEnabled() {
+            let who = events.secureHolderName().map { " (held by \($0))" } ?? ""
+            log.info("refused: secure input engaged pre-post, clipboard restored")
+            PasteboardSnapshot.restore(saved, to: pasteboard)
+            return .recoverableFailure(reason:
+                "Secure input is enabled\(who). Synthetic keystrokes are blocked — nothing was pasted, the transcript is kept for recovery."
+            )
+        }
+
+        guard await events.postPaste() else {
+            log.error("post: no keystroke created, failing closed")
+            PasteboardSnapshot.restore(saved, to: pasteboard)
+            return .recoverableFailure(reason:
+                "The keystroke could not be posted. Nothing was pasted — the transcript is kept for recovery."
+            )
+        }
         log.info("posted HID Cmd-V to frontmost (delivery unverified) for target \(pid, privacy: .public)")
         scheduleRestore(saved: saved, receipt: receipt)
         return .inserted
     }
 
-    /// User-driven recovery post (production menu until the Flow Bar). Gates are
-    /// DELIBERATELY absent: the person switched back to the target app
-    /// themselves and pressed the button — they are the check. Clipboard
-    /// discipline + write-verify + guarded restore are kept; only the
-    /// trust/focus policy gates are skipped. Returns true when the keystroke
-    /// was posted (delivery itself remains unverified, as always).
+    /// User-driven recovery post (production menu until the Flow Bar). FOCUS
+    /// gates are deliberately absent: the person switched back to the target
+    /// app themselves and pressed the button — they are the check. Trust
+    /// and secure input are NOT waivable (physical preconditions for posting,
+    /// not policy judgments): without them the keystroke never exists while
+    /// the caller reports success. Clipboard discipline + write-verify +
+    /// guarded restore are kept. Returns true when the keystroke was posted
+    /// (delivery itself remains unverified, as always).
     func retryPostToFrontmost(_ text: String) async -> Bool {
         // Secure input still blocks synthetic keystrokes — posting anyway
         // would vanish silently while the caller reports success. Refuse
         // honestly (audit F4); the trust/focus policy gates stay skipped.
         if events.secureInputEnabled() {
             log.info("retry: refused, secure input enabled")
+            return false
+        }
+        guard events.isTrusted() else {
+            log.info("retry: refused, accessibility untrusted")
             return false
         }
         let front = NSWorkspace.shared.frontmostApplication
@@ -297,7 +337,11 @@ final class RealTextInsertion: TextInserting {
             PasteboardSnapshot.restore(saved, to: pasteboard)
             return false
         }
-        await events.postPaste()
+        guard await events.postPaste() else {
+            log.info("retry: no keystroke created")
+            PasteboardSnapshot.restore(saved, to: pasteboard)
+            return false
+        }
         log.info("retry: posted HID Cmd-V (delivery unverified)")
         scheduleRestore(saved: saved, receipt: receipt)
         return true
@@ -360,6 +404,11 @@ final class RealTextInsertion: TextInserting {
             if events.currentModifiers().intersection(watched).isEmpty { return }
             await events.sleep(timings.modifierPoll)
         }
+        // Budget exhausted with modifiers still held: Sticky Keys users
+        // legitimately hold modifiers here, so failing closed would strand
+        // valid sessions — proceed and log loudly instead. The mistype
+        // hazard above stands; this line is its device-matrix witness.
+        log.error("modifiers: still held after timeout, posting anyway")
     }
 
     /// One bounded Task per insertion (not per event): restores the previous

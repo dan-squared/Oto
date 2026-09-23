@@ -99,6 +99,11 @@ final class FlowBarController {
         panel?.cancelSnapFeedback()
         panel?.hide()
         permission.hide()
+        // Route keys are per-poll-run dedup state: a stop/start inside
+        // one failure window must re-fire, not inherit silence (audit).
+        lastRouteKey = nil
+        lastPermissionKey = nil
+        lastStateKey = nil
     }
 
     // MARK: - Poll

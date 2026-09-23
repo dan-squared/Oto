@@ -61,7 +61,7 @@ private func scriptedEvents(
         currentModifiers: { [] },
         frontmostPID: frontmostPID,
         otoFrontmost: otoFrontmost,
-        postPaste: { postedHID() },
+        postPaste: { postedHID(); return true },
         sleep: { _ in }
     )
 }
@@ -331,14 +331,16 @@ struct RealTextInsertionTests {
     // policy gates are deliberately skipped — proven here by refusing every
     // gate (untrusted, dead activation, wrong focus) and still posting.
     // Clipboard discipline + restore are kept, not skipped.
-    @Test func retryPostsWithoutPolicyGates() async {
+    @Test func retryPostsWithoutFocusGates() async {
+        // Retry skips FOCUS gates (the user is the check) but never trust:
+        // without it the HID tap drops injected events silently.
         let board = scratchBoard()
         board.clearContents()
         board.setString("mine", forType: .string)
         let hid = HookCount()
         let service = RealTextInsertion(
             events: scriptedEvents(
-                trusted: false,
+                trusted: true,
                 reactivate: { _ in false },
                 frontmostPID: { 11111 },
                 postedHID: { hid.bump() }
@@ -350,6 +352,74 @@ struct RealTextInsertionTests {
         #expect(hid.count == 1)
         #expect(board.string(forType: .string) == "kept words")
         #expect(board.string(forType: PasteboardReceipt.markerType) != nil)
+    }
+
+    @Test func retryRefusesWithoutTrust() async {
+        // Untrusted retry reports failure (never a phantom post): the
+        // keystroke could not exist, so clipboard stays byte-identical.
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let before = board.changeCount
+        let hid = HookCount()
+        let service = RealTextInsertion(
+            events: scriptedEvents(trusted: false, postedHID: { hid.bump() }),
+            timings: fastTimings(), pasteboard: board
+        )
+        #expect(await service.retryPostToFrontmost("kept words") == false)
+        #expect(hid.count == 0)
+        #expect(board.changeCount == before)
+    }
+
+    @Test func postCreationFailureFailsClosed() async {
+        // Nil event source / uncreatable keystroke: the post reports
+        // false, insertion fails closed with the clipboard restored —
+        // never `.inserted` for a post that never existed.
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        var events = scriptedEvents()
+        events.postPaste = { false }
+        let service = RealTextInsertion(
+            events: events, timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
+        )
+        let result = await service.insert("unpostable", into: anyTarget())
+        guard case .recoverableFailure(let reason) = result else {
+            Issue.record("expected recoverableFailure, got \(result)")
+            return
+        }
+        #expect(reason.contains("could not be posted"))
+        #expect(board.string(forType: .string) == "mine")
+    }
+
+    @Test func prePostRegateRefusesRevokedTrust() async {
+        // Trust revoked between the entry gate and the post (sudo prompt,
+        // permission yank mid-session): the pre-post re-gate fails closed
+        // with the clipboard restored, never a phantom `.inserted`. The
+        // first trust read (entry) passes; all later reads refuse.
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let hid = HookCount()
+        let trustReads = HookCount()
+        var events = scriptedEvents(postedHID: { hid.bump() })
+        events.isTrusted = {
+            trustReads.bump()
+            return trustReads.count <= 1
+        }
+        let service = RealTextInsertion(
+            events: events, timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
+        )
+        let result = await service.insert("revoked", into: anyTarget())
+        guard case .recoverableFailure(let reason) = result else {
+            Issue.record("expected recoverableFailure, got \(result)")
+            return
+        }
+        #expect(reason.contains("Accessibility"))
+        #expect(hid.count == 0)
+        #expect(board.string(forType: .string) == "mine")
     }
 
     // F4: retry under secure input must refuse (not post into the void

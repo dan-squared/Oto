@@ -80,20 +80,20 @@ struct NoTargetModalTests {
             == NSRect(x: 488, y: 28, width: 464, height: 168))
         #expect(NoTargetModalController.morphEndFrameAtSlot(visible: roomy, position: .top)
             == NSRect(x: 488, y: 720, width: 464, height: 168))
-        // Narrow screen clamps width like the pill; offset screen keeps
-        // its origin (multi-display).
+        // Narrow screen: floor at full card width (audit F1) — a
+        // squeezed frame would amputate Copy; overflow stays visible.
         let narrow = NSRect(x: 0, y: 0, width: 400, height: 500)
         #expect(NoTargetModalController.morphEndFrameAtSlot(visible: narrow, position: .bottom)
-            == NSRect(x: 8, y: 28, width: 384, height: 168))
+            == NSRect(x: -32, y: 28, width: 464, height: 168))
         let offset = NSRect(x: 1440, y: 0, width: 1512, height: 982)
         #expect(NoTargetModalController.morphEndFrameAtSlot(visible: offset, position: .top)
             == NSRect(x: 1964, y: 802, width: 464, height: 168))
         // Pathological height: keep the slot edge, shrink inward.
         let tiny = NSRect(x: 0, y: 0, width: 400, height: 100)
         #expect(NoTargetModalController.morphEndFrameAtSlot(visible: tiny, position: .bottom)
-            == NSRect(x: 8, y: 28, width: 384, height: 100))
+            == NSRect(x: -32, y: 28, width: 464, height: 100))
         #expect(NoTargetModalController.morphEndFrameAtSlot(visible: tiny, position: .top)
-            == NSRect(x: 8, y: 0, width: 384, height: 100))
+            == NSRect(x: -32, y: 0, width: 464, height: 100))
     }
 
     @Test func contentMaskPathMatchesCard() {

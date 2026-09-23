@@ -45,6 +45,9 @@ final class FlowBarPanel {
     private var bottomGhost: NSPanel?
     private var topGhostView: SnapIndicatorView?
     private var bottomGhostView: SnapIndicatorView?
+    /// Ghost fade generation: a new grab supersedes a pending fade-out
+    /// (same discipline as hide/morph generations).
+    private var ghostGeneration = 0
 
     // MARK: - Shared nonactivating recipe (pill + catcher modal)
 
@@ -338,6 +341,7 @@ extension FlowBarPanel: PillDragDelegate {
     func pillDragBegan() {
         guard !isDragging, let screen = pinnedScreen else { return }
         isDragging = true
+        ghostGeneration += 1
         dragStartSlot = FlowBarPosition.current()
         cancelSnapFeedback()
         SnapTickGate.reset(&tickGate)
@@ -375,11 +379,15 @@ extension FlowBarPanel: PillDragDelegate {
     func pillDragEnded(moved: Bool) {
         guard isDragging else { return }
         isDragging = false
+        // Generation-guarded fade: a grab-drop-grab inside 0.12s must not
+        // let the stale completion orderOut a live new drag (audit).
+        let generation = ghostGeneration
         for (ghost, _, _) in ghostPanels() {
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.12
                 ghost.animator().alphaValue = 0
-            }, completionHandler: {
+            }, completionHandler: { [weak self] in
+                guard self?.ghostGeneration == generation else { return }
                 ghost.orderOut(nil)
             })
         }

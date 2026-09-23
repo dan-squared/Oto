@@ -29,7 +29,11 @@ struct DictationCoordinatorTests {
         prepareGateOpen: Bool = true,
         finishError: (any Error)? = nil,
         micDenied: Bool = false,
-        audioPeak: Float = 1.0
+        audioPeak: Float = 1.0,
+        startError: (any Error)? = nil,
+        prepareError: (any Error)? = nil,
+        finishGateOpen: Bool = true,
+        insertGateOpen: Bool = true
     ) -> (
         coordinator: DictationCoordinator,
         audio: FakeAudioCapture,
@@ -37,14 +41,16 @@ struct DictationCoordinatorTests {
         target: FakeTargetCapture,
         inserter: FakeTextInsertion
     ) {
-        let audio = FakeAudioCapture(stubPeak: audioPeak)
+        let audio = FakeAudioCapture(startError: startError, stubPeak: audioPeak)
         let speech = FakeSpeechService(
             finalText: finalText,
+            prepareError: prepareError,
             finishError: finishError,
-            prepareGateOpen: prepareGateOpen
+            prepareGateOpen: prepareGateOpen,
+            finishGateOpen: finishGateOpen
         )
         let target = FakeTargetCapture(stubTarget: Self.stubTarget)
-        let inserter = FakeTextInsertion(result: insertionResult)
+        let inserter = FakeTextInsertion(result: insertionResult, insertGateOpen: insertGateOpen)
         let coordinator = DictationCoordinator(
             audio: audio,
             speech: speech,
@@ -562,5 +568,109 @@ struct DictationCoordinatorTests {
         }
         #expect(await coordinator.recoveryText() == "void words")
         #expect(await coordinator.lastSessionSummary() == "failed: no text field focused, transcript kept")
+    }
+
+    // MARK: - Audit batch (concurrency + untested branches)
+
+    /// Polls until `reads()` returns true or the timeout expires.
+    private func waitForCondition(
+        timeout: Duration = .seconds(5),
+        sourceLocation: SourceLocation = #_sourceLocation,
+        _ reads: @Sendable () async -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if await reads() { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("timed out waiting for fake call count", sourceLocation: sourceLocation)
+    }
+
+    @Test func cancelMidFinalizeWins() async {
+        // Cancel landing while finalize is suspended in speech.finish:
+        // terminal stays cancelled, the late result inserts nothing.
+        // (Proves the F2 terminal-first reorder under concurrency.)
+        let sut = makeSUT(finishGateOpen: false)
+        let id = await sut.coordinator.beginHold()
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        Task { await sut.coordinator.finish(id!) }
+        await waitForCondition { await sut.speech.finishCalls == 1 }
+        await sut.coordinator.cancel(id!)
+        await sut.speech.openFinishGate()
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .cancelled = terminal else {
+            Issue.record("expected cancelled, got \(terminal)")
+            return
+        }
+        #expect(await sut.inserter.calls.isEmpty)
+    }
+
+    @Test func cancelMidInsertWins() async {
+        // Cancel landing while the insert call itself is suspended: the
+        // recorded call is discarded, terminal stays cancelled.
+        let sut = makeSUT(insertGateOpen: false)
+        let id = await sut.coordinator.beginHold()
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        Task { await sut.coordinator.finish(id!) }
+        await waitForCondition { await sut.inserter.calls.count == 1 }
+        await sut.coordinator.cancel(id!)
+        await sut.inserter.openInsertGate()
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .cancelled = terminal else {
+            Issue.record("expected cancelled, got \(terminal)")
+            return
+        }
+    }
+
+    @Test func audioStartThrowFailsWithoutSpeech() async {
+        let sut = makeSUT(startError: FakeAudioCapture.CaptureError())
+        let id = await sut.coordinator.beginHold()
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed(_, .audioCapture) = terminal else {
+            Issue.record("expected failed(audioCapture), got \(terminal)")
+            return
+        }
+        #expect(await sut.audio.startCalls == 1)
+        #expect(await sut.speech.prepareCalls == 0)
+        #expect(id != nil)
+    }
+
+    @Test func prepareGenericThrowFailsAfterAudioStop() async {
+        let sut = makeSUT(prepareError: FakeSpeechService.PreparationError())
+        _ = await sut.coordinator.beginHold()
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed(_, .speechPreparation) = terminal else {
+            Issue.record("expected failed(speechPreparation), got \(terminal)")
+            return
+        }
+        #expect(await sut.audio.stopCalls == 1)
+    }
+
+    @Test func prepareMicDeniedThrowFailsDistinctly() async {
+        // Second mic-denied path (readiness throw inside prepare), distinct
+        // from the fast-fail gate — maps to .microphoneDenied, not the
+        // preparation bucket.
+        let sut = makeSUT(prepareError: SpeechReadiness.microphoneDenied)
+        _ = await sut.coordinator.beginHold()
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed(_, .microphoneDenied) = terminal else {
+            Issue.record("expected failed(microphoneDenied), got \(terminal)")
+            return
+        }
+    }
+
+    @Test func finishEngineThrowFailsAsSpeechPreparation() async {
+        // Non-noAudio finish errors (drop-threshold, engine failure) land
+        // in the preparation bucket with the detail preserved in reason.
+        let sut = makeSUT(finishError: FakeSpeechService.FinalizationError())
+        let id = await sut.coordinator.beginHold()
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        await sut.coordinator.finish(id!)
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .failed(_, .speechPreparation) = terminal else {
+            Issue.record("expected failed(speechPreparation), got \(terminal)")
+            return
+        }
     }
 }

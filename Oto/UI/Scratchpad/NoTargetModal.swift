@@ -73,7 +73,11 @@ final class NoTargetModalController {
         }
     }
 
-    func show(text: String, displayID: CGDirectDisplayID?) {
+    func show(
+        text: String,
+        displayID: CGDirectDisplayID?,
+        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    ) {
         self.text = text
         copied = false
         prewarm()
@@ -97,6 +101,11 @@ final class NoTargetModalController {
         // orderFront, never key: focus must stay wherever the user had it.
         panel?.orderFront(nil)
         scheduleContentMask()
+        guard !reduceMotion else {
+            panel?.setFrame(endFrame, display: true)
+            panel?.alphaValue = 1
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -130,7 +139,7 @@ final class NoTargetModalController {
         prewarm()
         refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else {
-            show(text: text, displayID: displayID)
+            show(text: text, displayID: displayID, reduceMotion: reduceMotion)
             return
         }
         let endFrame = Self.morphEndFrameAtSlot(visible: screen.visibleFrame, position: position)
@@ -175,10 +184,17 @@ final class NoTargetModalController {
     /// Apply the content mask on the next tick: the hosting layer is
     /// created by SwiftUI at first display, so masking must run AFTER
     /// orderFront — clearing at prewarm is a silent no-op on a nil
-    /// layer (why variant A failed). Idempotent; safe to call twice.
-    private func scheduleContentMask() {
+    /// layer (why variant A failed). Retries twice when the layer
+    /// isn't ready yet (audit: single-shot scheduling never recovers);
+    /// skips when a mask is already installed. Idempotent.
+    private func scheduleContentMask(attempts: Int = 3) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, let layer = self.hosting?.layer else { return }
+            guard let self else { return }
+            guard let layer = self.hosting?.layer else {
+                if attempts > 1 { self.scheduleContentMask(attempts: attempts - 1) }
+                return
+            }
+            guard layer.mask == nil else { return }
             let mask = CAShapeLayer()
             mask.path = Self.contentMaskPath()
             layer.mask = mask
@@ -186,11 +202,18 @@ final class NoTargetModalController {
     }
     /// Slot-anchored 464×168 card (v6): the pill's own slot helper with
     /// card dimensions — same margins, clamp, and centering as the pill,
-    /// so x matches exactly and growth is purely vertical. Height guard
-    /// for pathological frames (real screens never hit it): keep the
-    /// slot edge, shrink inward. Pure geometry, unit-tested.
+    /// so x matches exactly and growth is purely vertical. Width FLOOR
+    /// at full card size (audit F1): a squeezed frame amputates the
+    /// trailing Copy button silently; edge overflow on tiny screens is
+    /// explicit and visible instead. Height guard for pathological
+    /// frames: keep the slot edge, shrink inward. Pure geometry,
+    /// unit-tested.
     nonisolated static func morphEndFrameAtSlot(visible: NSRect, position: FlowBarPosition) -> NSRect {
         var frame = FlowBarPosition.frame(width: Self.width, height: Self.height, on: visible, position: position)
+        if frame.width < Self.width {
+            frame.size.width = Self.width
+            frame.origin.x = visible.midX - Self.width / 2
+        }
         if frame.height > visible.height {
             frame.size.height = visible.height
             if position == .top { frame.origin.y = visible.maxY - visible.height }
@@ -202,12 +225,18 @@ final class NoTargetModalController {
 
     /// Manual Copy primitive (same pasteboard discipline as history Copy).
     /// Never dismisses — the user may still need to find a textbox.
+    /// Generation-guarded reset (audit): a second Copy (or a re-show)
+    /// inside 1.5s must not let the stale timer clear the live feedback.
+    private var copyGeneration = 0
     func copy(pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         copied = true
+        copyGeneration += 1
+        let generation = copyGeneration
         Task {
             try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled, generation == self.copyGeneration else { return }
             copied = false
         }
     }
@@ -295,6 +324,8 @@ struct NoTargetModalView: View {
                             controller.copy()
                         }
                         .buttonStyle(CatcherCopyStyle(hovering: copyHovering && !controller.copied))
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                         .onHover { copyHovering = $0 }
                         .disabled(controller.copied)
                     }
@@ -306,6 +337,7 @@ struct NoTargetModalView: View {
                     .font(.title3)
             }
             .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
+            .accessibilityLabel("Dismiss")
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
             .onHover { xHovering = $0 }

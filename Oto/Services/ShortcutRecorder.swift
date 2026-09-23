@@ -96,8 +96,8 @@ enum ShortcutRecorderRules: Sendable {
         if systemShortcuts.contains(where: { $0.keyCode == Int(keyCode) && $0.modifiers == carbon }) {
             conflicts.append(.systemShortcut)
         }
-        if isDisallowedInSandbox(modifiers: carbon, keyCode: keyCode) {
-            conflicts.append(.disallowed(reason: "Not available to sandboxed apps on this macOS version."))
+        if isReservedSystemCombo(modifiers: carbon, keyCode: keyCode) {
+            conflicts.append(.disallowed(reason: "Reserved by the system on this macOS version."))
         }
         return .captured(modifiers: UInt32(carbon), keyCode: UInt32(keyCode), conflicts: conflicts)
     }
@@ -113,10 +113,13 @@ enum ShortcutRecorderRules: Sendable {
         ]
     }
 
-    /// Combos the system will not deliver to sandboxed apps. Conservative
-    /// best-effort list (mirrors the reference `isDisallowed` concept);
-    /// device-matrix findings extend it, never shrink validation silently.
-    nonisolated static func isDisallowedInSandbox(modifiers: Int, keyCode: UInt16) -> Bool {
+    /// Combos the system reserves regardless of sandbox state (Spotlight
+    /// ⌘Space, Siri/dictation system keys, lock-screen class combos).
+    /// Conservative best-effort list; device-matrix findings extend it,
+    /// never shrink validation silently. (Was `isDisallowedInSandbox` —
+    /// renamed when the app went unsandboxed; the reservation is a
+    /// system property, not a sandbox one.)
+    nonisolated static func isReservedSystemCombo(modifiers: Int, keyCode: UInt16) -> Bool {
         // Spotlight (⌘Space), Siri/dictation system keys, and lock-screen
         // class combos never reach a sandboxed app.
         if modifiers == CarbonModifiers.command, keyCode == UInt16(kVK_Space) {

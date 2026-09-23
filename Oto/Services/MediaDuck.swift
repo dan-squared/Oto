@@ -5,6 +5,8 @@
 //  Phase 7 (behind the sandbox spike, GREEN 2026-09-22): mute media
 //  output while dictating so speaker bleed cannot ruin transcripts,
 //  then restore the exact prior volume on every terminal path.
+//  (Spike-era notes below predate the unsandboxing — kept as history:
+//  the API choice stands either way; the sandbox verdict is moot now.)
 //
 //  API choice (spike-mandated): AudioObjectGet/SetPropertyData from
 //  CoreAudio — current. AudioHardwareService* is API_DEPRECATED("no
@@ -85,7 +87,12 @@ struct LiveMediaVolumeHAL: MediaVolumeHAL {
 
     nonisolated func deviceHasVolumeControl(_ device: AudioObjectID) -> Bool {
         var addr = Self.vmvc
-        return AudioObjectHasProperty(device, &addr)
+        guard AudioObjectHasProperty(device, &addr) else { return false }
+        // Presence ≠ settability: a read-only `vmvc` must not be chosen
+        // (restore would fail where the fallback succeeds).
+        var settable: DarwinBoolean = false
+        guard AudioObjectIsPropertySettable(device, &addr, &settable) == 0 else { return false }
+        return settable.boolValue
     }
 
     nonisolated func setVolume(_ volume: Float32, onDevice device: AudioObjectID) -> Bool {
@@ -164,10 +171,12 @@ final class MediaDuck: MediaDucking {
     }
 
     func restore(sessionID: UUID) async {
-        guard let volume = savedVolume, let device = savedDevice else { return }
-        duckedSessionID = nil
-        savedVolume = nil
-        savedDevice = nil
+        // Session-scoped: never clear another owner's duck. Unreachable
+        // via one-live-session today, but the contract holds regardless —
+        // a foreign restore is a no-op, never an early unduck.
+        guard let volume = savedVolume, let device = savedDevice,
+              duckedSessionID == sessionID
+        else { return }
         // Prefer the ducked device (it may no longer be default after a
         // mid-session switch); fall back to the current default output.
         // Either way the user gets sound back — the target is logged.
@@ -181,11 +190,46 @@ final class MediaDuck: MediaDucking {
             return
         }
         if hal.setVolume(volume, onDevice: target) {
+            // Clear ONLY on verified success: a transient set failure
+            // keeps slot + flag, so the next restore (or relaunch)
+            // retries instead of stranding the user muted.
+            duckedSessionID = nil
+            savedVolume = nil
+            savedDevice = nil
             defaults.set(false, forKey: MediaDuckSettings.crashedKey)
             log.info("restored \(sessionID.uuidString.prefix(8), privacy: .public)")
         } else {
             log.error("restore set failed — launch-restore flag kept")
         }
+    }
+
+    /// One-shot sandbox→unsandboxed migration (audit F7): the crash flag
+    /// lived in the Container plist; without migration a flag set
+    /// pre-upgrade is invisible to this build (muted, no backstop).
+    /// Copies the duck keys when standard defaults lack them; no-ops
+    /// otherwise (including every launch after the first).
+    nonisolated static func migrateSandboxedFlagIfNeeded(
+        defaults: UserDefaults = .standard,
+        containerPreferences: [String: Any]? = nil
+    ) {
+        let source = containerPreferences ?? Self.sandboxContainerPreferences()
+        guard defaults.object(forKey: MediaDuckSettings.crashedKey) == nil,
+              let source,
+              (source[MediaDuckSettings.crashedKey] as? Bool) == true
+        else { return }
+        for key in [MediaDuckSettings.crashedKey, MediaDuckSettings.savedVolumeKey, MediaDuckSettings.savedDeviceKey] {
+            if let value = source[key] { defaults.set(value, forKey: key) }
+        }
+    }
+
+    private nonisolated static func sandboxContainerPreferences() -> [String: Any]? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers/app.Oto/Data/Library/Preferences/app.Oto.plist")
+        guard let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let dict = plist as? [String: Any]
+        else { return nil }
+        return dict
     }
 
     /// Launch backstop: a kill mid-dictation leaves the flag set; put

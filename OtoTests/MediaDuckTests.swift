@@ -31,6 +31,7 @@ final class FakeHAL: MediaVolumeHAL, @unchecked Sendable {
             _volume = volume
             _device = device
             _controlled = controlled
+            _noVolume = false
         }
     }
 
@@ -218,5 +219,71 @@ struct MediaDuckTests {
         MediaDuck.restoreIfCrashed(defaults: freshDefaults(), hal: hal)
         #expect(hal.setCalls.isEmpty)
         #expect(hal.getCalls == 0)
+    }
+
+    @Test func sandboxedFlagMigratesOnce() {
+        // Pre-upgrade crash flag in the dead Container plist surfaces in
+        // standard defaults (muted user keeps their backstop); absent
+        // source or present destination both no-op.
+        let defaults = freshDefaults()
+        MediaDuck.migrateSandboxedFlagIfNeeded(defaults: defaults, containerPreferences: [
+            MediaDuckSettings.crashedKey: true,
+            MediaDuckSettings.savedVolumeKey: Float(0.25),
+            MediaDuckSettings.savedDeviceKey: 70,
+        ])
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
+        #expect(defaults.float(forKey: MediaDuckSettings.savedVolumeKey) == 0.25)
+        MediaDuck.migrateSandboxedFlagIfNeeded(defaults: defaults, containerPreferences: [
+            MediaDuckSettings.crashedKey: true,
+            MediaDuckSettings.savedVolumeKey: Float(0.75),
+        ])
+        #expect(defaults.float(forKey: MediaDuckSettings.savedVolumeKey) == 0.25)
+        let clean = freshDefaults()
+        MediaDuck.migrateSandboxedFlagIfNeeded(defaults: clean, containerPreferences: nil)
+        MediaDuck.migrateSandboxedFlagIfNeeded(defaults: clean, containerPreferences: [:])
+        #expect(!clean.bool(forKey: MediaDuckSettings.crashedKey))
+    }
+
+    // MARK: - Audit batch (session scope + retry)
+
+    @Test func crashKeysMatch() {
+        // Renaming a persisted key orphans flags across launches —
+        // pin all three alongside the settings key.
+        #expect(MediaDuckSettings.crashedKey == "app.Oto.mediaDuckedByOto")
+        #expect(MediaDuckSettings.savedVolumeKey == "app.Oto.mediaDuckSavedVolume")
+        #expect(MediaDuckSettings.savedDeviceKey == "app.Oto.mediaDuckSavedDevice")
+    }
+
+    @Test func foreignRestoreLeavesOwnerDucked() async {
+        // Session B's restore must never clear session A's live duck
+        // (unreachable via one-live-session today; contract holds anyway).
+        let hal = FakeHAL()
+        let duck = MediaDuck(defaults: freshDefaults(), hal: hal)
+        let a = UUID()
+        await duck.duck(sessionID: a)
+        await duck.restore(sessionID: UUID())
+        #expect(hal.setCalls.count == 1)
+        await duck.restore(sessionID: a)
+        #expect(hal.setCalls.count == 2)
+        #expect(hal.setCalls[1].volume == 0.5)
+    }
+
+    @Test func transientRestoreFailureRetries() async {
+        // A failed set keeps slot + flag (no silent stranding): control
+        // returns and the next restore completes the job.
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        let id = UUID()
+        await duck.duck(sessionID: id)
+        hal.stubNoVolumeControl()
+        await duck.restore(sessionID: id)
+        #expect(hal.setCalls.count == 1)
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
+        hal.stub(volume: 0.0, device: 70, controlled: [70])
+        await duck.restore(sessionID: id)
+        #expect(hal.setCalls.last?.volume == 0.5)
+        #expect(hal.setCalls.last?.device == 70)
+        #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
     }
 }
