@@ -34,7 +34,6 @@ nothing, so trails can't distinguish universal AX failure from
 per-app no-value.
 
 ## 3. SDK re-verification (today: Xcode 27.0, MacOSX27.0.sdk, Swift 6.4)
-
 - `kAXFocusedUIElementAttribute` (`AXAttributeConstants.h`),
   `kAXRoleAttribute`, `kAXTextFieldRole`/`kAXTextAreaRole`
   (`AXRoleConstants.h`), `AXUIElementCopyAttributeValue`
@@ -105,3 +104,25 @@ per-app no-value.
   precedent (`== .success` already ships); build proves.
 
 ## 7. Open questions — none. `execute` builds §4.
+
+## 8. Spike #2 outcome + unsandbox decision (2026-09-23, executed)
+
+- AX-read probe, sandboxed (.app, app-sandbox + audio-input, ad-hoc):
+  focus read fails `-25204` — byte-identical to every device-trail
+  line. Unsandboxed probe: error 0, role `AXGroup` (would divert
+  correctly). Trust granted both sides (`trusted=true`).
+- Verdict: the sandbox blocks AX IPC reads wholesale. The AX sensor
+  cannot work sandboxed — the v4 contingency's "revert" branch is
+  superseded: unsandboxing fixes it cleanly with no heuristics.
+- Decision (pre-authorized by `plan/phase-0-shell.md:58-61,122`
+  "sandbox will likely be disabled"; no MAS target in product docs):
+  `ENABLE_APP_SANDBOX = NO` (Debug + Release), entitlements emptied
+  (audio-input inert without sandbox; mic stays TCC-gated).
+  Verified on the signed binary: no `app-sandbox` present.
+- Accepted side effect: Container-scoped state stays behind
+  (`~/Library/Containers/<id>/`): UserDefaults toggles +
+  Application-Support stores (dictionary/history) start fresh on
+  first unsandboxed launch. No migration (history was corrupt-reset
+  anyway; dictionary rules re-enter once). Stated so nobody
+  re-reports "settings reset" as a bug.
+- Probe was outside the repo; deleted after this line.
