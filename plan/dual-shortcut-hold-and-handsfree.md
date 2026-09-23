@@ -1,6 +1,15 @@
 # Dual shortcut: hold-to-talk + hands-free live together, per-mode recorders
 
 Status: PLAN ONLY. Nothing implemented.
+Decisions locked 2026-09-23 (user accepted all recommendations):
+D1 two separate live shortcuts, one per mode. D2 defaults: hold = Right
+Option, hands-free = Dictation/F5. D3 recorder = combo-only + presets per
+slot. D4 Delete-to-clear disables GLOBALLY (single `enabled`, no per-slot
+toggle) — plus a deliberate one-line fix (§5.2 F1): any fresh valid
+assignment re-enables, closing today's one-way door (today Delete is
+permanent-off with no UI way back: `updateTrigger` never sets
+`enabled=true`, verified `ShortcutDispatch.swift:150-171` + single
+production `setEnabled` caller at `DictationPane.swift:103`).
 
 ## 1. Goal
 
@@ -141,6 +150,13 @@ SDK: `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0), checked
      same-slot-equality → no-op; cross-slot `conflictsWith` → return
      `.blocked` WITHOUT saving (UI keeps old + message); else
      cancel-active-session + save + reset that slot's calibration + `start()`.
+     PRESET picks route through this same gate (a preset equal to the other
+     slot's live trigger is refused with the same message — no bypass).
+   - F1 (deliberate fix, closes today's one-way door): any successful save
+     through the gate above sets `enabled = true` (Delete cleared it globally;
+     a fresh explicit assignment is intent to have shortcuts on). Without
+     this, a re-recorded combo saves but never registers (`start()` early-returns
+     on `!enabled`) — verified dead-end on today's code, pinned by new test.
    - `updateInteraction(_:)` DELETED (no Mode concept left); call sites removed.
    - `setSuspended(_:)` unchanged in shape (cancels session, stops ALL —
      either recorder listening suspends both slots; second recorder button
@@ -171,7 +187,13 @@ SDK: `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0), checked
      message line. Recorder callbacks call `updateHoldTrigger` /
      `updateHandsFreeTrigger`; `.blocked` result → keep old label + show
      "Same as your <other> shortcut — pick a different one."
-   - `syncFromDispatch()` reads both slots; `applyTriggerChoice` splits per slot.
+   - `syncFromDispatch()` reads both slots; preset picks call the per-slot
+     updaters (§5.2 gate, never direct assignment). Either row's Delete →
+     label resets to placeholder, stored trigger KEPT (today's semantics),
+     `setEnabled(false)` globally (D4); either row's fresh capture/preset →
+     re-enables globally (F1). Second recorder button disabled while the
+     first listens (only one listener at a time; dispatch suspends both
+     slots either way).
    - Test-shortcut caption updated: "Press either shortcut anywhere. Ready
      appears per row after a real global sequence."
 
@@ -192,8 +214,10 @@ SDK: `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0), checked
      hold down/up → begin/finish; hands-free down/down → begin/finish;
      second begin while active → nil (no overwrite); hold-down during
      hands-free session → no-op; hands-free press during hold session →
-     no-op; same-trigger save → `.blocked`, old kept; suspend cancels +
-     stops both.
+     no-op; same-trigger save → `.blocked`, old kept; preset equal to other
+     slot → `.blocked`; Delete → global off (both calibrations Untested,
+     neither fires); fresh capture after Delete → global on, both slots live
+     (F1 re-enable pin); suspend cancels + stops both.
    - `OtoTests/HIDDecideDualTests.swift` (new): two hold codes route
      independently; function code→slot map; combination-use swallows only
      the held slot's release; Escape still observed once.
@@ -215,9 +239,8 @@ SDK: `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0), checked
   4. Conflict: set hands-free = hold's combo → blocked message, old kept,
      no registration change (calibration rows unchanged).
   5. Recorder: recording either row suspends BOTH triggers (dictate mid-record
-     → nothing); Escape in recorder → old kept; Delete → disables (existing
-     `setEnabled(false)` semantics — open question whether per-slot enable
-     is needed, default: global enable stays).
+     → nothing); Escape in recorder → old kept; Delete → global off, both
+     rows Untested; fresh capture/preset after Delete → both live again (F1).
   6. Overlap: hold=RightOption + hands-free=Option+D combo → typing ⌥D fires
      combo only (hold release swallowed — `usedInCombination`); bare ⌥ hold
      fires hold only.
@@ -244,15 +267,15 @@ SDK: `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0), checked
   triggers, per-app shortcuts, sync across devices,_fncn/media-key capture
   beyond today's F5/176 set.
 
-## 8. Open questions (need your call before execute)
+## 8. Open questions — ALL RESOLVED 2026-09-23 (user took recommendations)
 
-1. **Confirm the reading of "d/t": two separate shortcuts, one per mode,
-   both live?** (This plan.) The alternative — one key, tap-vs-hold picks
-   the mode — is NOT planned; it needs a disambiguation timer and new
-   failure modes.
-2. **Defaults: hold = Right Option, hands-free = Dictation/F5?** (Recommended:
-   yes — today's presets, zero relearning.)
-3. **Recorder scope: combo-only + presets per slot?** (Recommended: yes —
-   reuses hardened validation, zero new rules.)
-4. **Delete-to-clear disables globally (today's `setEnabled(false)`)?**
-   (Recommended: keep — per-slot enable deferred per §7.)
+1. ~~Two separate shortcuts?~~ YES — D1: two live slots, fixed modes.
+2. ~~Defaults?~~ D2: hold = Right Option, hands-free = Dictation/F5.
+3. ~~Recorder scope?~~ D3: combo-only + presets per slot, zero new rules.
+4. ~~Delete-clears globally?~~ D4: yes, single `enabled`, no per-slot toggle —
+   plus fix F1 (fresh assignment re-enables; today's Delete is a one-way door
+   with no UI recovery — verified, not assumed).
+
+   Rejected alternative (recorded, not planned): one shared key where
+   tap-vs-hold picks the mode — needs a disambiguation timer and new failure
+   modes.
