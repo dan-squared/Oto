@@ -72,17 +72,28 @@ struct NoTargetModalTests {
         #expect(CatcherPalette.current(.light) == .light)
     }
 
-    @Test func morphEndFrameCentersAndClamps() {
-        // Roomy screen: centered 464×168. Small screen: clamped into the
-        // visible frame (never off-screen, never oversized).
+    @Test func morphEndFrameAtSlotGrowsInPlace() {
+        // v6: same x as the pill (both centered), slot-anchored y —
+        // top grows down from the pill's top edge, bottom up from its
+        // bottom edge. Zero travel, pure vertical growth.
         let roomy = NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let end = NoTargetModalController.morphEndFrame(visible: roomy)
-        #expect(end == NSRect(x: 488, y: 366, width: 464, height: 168))
-        let small = NSRect(x: 0, y: 0, width: 400, height: 100)
-        let clamped = NoTargetModalController.morphEndFrame(visible: small)
-        #expect(clamped == NSRect(x: 0, y: 0, width: 400, height: 100))
+        #expect(NoTargetModalController.morphEndFrameAtSlot(visible: roomy, position: .bottom)
+            == NSRect(x: 488, y: 28, width: 464, height: 168))
+        #expect(NoTargetModalController.morphEndFrameAtSlot(visible: roomy, position: .top)
+            == NSRect(x: 488, y: 720, width: 464, height: 168))
+        // Narrow screen clamps width like the pill; offset screen keeps
+        // its origin (multi-display).
+        let narrow = NSRect(x: 0, y: 0, width: 400, height: 500)
+        #expect(NoTargetModalController.morphEndFrameAtSlot(visible: narrow, position: .bottom)
+            == NSRect(x: 8, y: 28, width: 384, height: 168))
         let offset = NSRect(x: 1440, y: 0, width: 1512, height: 982)
-        let moved = NoTargetModalController.morphEndFrame(visible: offset)
-        #expect(moved == NSRect(x: 1440 + 524, y: 407, width: 464, height: 168))
+        #expect(NoTargetModalController.morphEndFrameAtSlot(visible: offset, position: .top)
+            == NSRect(x: 1964, y: 802, width: 464, height: 168))
+        // Pathological height: keep the slot edge, shrink inward.
+        let tiny = NSRect(x: 0, y: 0, width: 400, height: 100)
+        #expect(NoTargetModalController.morphEndFrameAtSlot(visible: tiny, position: .bottom)
+            == NSRect(x: 8, y: 28, width: 384, height: 100))
+        #expect(NoTargetModalController.morphEndFrameAtSlot(visible: tiny, position: .top)
+            == NSRect(x: 8, y: 0, width: 384, height: 100))
     }
 }

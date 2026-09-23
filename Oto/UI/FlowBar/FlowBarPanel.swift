@@ -75,6 +75,33 @@ final class FlowBarPanel {
         return panel
     }
 
+    /// SwiftUI-hosting variant (v6 stroke kill). Panel chrome identical
+    /// to `makePanel` — EXCEPT it never forces `wantsLayer`: an
+    /// NSHostingView owns its layer policy, and forcing one invites
+    /// SwiftUI to resolve a default opaque root background (the crisp
+    /// window-bounds rect in the v6 screenshots). AppKit stays out of
+    /// hosting layers; transparency comes from the panel flags + the
+    /// SwiftUI root's own `Color.clear`. Used ONLY by the catcher —
+    /// pill + permission modal keep the proven `makePanel` path.
+    static func makeHostingPanel(contentView: NSView, size: NSSize) -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.animationBehavior = .none
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.contentView = contentView
+        return panel
+    }
+
     /// Positioning chain. Returns nil only when the session has no screens
     /// (headless) — the caller keeps the pill hidden, never fabricates one.
     static func resolveScreen(displayID: CGDirectDisplayID?) -> (NSScreen, Int)? {

@@ -29,10 +29,10 @@ enum NoTargetModalSettings {
 final class NoTargetModalController {
     nonisolated static let width: CGFloat = 464
     nonisolated static let height: CGFloat = 168
-    /// Morph gesture length (v4): matches the snappiest existing motion
-    /// (pill land family). The matrix judges fast-vs-laggy; retune is
-    /// duration-only, never a redesign.
-    nonisolated static let morphDuration = 0.22
+    /// Morph gesture length (v6): 0.18s easeOut, matching the modal's
+    /// original show timing and the motion family. The matrix judges
+    /// fast-vs-laggy; retune is duration-only, never a redesign.
+    nonisolated static let morphDuration = 0.18
 
     private(set) var text = ""
     private(set) var copied = false
@@ -49,14 +49,25 @@ final class NoTargetModalController {
 
     /// Build panel + hosting once, off the transition path (v4 F3b).
     /// Never orders front — pure construction cost moved to launch.
+    /// Uses the hosting recipe (v6 stroke kill — AppKit never forces
+    /// hosting layers).
     func prewarm() {
         if panel == nil {
             let hosting = NSHostingView(rootView: NoTargetModalView(controller: self))
             self.hosting = hosting
-            panel = FlowBarPanel.makePanel(
+            panel = FlowBarPanel.makeHostingPanel(
                 contentView: hosting,
                 size: NSSize(width: Self.width, height: Self.height)
             )
+        }
+    }
+
+    /// Swap content + clear any layer background SwiftUI resolved on its
+    /// own (v6 variant A — clear only what EXISTS, never force-create).
+    private func refreshContent() {
+        hosting?.rootView = NoTargetModalView(controller: self)
+        if let layer = hosting?.layer {
+            layer.backgroundColor = NSColor.clear.cgColor
         }
     }
 
@@ -64,7 +75,7 @@ final class NoTargetModalController {
         self.text = text
         copied = false
         prewarm()
-        hosting?.rootView = NoTargetModalView(controller: self)
+        refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let visible = screen.visibleFrame
         let endFrame = NSRect(
@@ -95,28 +106,31 @@ final class NoTargetModalController {
         panel?.orderOut(nil)
     }
 
-    /// Grow out of the live pill frame into the centered card (v4 morph).
-    /// One 0.22s easeOut animator gesture — the same render-server path
-    /// as the pill land — while the pill runs its existing melt in
-    /// parallel. Falls back to plain `show` when geometry is unavailable;
-    /// instant under Reduce Motion (same gate as the pill). Snapshot and
-    /// orderFront are adjacent MainActor statements (no suspension
-    /// between), so the origin race in §9 cannot interleave.
+    /// Grow out of the live pill frame IN PLACE at its slot (v6 morph).
+    /// Same x as the pill (both centered): top slot grows downward from
+    /// the pill's top edge, bottom slot upward from its bottom edge —
+    /// zero travel, so it reads as one surface becoming the other. One
+    /// 0.18s easeOut animator gesture while the pill runs its existing
+    /// melt in parallel. Falls back to plain `show` when geometry is
+    /// unavailable; instant under Reduce Motion (same gate as the pill).
+    /// Snapshot and orderFront are adjacent MainActor statements (no
+    /// suspension between), so the origin race cannot interleave.
     func showFromPill(
         pillFrame: NSRect,
         text: String,
         displayID: CGDirectDisplayID?,
+        position: FlowBarPosition = FlowBarPosition.current(),
         reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     ) {
         self.text = text
         copied = false
         prewarm()
-        hosting?.rootView = NoTargetModalView(controller: self)
+        refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else {
             show(text: text, displayID: displayID)
             return
         }
-        let endFrame = Self.morphEndFrame(visible: screen.visibleFrame)
+        let endFrame = Self.morphEndFrameAtSlot(visible: screen.visibleFrame, position: position)
         morphGeneration += 1
         let generation = morphGeneration
         panel?.setFrame(pillFrame, display: false)
@@ -140,14 +154,18 @@ final class NoTargetModalController {
         })
     }
 
-    /// Centered 464×168 card clamped into the visible frame (small
-    /// screens, notch): pure geometry, unit-tested.
-    nonisolated static func morphEndFrame(visible: NSRect) -> NSRect {
-        let width = min(Self.width, visible.width)
-        let height = min(Self.height, visible.height)
-        let x = visible.minX + (visible.width - width) / 2
-        let y = visible.minY + (visible.height - height) / 2
-        return NSRect(x: x, y: y, width: width, height: height)
+    /// Slot-anchored 464×168 card (v6): the pill's own slot helper with
+    /// card dimensions — same margins, clamp, and centering as the pill,
+    /// so x matches exactly and growth is purely vertical. Height guard
+    /// for pathological frames (real screens never hit it): keep the
+    /// slot edge, shrink inward. Pure geometry, unit-tested.
+    nonisolated static func morphEndFrameAtSlot(visible: NSRect, position: FlowBarPosition) -> NSRect {
+        var frame = FlowBarPosition.frame(width: Self.width, height: Self.height, on: visible, position: position)
+        if frame.height > visible.height {
+            frame.size.height = visible.height
+            if position == .top { frame.origin.y = visible.maxY - visible.height }
+        }
+        return frame
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }

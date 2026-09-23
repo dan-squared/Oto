@@ -296,13 +296,14 @@ final class FlowBarController {
         lastRouteKey = route.sessionKey
         switch route {
         case .catcher(_, let text):
-            // v4 morph: grow out of the live pill frame (same screen —
-            // the pill is pinned to the session target). Pill hidden or
-            // Reduce Motion → today's centered fade, byte-identical.
+            // v6 morph: grow out of the live pill frame at its own slot
+            // (top grows down, bottom grows up — zero travel). Pill hidden
+            // or Reduce Motion → today's centered fade, byte-identical.
             if let pillFrame = panel?.frameForMorph {
                 modal.showFromPill(
                     pillFrame: pillFrame, text: text,
                     displayID: Self.targetScreen(of: state),
+                    position: FlowBarPosition.current(),
                     reduceMotion: model.motionFrozen
                 )
             } else {
