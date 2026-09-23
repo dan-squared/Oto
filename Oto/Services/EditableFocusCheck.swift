@@ -10,14 +10,19 @@
 //
 //  Read-only AX (focused element + role, never writes); runs behind the
 //  existing trust gate (untrusted fails closed before reaching here), so
-//  no new entitlement. Any AX error, nil, or timeout degrades to
-//  `.unknown`, which proceeds EXACTLY as before — exotic AX trees can
-//  never regress insertion. Hung targets can't stall finalization: the
-//  check races a 300 ms timeout.
+//  no new entitlement. `kAXErrorNoValue` on the focus read IS the void
+//  case (nothing focused → divert); any other error, nil role, or the
+//  300 ms timeout degrades to `.unknown`, which proceeds EXACTLY as
+//  before — exotic AX trees can never regress insertion. The timeout is
+//  unstructured by necessity (a blocking C call cannot honor cooperative
+//  cancellation — a task group would await a hung worker forever); the
+//  worker runs off-pool and a one-shot gate admits exactly one winner.
+//  Every verdict is logged (focus category) so device trails are decisive.
 //
 
 import ApplicationServices
 import Foundation
+import os
 
 /// Verdict on whether keystrokes have somewhere to land.
 enum EditableFocus: Equatable, Sendable {
@@ -37,6 +42,15 @@ enum EditableFocus: Equatable, Sendable {
         }
         return .noField
     }
+
+    /// Pure AX-error mapping (unit-tested — the v5 fix): `.noValue`
+    /// on the focused-element read means nothing holds keyboard focus,
+    /// which IS nowhere to paste → divert. Every other error is genuine
+    /// ambiguity → legacy proceed. A missing role on an EXISTING element
+    /// stays unknown via `classify(nil)` (ambiguity, not void).
+    nonisolated static func verdictForFocusError(_ error: AXError) -> EditableFocus {
+        error == .noValue ? .noField : .unknown
+    }
 }
 
 /// Seam: the insertion path injects this; tests stub verdicts without AX.
@@ -49,44 +63,83 @@ struct LiveFocusCheck: FocusChecking {
     /// the verdict is `.unknown` (legacy behavior), not a hang.
     nonisolated static let timeoutNanoseconds: UInt64 = 300_000_000
 
-    nonisolated func editableFocus(for pid: pid_t) async -> EditableFocus {
-        await withTaskGroup(of: EditableFocus.self) { group in
-            group.addTask { Self.syncCheck(pid: pid) }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
-                return .unknown
+    /// One-shot resume gate: the AX worker and the timeout race, and
+    /// exactly one resumes the continuation (double-resume traps).
+    private final class ResumeGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private nonisolated(unsafe) var claimed = false
+        nonisolated func claim() -> Bool {
+            lock.withLock {
+                guard !claimed else { return false }
+                claimed = true
+                return true
             }
-            let first = await group.next() ?? .unknown
-            group.cancelAll()
-            return first
+        }
+    }
+
+    private nonisolated(unsafe) static let focusLog = Logger(subsystem: "app.Oto", category: "focus")
+
+    nonisolated static func logVerdict(pid: pid_t, verdict: EditableFocus, axError: AXError?, timedOut: Bool) {
+        focusLog.info("focus pid=\(pid, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(String(describing: axError), privacy: .public) timeout=\(timedOut, privacy: .public)")
+    }
+
+    nonisolated func editableFocus(for pid: pid_t) async -> EditableFocus {
+        // Unstructured by necessity: the blocking AX call cannot honor
+        // cooperative cancellation, so a structured group would await a
+        // hung worker forever and the "timeout" would be a lie. The
+        // worker runs OFF the cooperative pool (global queue — blocking
+        // C call), the timer on it; ResumeGate admits exactly one winner.
+        // A late loser still logs (truthful timestamped data) but cannot
+        // resume or touch state.
+        await withCheckedContinuation { continuation in
+            let gate = ResumeGate()
+            DispatchQueue.global(qos: .utility).async {
+                let detail = Self.syncCheckDetail(pid: pid)
+                Self.logVerdict(pid: pid, verdict: detail.verdict, axError: detail.axError, timedOut: false)
+                if gate.claim() { continuation.resume(returning: detail.verdict) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
+                guard !Task.isCancelled else { return }
+                Self.logVerdict(pid: pid, verdict: .unknown, axError: nil, timedOut: true)
+                if gate.claim() { continuation.resume(returning: .unknown) }
+            }
         }
     }
 
     /// Synchronous AX read (C API, thread-safe). Every failure shape —
-    /// error code, missing element, missing role — is `.unknown`, never
-    /// a guess. Conditional casts only: an unexpected object graph can
-    /// never trap.
+    /// error code, missing element, missing role — is mapped explicitly,
+    /// never guessed. Type-ID gate + downcast per the
+    /// RealTargetCapture.copyElement precedent.
     nonisolated static func syncCheck(pid: pid_t) -> EditableFocus {
+        syncCheckDetail(pid: pid).verdict
+    }
+
+    /// Detail variant: identical verdict, plus the raw AXError for the
+    /// verdict log (unknown-cause diagnosis). v5: no-value IS the void
+    /// case (nothing focused); any other error is ambiguity (legacy
+    /// proceed). Decided here, where the AXError is still in hand.
+    nonisolated static func syncCheckDetail(pid: pid_t) -> (verdict: EditableFocus, axError: AXError?) {
         let app = AXUIElementCreateApplication(pid)
         var focused: CFTypeRef?
-        // Type-ID gate first: the conditional cast below is trivially
-        // true for CoreFoundation types (compiler-enforced), so the ID
-        // check is the real protection against a surprising graph.
-        guard AXUIElementCopyAttributeValue(
+        let focusError = AXUIElementCopyAttributeValue(
             app, kAXFocusedUIElementAttribute as CFString, &focused
-        ) == .success,
-            let raw = focused,
+        )
+        guard focusError == .success else {
+            return (EditableFocus.verdictForFocusError(focusError), focusError)
+        }
+        guard let raw = focused,
             CFGetTypeID(raw) == AXUIElementGetTypeID()
-        else { return .unknown }
+        else { return (.unknown, nil) }
         // Safe: type ID verified above (RealTargetCapture.copyElement
         // precedent — conditional casts are trivially true for CF types,
         // unconditional `as` is unexpressible, so ID-gate + downcast).
         let element = unsafeDowncast(raw, to: AXUIElement.self)
         var roleRaw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
+        let roleError = AXUIElementCopyAttributeValue(
             element, kAXRoleAttribute as CFString, &roleRaw
-        ) == .success
-        else { return .unknown }
-        return EditableFocus.classify(role: roleRaw as? String)
+        )
+        guard roleError == .success else { return (.unknown, roleError) }
+        return (EditableFocus.classify(role: roleRaw as? String), nil)
     }
 }

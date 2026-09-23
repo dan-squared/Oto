@@ -11,6 +11,7 @@
 //
 
 import AppKit
+import ApplicationServices
 import Foundation
 import Testing
 @testable import Oto
@@ -419,6 +420,16 @@ struct RealTextInsertionTests {
         #expect(EditableFocus.classify(role: "AXWebArea") == .noField)
         #expect(EditableFocus.classify(role: nil) == .unknown)
         #expect(LiveFocusCheck.timeoutNanoseconds == 300_000_000)
+    }
+
+    @Test func focusErrorMapping() {
+        // No-value on the focus read IS the void case (nothing focused);
+        // every other AX error is ambiguity (legacy proceed).
+        #expect(EditableFocus.verdictForFocusError(.noValue) == .noField)
+        #expect(EditableFocus.verdictForFocusError(.failure) == .unknown)
+        #expect(EditableFocus.verdictForFocusError(.invalidUIElement) == .unknown)
+        #expect(EditableFocus.verdictForFocusError(.apiDisabled) == .unknown)
+        #expect(EditableFocus.verdictForFocusError(.cannotComplete) == .unknown)
     }
 
     @Test func noEditableFocusDivertsPreClipboard() async {
