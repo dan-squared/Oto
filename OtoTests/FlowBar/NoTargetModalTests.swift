@@ -72,8 +72,7 @@ struct NoTargetModalTests {
         #expect(CatcherPalette.current(.light) == .light)
     }
 
-    @Test func morphEndFrameAtSlotGrowsInPlace() {
-        // v6: same x as the pill (both centered), slot-anchored y —
+    @Test func morphEndFrameAtSlotGrowsInPlace() {        // v6: same x as the pill (both centered), slot-anchored y —
         // top grows down from the pill's top edge, bottom up from its
         // bottom edge. Zero travel, pure vertical growth.
         let roomy = NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -95,5 +94,18 @@ struct NoTargetModalTests {
             == NSRect(x: 8, y: 28, width: 384, height: 100))
         #expect(NoTargetModalController.morphEndFrameAtSlot(visible: tiny, position: .top)
             == NSRect(x: 8, y: 0, width: 384, height: 100))
+    }
+
+    @Test func contentMaskPathMatchesCard() {
+        // Variant-B mask geometry: the path must bound the card exactly
+        // (464×168, r22) — the mask clips everything SwiftUI paints to
+        // the silhouette, so any drift here re-opens the frame.
+        let box = NoTargetModalController.contentMaskPath().boundingBox
+        #expect(box == NSRect(
+            x: 0, y: 0,
+            width: NoTargetModalController.width,
+            height: NoTargetModalController.height
+        ))
+        #expect(NoTargetModalController.cornerRadius == 22)
     }
 }

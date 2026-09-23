@@ -42,7 +42,7 @@ struct CatcherPalette: Equatable, Sendable {
 
 extension CatcherPalette {
     var card: Color { Color(red: cardRed, green: cardGreen, blue: cardBlue) }
-    private var ink: Color { lightText ? .white : .black }
+    var ink: Color { lightText ? .white : .black }
     var transcript: Color { ink.opacity(textOpacity) }
     var dim: Color { ink.opacity(dimOpacity) }
 }

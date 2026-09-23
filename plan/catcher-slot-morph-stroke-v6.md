@@ -127,3 +127,19 @@ rect outline at window bounds, minimal UI otherwise correct).
   while visible only; ✕/Copy dismiss — matrix row, not a blocker.
 
 ## 7. Open questions — none. `execute` builds §4.
+
+## 8. Variant B specified (built — matrix decides)
+
+Variant A failed on device (frame persists): post-mortem is that
+clearing at prewarm is a silent no-op — the hosting layer doesn't
+exist until SwiftUI first displays, so SwiftUI creates it later
+with its own background. Variant B therefore masks instead of
+clearing: `contentMaskPath()` (pure, unit-pinned to the card box)
+applied via `scheduleContentMask()` on the next tick AFTER
+`orderFront` (both show paths), idempotent. The mask is ours, the
+paint is theirs — immune to re-renders (Copy toggles can't reopen
+the frame). If the matrix keeps the frame past B, the queued
+nuclear option (CALayer-drawn card, pill-style) gets specced.
+Also shipped here: `CatcherXStyle` (✕ hover dim→ink + 6% grow,
+press 94%, 0.12/0.08s easeOut); Copy keeps native `.bordered`
+feedback. Corner radius single-sourced (`cornerRadius`, pinned).

@@ -11,6 +11,7 @@
 //
 
 import AppKit
+import QuartzCore
 import SwiftUI
 
 /// Kill-switch setting. Default ON (the modal is the discovery path for
@@ -29,6 +30,7 @@ enum NoTargetModalSettings {
 final class NoTargetModalController {
     nonisolated static let width: CGFloat = 464
     nonisolated static let height: CGFloat = 168
+    nonisolated static let cornerRadius: CGFloat = 22
     /// Morph gesture length (v6): 0.18s easeOut, matching the modal's
     /// original show timing and the motion family. The matrix judges
     /// fast-vs-laggy; retune is duration-only, never a redesign.
@@ -94,6 +96,7 @@ final class NoTargetModalController {
         panel?.alphaValue = 0
         // orderFront, never key: focus must stay wherever the user had it.
         panel?.orderFront(nil)
+        scheduleContentMask()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -139,6 +142,7 @@ final class NoTargetModalController {
         // the 6C1 load-bearing call — editing lives in the optional
         // scratchpad, never here).
         panel?.orderFront(nil)
+        scheduleContentMask()
         guard !reduceMotion else {
             panel?.setFrame(endFrame, display: true)
             panel?.alphaValue = 1
@@ -154,6 +158,32 @@ final class NoTargetModalController {
         })
     }
 
+    /// Rounded-rect mask path for the hosting layer (v6 variant B):
+    /// clips EVERYTHING SwiftUI paints — including any opaque root
+    /// background it resolves on render — to the card silhouette.
+    /// Static geometry: hosting bounds never change (the panel frame
+    /// animates, not the content), so one mask holds for life. Immune
+    /// to re-renders by construction (the mask is ours, the paint is
+    /// theirs). Pure geometry, unit-tested.
+    nonisolated static func contentMaskPath() -> CGPath {
+        CGPath(
+            roundedRect: NSRect(x: 0, y: 0, width: Self.width, height: Self.height),
+            cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil
+        )
+    }
+
+    /// Apply the content mask on the next tick: the hosting layer is
+    /// created by SwiftUI at first display, so masking must run AFTER
+    /// orderFront — clearing at prewarm is a silent no-op on a nil
+    /// layer (why variant A failed). Idempotent; safe to call twice.
+    private func scheduleContentMask() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let layer = self.hosting?.layer else { return }
+            let mask = CAShapeLayer()
+            mask.path = Self.contentMaskPath()
+            layer.mask = mask
+        }
+    }
     /// Slot-anchored 464×168 card (v6): the pill's own slot helper with
     /// card dimensions — same margins, clamp, and centering as the pill,
     /// so x matches exactly and growth is purely vertical. Height guard
@@ -183,9 +213,28 @@ final class NoTargetModalController {
     }
 }
 
+/// ✕ press/hover response (v6: slight, never a restyle). Hover brightens
+/// dim→ink with a 6% grow; press sinks to 94%. Copy keeps the system
+/// `.bordered` style — its hover/press already come from AppKit.
+struct CatcherXStyle: ButtonStyle {
+    var base: Color
+    var hover: Color
+    var hovering: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(hovering ? hover : base)
+            .scaleEffect(configuration.isPressed ? 0.94 : hovering ? 1.06 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
 struct NoTargetModalView: View {
     let controller: NoTargetModalController
     @Environment(\.colorScheme) private var scheme
+    /// ✕ hover state (v6: slight brighten + grow — never a full restyle).
+    @State private var xHovering = false
 
     var body: some View {
         // v4 minimal surface (reference minus logo/hint/circled-X):
@@ -198,7 +247,7 @@ struct NoTargetModalView: View {
                 // Explicit clear root: the hosting view must paint nothing
                 // behind the card (the pill's v2 frame bug class — never again).
                 Color.clear
-                RoundedRectangle(cornerRadius: 22)
+                RoundedRectangle(cornerRadius: NoTargetModalController.cornerRadius)
                     .fill(palette.card)
                     .shadow(color: .black.opacity(palette.shadowOpacity), radius: 22, y: 6)
                 VStack(alignment: .leading, spacing: 0) {
@@ -225,10 +274,10 @@ struct NoTargetModalView: View {
                 Image(systemName: "xmark")
                     .font(.title3)
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(palette.dim)
+            .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
+            .onHover { xHovering = $0 }
             .padding(8)
         }
         .frame(
