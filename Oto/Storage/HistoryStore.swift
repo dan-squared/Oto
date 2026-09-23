@@ -67,7 +67,7 @@ final class HistoryStore {
 
     /// Records one final transcript. No-op when history is off or text is
     /// blank. Bounds enforced synchronously on every write: 30-day age,
-    /// newest-200 cap (createdAt desc, id tie-break), 5000-char text cap.
+    /// newest-100 cap (createdAt desc, id tie-break), 5000-char text cap.
     func record(finalText: String, bundleID: String?, at date: Date = Date()) async {
         guard enabled() else { return }
         let clean = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
