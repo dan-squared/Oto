@@ -80,7 +80,11 @@ struct LiveFocusCheck: FocusChecking {
     private nonisolated(unsafe) static let focusLog = Logger(subsystem: "app.Oto", category: "focus")
 
     nonisolated static func logVerdict(pid: pid_t, verdict: EditableFocus, axError: AXError?, timedOut: Bool) {
-        focusLog.info("focus pid=\(pid, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(String(describing: axError), privacy: .public) timeout=\(timedOut, privacy: .public)")
+        // Raw code, not the opaque struct description (which prints as
+        // `Optional(__C.AXError)` and hides the value that decides the
+        // sandbox-denial vs per-app-behavior question).
+        let code = axError.map { String($0.rawValue) } ?? "nil"
+        focusLog.info("focus pid=\(pid, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) timeout=\(timedOut, privacy: .public)")
     }
 
     nonisolated func editableFocus(for pid: pid_t) async -> EditableFocus {
@@ -101,8 +105,15 @@ struct LiveFocusCheck: FocusChecking {
             Task {
                 try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
                 guard !Task.isCancelled else { return }
-                Self.logVerdict(pid: pid, verdict: .unknown, axError: nil, timedOut: true)
-                if gate.claim() { continuation.resume(returning: .unknown) }
+                // Gate first: if the worker already won (and logged its
+                // detail), the timer stays silent — otherwise every
+                // session emits a spurious timeout line after the truth.
+                // If the timer wins, it logs + resumes; a late worker
+                // detail line may follow, which reads chronologically.
+                if gate.claim() {
+                    Self.logVerdict(pid: pid, verdict: .unknown, axError: nil, timedOut: true)
+                    continuation.resume(returning: .unknown)
+                }
             }
         }
     }
