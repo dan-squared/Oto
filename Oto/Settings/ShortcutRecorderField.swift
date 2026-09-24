@@ -50,6 +50,7 @@ extension ShortcutDispatch {
         case .notReceivedGlobally: return "Not detected yet"
         case .conflicts: return "Conflicts with another shortcut"
         case .requiresAccessibility: return "Requires Accessibility"
+        case .notSet: return "Not set"
         }
     }
 }
@@ -75,9 +76,12 @@ enum KeyNames: Sendable {
     }
 
     /// Chips for a keycap field, in reference order (modifiers then key).
-    /// The factory dictation set renders as one honest label.
+    /// The factory dictation set renders as one honest label. Unassigned
+    /// renders no chips — the field shows its record placeholder instead.
     nonisolated static func chips(for kind: ShortcutTrigger.Kind) -> [String] {
         switch kind {
+        case .unassigned:
+            return []
         case .modifierHold(let code):
             return [holdChip(for: code)]
         case .functionKey(let codes):
@@ -89,9 +93,12 @@ enum KeyNames: Sendable {
     }
 
     /// One-line label for sentences ("Hold Right ⌥ and speak." — sided,
-    /// never ambiguous).
+    /// never ambiguous). Unassigned has no label; callers show record
+    /// affordances instead (hold is never unassigned).
     nonisolated static func shortLabel(for kind: ShortcutTrigger.Kind) -> String {
         switch kind {
+        case .unassigned:
+            return "a shortcut"
         case .modifierHold(let code):
             return holdChip(for: code)
         case .functionKey(let codes):

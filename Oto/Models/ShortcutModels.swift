@@ -8,6 +8,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
+import os
 
 /// Physical key event, already normalized by a backend. Backends emit
 /// values; they never decide session behavior (12 limit).
@@ -65,6 +66,8 @@ struct ShortcutTrigger: Equatable, Sendable, Codable {
                 return a == b
             case (.combo(let am, let ak), .combo(let rm, let rk)):
                 return am == rm && ak == rk
+            case (.unassigned, .unassigned):
+                return true
             default:
                 return false
             }
@@ -76,6 +79,10 @@ struct ShortcutTrigger: Equatable, Sendable, Codable {
         case functionKey(codes: Set<Int64>)
         /// Ordinary combo (modifiers + real key) on the Carbon path.
         case combo(modifiers: UInt32, keyCode: UInt32)
+        /// No shortcut assigned (opt-in slot). Registers nothing, fires
+        /// nothing, conflicts with nothing. The hands-free factory
+        /// default: double-tap of the hold key is the always-on path.
+        case unassigned
     }
 
     var kind: Kind
@@ -97,6 +104,12 @@ struct ShortcutTrigger: Equatable, Sendable, Codable {
             kind: .functionKey(codes: [Int64(kVK_F5), 176]),
             interaction: .handsFree
         )
+    }
+
+    /// Empty hands-free slot: double-tap of the hold key is the always-on
+    /// path; the toggle is strictly opt-in.
+    static func unassignedHandsFree() -> ShortcutTrigger {
+        ShortcutTrigger(kind: .unassigned, interaction: .handsFree)
     }
 
     /// Copy with the interaction replaced. Dispatch enforces the slot's
@@ -127,11 +140,14 @@ extension ShortcutTrigger.Kind {
     ///   unless the combo IS that function key bare (same keyCode, no
     ///   modifiers).
     /// - modifierHold-vs-functionKey: disjoint detection paths, never collide.
+    /// - unassigned-vs-anything: an empty slot claims nothing.
     /// Combo-vs-combo is deliberately conservative: the same keyCode blocks
     /// even with disjoint modifiers (saving near-identical shortcuts for
     /// both modes is confusing UX either way).
     nonisolated func conflictsWith(_ other: ShortcutTrigger.Kind) -> Bool {
         switch (self, other) {
+        case (.unassigned, _), (_, .unassigned):
+            return false
         case (.modifierHold(let a), .modifierHold(let b)):
             return a == b
         case (.functionKey(let a), .functionKey(let b)):
@@ -146,6 +162,27 @@ extension ShortcutTrigger.Kind {
              (.combo(let modifiers, let keyCode), .functionKey(let codes)):
             return modifiers == 0 && codes.contains(Int64(keyCode))
         }
+    }
+}
+
+extension ShortcutTrigger.Kind {
+    /// Single source of truth for system-tap-sensitive triggers (bare fn
+    /// only): taps belong to macOS, only sustained holds are Oto's. Every
+    /// fn special-case (dispatch confirm path, tracker exclusion, UI copy)
+    /// derives from this — never a scattered keyCode comparison.
+    nonisolated var isSystemTapSensitive: Bool {
+        if case .modifierHold(let code) = self, code == UInt16(kVK_Function) {
+            return true
+        }
+        return false
+    }
+
+    /// Whether the kind can drive the instant-toggle hands-free slot. Bare
+    /// fn cannot: a press both toggles and fires the system tap, with no
+    /// hold duration to disambiguate. The modal refuses these with guidance
+    /// instead of saving a broken binding.
+    nonisolated var supportsHandsFreeToggle: Bool {
+        !isSystemTapSensitive
     }
 }
 
@@ -199,10 +236,12 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
 
     static let defaultsKey = "app.Oto.dualShortcutConfiguration"
 
+    private static let log = Logger(subsystem: "app.Oto", category: "shortcut")
+
     static func `default`() -> DualShortcutConfiguration {
         DualShortcutConfiguration(
             hold: .defaultHoldToTalk(),
-            handsFree: .dictationKeyHandsFree(),
+            handsFree: .unassignedHandsFree(),
             enabled: true
         )
     }
@@ -217,6 +256,19 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
             // never written again).
             if let migrated = migrate(from: defaults) { return migrated }
             return .default()
+        }
+        // Normalize pre-gate stores: a hands-free bare fn predates the
+        // hold-only rule and can never work (press toggles + fires the
+        // system tap). Convert once to empty and save back, so the dead
+        // guidance state cannot linger.
+        if case .modifierHold(let code) = decoded.handsFree.kind,
+           code == UInt16(kVK_Function)
+        {
+            var normalized = decoded
+            normalized.handsFree = .unassignedHandsFree()
+            normalized.save(to: defaults)
+            Self.log.info("migrated hands-free fn to unassigned (hold-only rule)")
+            return normalized
         }
         return decoded
     }
@@ -237,6 +289,15 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
             config.hold = old.trigger.withInteraction(.holdToTalk)
         case .handsFree:
             config.handsFree = old.trigger.withInteraction(.handsFree)
+        }
+        // Bare fn can never drive the instant-toggle slot (a press both
+        // toggles and fires the system tap): migrate it to empty rather
+        // than preserve a broken binding.
+        if case .modifierHold(let code) = config.handsFree.kind,
+           code == UInt16(kVK_Function)
+        {
+            config.handsFree = .unassignedHandsFree()
+            Self.log.info("migrated hands-free fn to unassigned (hold-only rule)")
         }
         return config
     }

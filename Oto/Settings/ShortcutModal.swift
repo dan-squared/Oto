@@ -25,6 +25,10 @@ struct KeycapField: View {
     let chips: [String]
     let isRecording: Bool
     let disabled: Bool
+    /// Shown when no binding is staged or saved (opt-in slot).
+    let emptyPlaceholder: String
+    /// Trash tooltip; differs when there is nothing to clear.
+    let trashHelp: String
     let onArm: () -> Void
     let onTrash: () -> Void
     var recorder: ShortcutRecorderModifier
@@ -37,6 +41,9 @@ struct KeycapField: View {
                 HStack(spacing: 4) {
                     if isRecording {
                         Text("Press your shortcut…")
+                            .foregroundStyle(.secondary)
+                    } else if chips.isEmpty {
+                        Text(emptyPlaceholder)
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(chips, id: \.self) { chip in
@@ -162,6 +169,9 @@ struct ShortcutModal: View {
     private func slotCard(slot: ShortcutSlot, title: String, subtitle: String) -> some View {
         let recording = slot == .hold ? isRecordingHold : isRecordingHandsFree
         let otherRecording = slot == .hold ? isRecordingHandsFree : isRecordingHold
+        // Opt-in slot with nothing assigned: placeholder + hints instead
+        // of chips; recording into it activates the slot on Done.
+        let isEmpty = staging.effectiveKind(for: slot) == .unassigned
         return VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
@@ -206,6 +216,8 @@ struct ShortcutModal: View {
                 chips: KeyNames.chips(for: staging.effectiveKind(for: slot)),
                 isRecording: recording,
                 disabled: otherRecording,
+                emptyPlaceholder: slot == .handsFree ? "Click to add a shortcut…" : "Click to record…",
+                trashHelp: isEmpty ? "Nothing assigned" : "Clear (shortcuts turn off when you press Done)",
                 onArm: {
                     dispatch.setSuspended(true)
                     setRecording(true, slot: slot)
@@ -227,6 +239,14 @@ struct ShortcutModal: View {
                     }
                 )
             )
+
+            if slot == .handsFree, isEmpty, message(for: slot) == nil {
+                // The opt-in toggle is empty: double-tap of the hold key
+                // is the always-on path, no setup needed.
+                Text("Double-tap \(KeyNames.shortLabel(for: staging.effectiveKind(for: .hold))) anytime — no setup needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack {
                 Picker("Type", selection: presetBinding(for: slot)) {
@@ -305,7 +325,7 @@ struct ShortcutModal: View {
         switch kind {
         case .modifierHold: return .holdKey
         case .functionKey: return .dictationKey
-        case .combo: return .combo
+        case .combo, .unassigned: return .combo
         }
     }
 
@@ -318,11 +338,12 @@ struct ShortcutModal: View {
     /// Bare fn is hold-only: an instant toggle cannot share a key with
     /// system taps, so staging it hands-free is refused with guidance
     /// (never staged, never saved).
+    /// Stage a kind; a kind equal to live unstages (no phantom change).
+    /// Advisory gate runs immediately so conflicts surface before Done.
+    /// Hands-free fn refusal derives from the model policy (same rule as
+    /// dispatch): an instant toggle cannot share a key with system taps.
     private func stage(kind: ShortcutTrigger.Kind, slot: ShortcutSlot) {
-        if slot == .handsFree,
-           case .modifierHold(let code) = kind,
-           code == UInt16(kVK_Function)
-        {
+        if slot == .handsFree, !kind.supportsHandsFreeToggle {
             setMessage("fn taps belong to macOS — use Push to talk or a combination.", slot: slot)
             setShowSwap(false, slot: slot)
             return
@@ -353,6 +374,13 @@ struct ShortcutModal: View {
     private func stageClear(slot: ShortcutSlot) {
         dispatch.setSuspended(false)
         setRecording(false, slot: slot)
+        // Clearing an already-empty slot is a message-clear no-op: there
+        // is no binding to remove and, crucially, no global disable.
+        if case .unassigned = staging.effectiveKind(for: slot) {
+            setMessage(nil, slot: slot)
+            setShowSwap(false, slot: slot)
+            return
+        }
         if slot == .hold {
             staging.stagedHoldKind = nil
             staging.stagedHoldCleared = true
@@ -397,7 +425,7 @@ struct ShortcutModal: View {
 
     /// Advisory gate: same refusal Done would give, shown early with Swap.
     /// A grandfathered live fn in hands-free (swap predating the gate)
-    /// gets guidance here, never a block.
+    /// gets guidance here, never a block. Derived from the model policy.
     private func refreshAdvisory(for slot: ShortcutSlot) {
         let preview = staging.donePreview()
         let result = slot == .hold ? preview.hold : preview.handsFree
@@ -408,8 +436,7 @@ struct ShortcutModal: View {
             )
             setShowSwap(true, slot: slot)
         } else if slot == .handsFree,
-                  case .modifierHold(let code) = staging.effectiveKind(for: slot),
-                  code == UInt16(kVK_Function)
+                  !staging.effectiveKind(for: slot).supportsHandsFreeToggle
         {
             setMessage("fn taps belong to macOS — use Push to talk or a combination.", slot: slot)
             setShowSwap(false, slot: slot)
@@ -420,11 +447,10 @@ struct ShortcutModal: View {
     }
 
     /// Surfaces the hands-free fn guidance after resyncs that clear
-    /// staged state (open, swap, reset). Hold card untouched.
+    /// staged state (open, swap, reset). Hold card untouched. With the
+    /// load-time migration, live fn here arises only via swap.
     private func refreshFnGuidance() {
-        if case .modifierHold(let code) = staging.effectiveKind(for: .handsFree),
-           code == UInt16(kVK_Function)
-        {
+        if !staging.effectiveKind(for: .handsFree).supportsHandsFreeToggle {
             setMessage("fn taps belong to macOS — use Push to talk or a combination.", slot: .handsFree)
             setShowSwap(false, slot: .handsFree)
         }
@@ -477,9 +503,10 @@ struct ShortcutModal: View {
 
     private func resetToDefaults() {
         _ = dispatch.updateHoldTrigger(.defaultHoldToTalk())
-        _ = dispatch.updateHandsFreeTrigger(.dictationKeyHandsFree())
+        _ = dispatch.updateHandsFreeTrigger(.unassignedHandsFree())
         staging = ShortcutStaging(live: dispatch.configuration)
         clearMessages()
+        refreshFnGuidance()
     }
 
     private func swapSlots() {

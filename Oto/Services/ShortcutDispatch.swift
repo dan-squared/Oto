@@ -19,6 +19,9 @@ enum ShortcutCalibration: Equatable, Sendable {
     case notReceivedGlobally
     case conflicts
     case requiresAccessibility
+    /// No shortcut assigned (opt-in slot). Deliberate-empty needs no
+    /// attention: ranked with ready so the combined value follows live slots.
+    case notSet
 }
 
 /// Outcome of a per-slot trigger save. `.blocked` keeps the old trigger
@@ -60,9 +63,10 @@ final class ShortcutDispatch {
     private var fnConfirmTask: Task<Void, Never>?
 
     /// True when the hold slot is a bare fn key — the only trigger with
-    /// system tap behavior. All other holds stay instant.
+    /// system tap behavior. All other holds stay instant. Derived from
+    /// the model policy (single source; never a scattered keyCode check).
     private var isFnHold: Bool {
-        trigger(for: .hold).kind == .modifierHold(keyCode: UInt16(kVK_Function))
+        trigger(for: .hold).kind.isSystemTapSensitive
     }
     /// Begin-generation counter: every routed begin bumps it synchronously;
     /// the routing Task settles it after storing the id (or nil-ing).
@@ -152,6 +156,10 @@ final class ShortcutDispatch {
         functionSlots: inout [Int64: ShortcutSlot]
     ) {
         switch trigger.kind {
+        case .unassigned:
+            // Opt-in slot with nothing assigned: registers nothing, fires
+            // nothing. Double-tap of the hold key needs no trigger.
+            break
         case .modifierHold(let keyCode):
             // HID tap path (NSEvent monitors are banned: proven to wedge
             // MenuBarExtra tracking). Requires Accessibility trust.
@@ -309,6 +317,12 @@ final class ShortcutDispatch {
     }
 
     func resetCalibration(for slot: ShortcutSlot) {
+        // An unassigned slot is never "untested" — it is deliberately
+        // empty. Preserve notSet so the row never degrades.
+        if case .unassigned = trigger(for: slot).kind {
+            setCalibration(.notSet, for: slot)
+            return
+        }
         if slot == .hold {
             observedDownHold = false
             observedUpAfterDownHold = false
@@ -343,9 +357,13 @@ final class ShortcutDispatch {
 
     private func slotRequiresAccessibility(_ slot: ShortcutSlot) -> Bool {
         // Carbon combos ride the window-server hotkey path (no AX needed);
-        // anything on the HID tap needs trust.
-        if case .combo = trigger(for: slot).kind { return false }
-        return true
+        // anything on the HID tap needs trust. Unassigned needs nothing.
+        switch trigger(for: slot).kind {
+        case .combo, .unassigned:
+            return false
+        case .modifierHold, .functionKey:
+            return true
+        }
     }
 
     private func slotUsesHIDTap(_ slot: ShortcutSlot) -> Bool {
@@ -359,7 +377,11 @@ final class ShortcutDispatch {
     private func updateCalibrationForAvailability() {
         guard configuration.enabled, !isSuspended else { return }
         for slot in ShortcutSlot.allCases {
-            if slotRequiresAccessibility(slot), !isAccessibilityTrusted() {
+            // Unassigned slots report notSet (set by reset/start paths),
+            // never availability states — there is nothing to receive.
+            if case .unassigned = trigger(for: slot).kind {
+                setCalibration(.notSet, for: slot)
+            } else if slotRequiresAccessibility(slot), !isAccessibilityTrusted() {
                 setCalibration(.requiresAccessibility, for: slot)
             } else if calibration(for: slot) == .untested, !slotBackendsLive(slot) {
                 setCalibration(.notReceivedGlobally, for: slot)
@@ -369,6 +391,10 @@ final class ShortcutDispatch {
 
     private func slotBackendsLive(_ slot: ShortcutSlot) -> Bool {
         switch trigger(for: slot).kind {
+        case .unassigned:
+            // Unreachable by construction (availability skips unassigned
+            // slots); true so no caller can derive "not received" from it.
+            return true
         case .combo:
             return comboMonitor(for: slot).isLive
         case .modifierHold, .functionKey:
@@ -386,7 +412,7 @@ final class ShortcutDispatch {
         case .conflicts: return 3
         case .notReceivedGlobally: return 2
         case .untested: return 1
-        case .ready: return 0
+        case .notSet, .ready: return 0
         }
     }
 

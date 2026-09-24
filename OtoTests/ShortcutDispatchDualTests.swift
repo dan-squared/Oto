@@ -166,7 +166,7 @@ struct ShortcutDispatchDualTests {
         defer { cleanDualKey() }
 
         #expect(dispatch.updateHoldTrigger(.defaultHoldToTalk()) == .unchanged)
-        #expect(dispatch.updateHandsFreeTrigger(.dictationKeyHandsFree()) == .unchanged)
+        #expect(dispatch.updateHandsFreeTrigger(.unassignedHandsFree()) == .unchanged)
     }
 
     @Test func triggerMatchingOtherSlotIsBlockedAndOldKept() {
@@ -180,11 +180,18 @@ struct ShortcutDispatchDualTests {
             interaction: .handsFree
         )
         #expect(dispatch.updateHandsFreeTrigger(attempt) == .blocked)
-        #expect(dispatch.configuration.handsFree == .dictationKeyHandsFree())
+        #expect(dispatch.configuration.handsFree == .unassignedHandsFree())
 
-        // Preset equal to the other slot's live trigger: same refusal.
+        // Same shortcut in both slots, staged explicitly: occupy
+        // hands-free with a combo, then refuse it in hold.
+        let mods = CarbonModifiers.command | CarbonModifiers.control
+        let staged = ShortcutTrigger(
+            kind: combo(kVK_ANSI_G, modifiers: mods),
+            interaction: .handsFree
+        )
+        #expect(dispatch.updateHandsFreeTrigger(staged) == .applied)
         let preset = ShortcutTrigger(
-            kind: DualShortcutConfiguration.default().handsFree.kind,
+            kind: combo(kVK_ANSI_G, modifiers: mods),
             interaction: .holdToTalk
         )
         #expect(dispatch.updateHoldTrigger(preset) == .blocked)
@@ -201,7 +208,7 @@ struct ShortcutDispatchDualTests {
         dispatch.setEnabled(false)
         #expect(dispatch.configuration.enabled == false)
         #expect(dispatch.calibrationHold == .untested)
-        #expect(dispatch.calibrationHandsFree == .untested)
+        #expect(dispatch.calibrationHandsFree == .notSet)
 
         // A fresh explicit assignment is intent to have shortcuts on.
         let mods = CarbonModifiers.command | CarbonModifiers.control
@@ -270,8 +277,53 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.configuration.enabled == false)
         dispatch.swapHoldAndHandsFree()
         #expect(dispatch.configuration.enabled == true)
-        #expect(dispatch.configuration.hold == .dictationKeyHandsFree().withInteraction(.holdToTalk))
+        #expect(dispatch.configuration.hold == .unassignedHandsFree().withInteraction(.holdToTalk))
         #expect(dispatch.configuration.handsFree == .defaultHoldToTalk().withInteraction(.handsFree))
+    }
+
+    // MARK: - Unassigned slot
+
+    @Test func unassignedSlotStaysNotSetAndNeverWins() {
+        let (coordinator, _) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        defer { cleanDualKey() }
+        #expect(dispatch.configuration.handsFree.kind == .unassigned)
+
+        dispatch.refreshAvailability()
+        #expect(dispatch.calibrationHandsFree == .notSet)
+        // Combined value follows the live hold slot, never the empty one.
+        #expect(dispatch.calibration == dispatch.calibrationHold)
+        #expect(dispatch.calibration != .notSet)
+    }
+
+    @Test func doubleTapConvertsWithEmptyToggleSlot() async {
+        // The toggle trigger is unnecessary for conversion: the coordinator
+        // owns hands-free sessions, the slot only owns its key.
+        let (coordinator, inserter, _) = makeGatedCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        #expect(dispatch.configuration.handsFree.kind == .unassigned)
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(100))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(await inserter.calls.count == 1)
+
+        tap(dispatch, from: t0, downMs: 250, upMs: 330)
+        _ = await waitForHandsFree(coordinator)
+        guard case .recording(let converted) = await coordinator.state,
+              converted.interaction == .handsFree
+        else {
+            Issue.record("expected hands-free recording, got \(await coordinator.state)")
+            return
+        }
+        // Micro two was cancelled before it could insert.
+        #expect(await inserter.calls.count == 1)
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(await inserter.calls.count == 2)
     }
 
     // MARK: - Double-tap to hands-free

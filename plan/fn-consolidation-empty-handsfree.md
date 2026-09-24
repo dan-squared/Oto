@@ -1,6 +1,10 @@
 # fn consolidation + empty-by-default hands-free ("release shortcut")
 
-Status: PLAN ONLY. Nothing implemented. Awaiting approval.
+Status: IMPLEMENTED 2026-09-24 (commit on abu-dhabi). Build green;
+374 tests: all green except the 3 pre-existing environmental
+`RealTextInsertionTests` failures (proven identical on the clean tree).
+Device matrix (§7 + round 8) still requires a packaged/Xcode Run with
+live dictation + screenshots. Nothing merged.
 Decisions D1–D5 locked below with rationale; D6 is a one-line alternative.
 
 ## 1. Goal (user-ordered)
