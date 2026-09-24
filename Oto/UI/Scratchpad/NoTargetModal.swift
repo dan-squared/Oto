@@ -11,6 +11,7 @@
 //
 
 import AppKit
+import os
 import QuartzCore
 import SwiftUI
 
@@ -92,6 +93,10 @@ final class NoTargetModalController {
 
     private(set) var text = ""
     private(set) var copied = false
+    /// Build-identity + geometry trail: every catcher appearance logs
+    /// words, size, and mode, so a screenshot without a matching line is
+    /// stale by construction (never chase ghosts again).
+    private let log = Logger(subsystem: "app.Oto", category: "catcher")
     private var panel: NSPanel?
     private var hosting: NSHostingView<NoTargetModalView>?
     /// Morph generation: a re-fired route supersedes a mid-morph one
@@ -109,6 +114,7 @@ final class NoTargetModalController {
     /// hosting layers).
     func prewarm() {
         if panel == nil {
+            log.info("catcher ready (dynamic height, 100-word cap)")
             let hosting = NSHostingView(rootView: NoTargetModalView(controller: self))
             self.hosting = hosting
             panel = FlowBarPanel.makeHostingPanel(
@@ -142,6 +148,7 @@ final class NoTargetModalController {
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let visible = screen.visibleFrame
         let height = cardHeight(for: self.text, visible: visible)
+        log.info("catcher show words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height)) autoCopied=\(autoCopied)")
         let endFrame = NSRect(
             x: visible.midX - Self.width / 2,
             y: visible.midY - height / 2,
@@ -209,6 +216,7 @@ final class NoTargetModalController {
             return
         }
         let height = cardHeight(for: self.text, visible: screen.visibleFrame)
+        log.info("catcher show words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height)) autoCopied=\(autoCopied)")
         let endFrame = Self.morphEndFrameAtSlot(visible: screen.visibleFrame, position: position, height: height)
         morphGeneration += 1
         let generation = morphGeneration
@@ -272,7 +280,11 @@ final class NoTargetModalController {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             guard let layer = self.hosting?.layer else {
-                if attempts > 1 { self.scheduleContentMask(size: size, attempts: attempts - 1) }
+                if attempts > 1 {
+                    self.scheduleContentMask(size: size, attempts: attempts - 1)
+                } else {
+                    self.log.error("catcher mask skipped (no hosting layer)")
+                }
                 return
             }
             guard self.lastMaskSize != size else { return }
@@ -280,6 +292,7 @@ final class NoTargetModalController {
             mask.path = Self.contentMaskPath(size: size)
             layer.mask = mask
             self.lastMaskSize = size
+            self.log.debug("catcher mask installed \(Int(size.width))x\(Int(size.height))")
         }
     }
     /// Slot-anchored card (v6): the pill's own slot helper with card
