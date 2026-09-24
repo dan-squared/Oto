@@ -1,8 +1,9 @@
 # Focus detection hardening + shortcut settings redo (modal)
 
-Status: PLAN ONLY. Nothing implemented.
-Decisions locked 2026-09-24 (user took all recommendations, §9 resolved).
-Awaiting `execute`.
+Status: IMPLEMENTED 2026-09-24 (commit on abu-dhabi). Build green,
+full suite green repeatedly (330/330: 286 baseline + 25 dual + 19 new).
+Device matrix (§7) still requires a packaged/Xcode Run with live
+dictation + modal screenshot — not runnable headless. Nothing merged.
 
 Reference UI (attached, gitignored under `.context/attachments/`): Wispr
 Flow-style Shortcuts — a summary card ("Hold fn and speak." + Change

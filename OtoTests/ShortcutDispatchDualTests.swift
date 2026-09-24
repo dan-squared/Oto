@@ -212,4 +212,43 @@ struct ShortcutDispatchDualTests {
         dispatch.setSuspended(false)
         #expect(dispatch.isSuspended == false)
     }
+
+    // MARK: - Swap
+
+    @Test func swapExchangesSlotsAndEnables() {
+        let (coordinator, _) = makeCoordinator()
+        let mods = CarbonModifiers.command | CarbonModifiers.control
+        let holdCombo = ShortcutTrigger(kind: combo(kVK_ANSI_G, modifiers: mods), interaction: .holdToTalk)
+        let freeCombo = ShortcutTrigger(kind: combo(kVK_ANSI_H, modifiers: mods), interaction: .handsFree)
+        var config = DualShortcutConfiguration.default()
+        config.hold = holdCombo
+        config.handsFree = freeCombo
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: config)
+        defer { cleanDualKey() }
+
+        dispatch.swapHoldAndHandsFree()
+        #expect(dispatch.configuration.hold.kind == freeCombo.kind)
+        #expect(dispatch.configuration.hold.interaction == .holdToTalk)
+        #expect(dispatch.configuration.handsFree.kind == holdCombo.kind)
+        #expect(dispatch.configuration.handsFree.interaction == .handsFree)
+        #expect(dispatch.configuration.enabled == true)
+
+        // Swap twice round-trips.
+        dispatch.swapHoldAndHandsFree()
+        #expect(dispatch.configuration.hold == holdCombo)
+        #expect(dispatch.configuration.handsFree == freeCombo)
+    }
+
+    @Test func swapReEnablesFromDisabled() {
+        let (coordinator, _) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        defer { cleanDualKey() }
+
+        dispatch.setEnabled(false)
+        #expect(dispatch.configuration.enabled == false)
+        dispatch.swapHoldAndHandsFree()
+        #expect(dispatch.configuration.enabled == true)
+        #expect(dispatch.configuration.hold == .dictationKeyHandsFree().withInteraction(.holdToTalk))
+        #expect(dispatch.configuration.handsFree == .defaultHoldToTalk().withInteraction(.handsFree))
+    }
 }

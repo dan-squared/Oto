@@ -212,7 +212,13 @@ final class ShortcutDispatch {
         let current = slot == .hold ? configuration.hold : configuration.handsFree
         let other = slot == .hold ? configuration.handsFree : configuration.hold
         guard fixed != current else { return .unchanged }
-        guard !fixed.kind.conflictsWith(other.kind) else { return .blocked }
+        guard !fixed.kind.conflictsWith(other.kind) else {
+            // Silent refusals are undebuggable: name both kinds so device
+            // trails show what the person attempted (kinds only — never
+            // transcript text, and kinds never appear here anyway).
+            log.info("save blocked for \(slot == .hold ? "hold" : "hands-free", privacy: .public): conflicts with other slot")
+            return .blocked
+        }
         cancelActiveSession()
         if slot == .hold {
             configuration.hold = fixed
@@ -232,6 +238,22 @@ final class ShortcutDispatch {
         configuration.enabled = enabled
         resetCalibration()
         start()
+    }
+
+    /// Atomic exchange of the two slots' triggers (the modal's Swap).
+    /// Always safe without gating: the kind *pair* is unchanged, only the
+    /// assignment flips, so no new conflict can exist by construction.
+    /// Stored interactions are re-enforced (belt-and-braces over the
+    /// migration-time enforcement).
+    func swapHoldAndHandsFree() {
+        cancelActiveSession()
+        let oldHold = configuration.hold
+        configuration.hold = configuration.handsFree.withInteraction(.holdToTalk)
+        configuration.handsFree = oldHold.withInteraction(.handsFree)
+        configuration.enabled = true
+        resetCalibration()
+        start()
+        log.info("shortcuts swapped between slots")
     }
 
     // MARK: - Calibration

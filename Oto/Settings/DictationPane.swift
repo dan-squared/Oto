@@ -21,16 +21,9 @@ struct DictationPane: View {
     @State private var prepareFeedback: String?
     @State private var isPreparing = false
 
-    @State private var holdChoice = SlotKindChoice.holdKey
-    @State private var handsFreeChoice = SlotKindChoice.dictationKey
-    @State private var holdCalibrationText = "Untested"
-    @State private var handsFreeCalibrationText = "Untested"
-    @State private var isRecordingHold = false
-    @State private var isRecordingHandsFree = false
-    @State private var holdComboLabel = "Click to record…"
-    @State private var handsFreeComboLabel = "Click to record…"
-    @State private var holdConflictMessage: String?
-    @State private var handsFreeConflictMessage: String?
+    @State private var shortcutSummary = "Hold ⌥ and speak."
+    @State private var shortcutStatus = "Untested"
+    @State private var showShortcutModal = false
 
     @State private var micText = "Checking…"
     @State private var axTrusted = false
@@ -62,45 +55,24 @@ struct DictationPane: View {
             }
 
             Section("Shortcut") {
-                ShortcutSlotRow(
-                    title: "Hold to talk",
-                    choice: $holdChoice,
-                    comboLabel: holdComboLabel,
-                    conflictMessage: holdConflictMessage,
-                    calibrationText: holdCalibrationText,
-                    isRecording: $isRecordingHold,
-                    recordingDisabled: isRecordingHandsFree,
-                    onKindChange: { applySlotChoice(slot: .hold) },
-                    onBeginRecording: { dispatch.setSuspended(true) },
-                    onCapture: { modifiers, keyCode, conflicts in
-                        captureCombo(modifiers: modifiers, keyCode: keyCode, conflicts: conflicts, slot: .hold)
-                    },
-                    onClear: { clearSlot(.hold) },
-                    onCancel: { cancelRecording(slot: .hold) },
-                    onInvalid: { NSSound.beep() }
-                )
-
-                ShortcutSlotRow(
-                    title: "Hands-free",
-                    choice: $handsFreeChoice,
-                    comboLabel: handsFreeComboLabel,
-                    conflictMessage: handsFreeConflictMessage,
-                    calibrationText: handsFreeCalibrationText,
-                    isRecording: $isRecordingHandsFree,
-                    recordingDisabled: isRecordingHold,
-                    onKindChange: { applySlotChoice(slot: .handsFree) },
-                    onBeginRecording: { dispatch.setSuspended(true) },
-                    onCapture: { modifiers, keyCode, conflicts in
-                        captureCombo(modifiers: modifiers, keyCode: keyCode, conflicts: conflicts, slot: .handsFree)
-                    },
-                    onClear: { clearSlot(.handsFree) },
-                    onCancel: { cancelRecording(slot: .handsFree) },
-                    onInvalid: { NSSound.beep() }
-                )
-
-                Text("Press either shortcut anywhere. Ready appears per row after a real global sequence.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Shortcuts")
+                            .font(.headline)
+                        Text(shortcutSummary)
+                            .foregroundStyle(.secondary)
+                        Text(shortcutStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Change") {
+                        showShortcutModal = true
+                    }
+                }
+                .sheet(isPresented: $showShortcutModal) {
+                    ShortcutModal(dispatch: dispatch)
+                }
             }
 
             Section("Microphone") {
@@ -162,10 +134,10 @@ struct DictationPane: View {
             await refreshSpeech()
             refreshPermissions()
             // Calibration reflects live backend state; the poll serves the
-            // test-shortcut rows only (product behavior, not diagnostics scaffolding).
+            // summary row only (per-slot status lives in the modal).
             while !Task.isCancelled {
-                holdCalibrationText = dispatch.calibrationText(for: .hold)
-                handsFreeCalibrationText = dispatch.calibrationText(for: .handsFree)
+                shortcutSummary = "Hold \(KeyNames.shortLabel(for: dispatch.configuration.hold.kind)) and speak."
+                shortcutStatus = dispatch.calibrationText
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
@@ -197,133 +169,8 @@ struct DictationPane: View {
     // MARK: - Shortcut
 
     private func syncFromDispatch() {
-        holdChoice = slotChoice(for: dispatch.configuration.hold.kind)
-        handsFreeChoice = slotChoice(for: dispatch.configuration.handsFree.kind)
-        holdCalibrationText = dispatch.calibrationText(for: .hold)
-        handsFreeCalibrationText = dispatch.calibrationText(for: .handsFree)
-    }
-
-    private func slotChoice(for kind: ShortcutTrigger.Kind) -> SlotKindChoice {
-        switch kind {
-        case .modifierHold:
-            return .holdKey
-        case .functionKey:
-            return .dictationKey
-        case .combo:
-            return .combo
-        }
-    }
-
-    /// Preset picks route through the per-slot save gate (never direct
-    /// assignment): a preset equal to the other slot's live trigger is
-    /// refused with the same message — no bypass.
-    private func applySlotChoice(slot: ShortcutSlot) {
-        let choice = slot == .hold ? holdChoice : handsFreeChoice
-        guard choice != .combo else { return }
-        let result = saveSlot(kind: presetKind(for: choice), slot: slot)
-        if result == .blocked {
-            revertChoice(slot: slot)
-        }
-    }
-
-    private func presetKind(for choice: SlotKindChoice) -> ShortcutTrigger.Kind {
-        switch choice {
-        case .holdKey:
-            return .modifierHold(keyCode: UInt16(kVK_RightOption))
-        case .dictationKey:
-            return .functionKey(codes: [Int64(kVK_F5), 176])
-        case .combo:
-            // Unreachable: combo picks arrive via capture, not presets.
-            return .modifierHold(keyCode: UInt16(kVK_RightOption))
-        }
-    }
-
-    /// Save a kind into a slot with the slot's fixed interaction. Returns the
-    /// gate outcome so callers can surface the conflict message.
-    @discardableResult
-    private func saveSlot(kind: ShortcutTrigger.Kind, slot: ShortcutSlot) -> TriggerUpdateResult {
-        let interaction: InteractionMode = slot == .hold ? .holdToTalk : .handsFree
-        let trigger = ShortcutTrigger(kind: kind, interaction: interaction)
-        return slot == .hold
-            ? dispatch.updateHoldTrigger(trigger)
-            : dispatch.updateHandsFreeTrigger(trigger)
-    }
-
-    private func otherTitle(for slot: ShortcutSlot) -> String {
-        slot == .hold ? "Hands-free" : "Hold to talk"
-    }
-
-    private func setConflictMessage(_ message: String?, slot: ShortcutSlot) {
-        if slot == .hold {
-            holdConflictMessage = message
-        } else {
-            handsFreeConflictMessage = message
-        }
-    }
-
-    /// A refused save keeps the old trigger: revert the picker and name the
-    /// conflict.
-    private func revertChoice(slot: ShortcutSlot) {
-        let stored = slot == .hold ? dispatch.configuration.hold : dispatch.configuration.handsFree
-        if slot == .hold {
-            holdChoice = slotChoice(for: stored.kind)
-        } else {
-            handsFreeChoice = slotChoice(for: stored.kind)
-        }
-        setConflictMessage("Same as your \(otherTitle(for: slot)) shortcut — pick a different one.", slot: slot)
-    }
-
-    private func captureCombo(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict], slot: ShortcutSlot) {
-        dispatch.setSuspended(false)
-        setRecording(false, slot: slot)
-        if ShortcutRecorderConflicts.blocksSaving(conflicts) {
-            setConflictMessage(ShortcutRecorderConflicts.describe(conflicts), slot: slot)
-            setComboLabel("Click to record…", slot: slot)
-            return
-        }
-        switch saveSlot(kind: .combo(modifiers: modifiers, keyCode: keyCode), slot: slot) {
-        case .blocked:
-            // Old trigger kept; keep the old label too.
-            setConflictMessage("Same as your \(otherTitle(for: slot)) shortcut — pick a different one.", slot: slot)
-        case .applied, .unchanged:
-            setConflictMessage(
-                conflicts.isEmpty ? nil : ShortcutRecorderConflicts.describe(conflicts),
-                slot: slot
-            )
-            setComboLabel(ShortcutRecorderConflicts.describeCombo(modifiers: modifiers, keyCode: keyCode), slot: slot)
-        }
-    }
-
-    /// Delete clears to unassigned AND disables globally (one `enabled`
-    /// switch for both slots). The stored trigger is kept; any fresh
-    /// capture or preset re-enables (F1).
-    private func clearSlot(_ slot: ShortcutSlot) {
-        dispatch.setSuspended(false)
-        setRecording(false, slot: slot)
-        setComboLabel("Click to record…", slot: slot)
-        setConflictMessage(nil, slot: slot)
-        dispatch.setEnabled(false)
-    }
-
-    private func cancelRecording(slot: ShortcutSlot) {
-        dispatch.setSuspended(false)
-        setRecording(false, slot: slot)
-    }
-
-    private func setRecording(_ recording: Bool, slot: ShortcutSlot) {
-        if slot == .hold {
-            isRecordingHold = recording
-        } else {
-            isRecordingHandsFree = recording
-        }
-    }
-
-    private func setComboLabel(_ label: String, slot: ShortcutSlot) {
-        if slot == .hold {
-            holdComboLabel = label
-        } else {
-            handsFreeComboLabel = label
-        }
+        shortcutSummary = "Hold \(KeyNames.shortLabel(for: dispatch.configuration.hold.kind)) and speak."
+        shortcutStatus = dispatch.calibrationText
     }
 
     // MARK: - Permissions

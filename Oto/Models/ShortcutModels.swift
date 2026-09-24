@@ -241,3 +241,66 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
         return config
     }
 }
+
+/// Staged shortcut edits for the Shortcuts modal. Pure value: the live
+/// config snapshot plus per-slot staged kinds (nil = untouched). The modal
+/// applies through the dispatch gate; this type previews outcomes so the
+/// UI never guesses. Tested without hardware.
+struct ShortcutStaging: Equatable, Sendable {
+    var live: DualShortcutConfiguration
+    var stagedHoldKind: ShortcutTrigger.Kind?
+    var stagedHandsFreeKind: ShortcutTrigger.Kind?
+    var stagedHoldCleared = false
+    var stagedHandsFreeCleared = false
+
+    init(live: DualShortcutConfiguration) {
+        self.live = live
+    }
+
+    /// The kind the gate sees: staged if present, else live.
+    func effectiveKind(for slot: ShortcutSlot) -> ShortcutTrigger.Kind {
+        switch slot {
+        case .hold:
+            return stagedHoldKind ?? live.hold.kind
+        case .handsFree:
+            return stagedHandsFreeKind ?? live.handsFree.kind
+        }
+    }
+
+    func isClearedStaged(for slot: ShortcutSlot) -> Bool {
+        slot == .hold ? stagedHoldCleared : stagedHandsFreeCleared
+    }
+
+    var hasChanges: Bool {
+        stagedHoldKind != nil || stagedHandsFreeKind != nil
+            || stagedHoldCleared || stagedHandsFreeCleared
+    }
+
+    mutating func clearStaged() {
+        stagedHoldKind = nil
+        stagedHandsFreeKind = nil
+        stagedHoldCleared = false
+        stagedHandsFreeCleared = false
+    }
+
+    /// Done-gate preview without touching dispatch: each staged slot rated
+    /// against the OTHER slot's effective value (staged if present, else
+    /// live). A staged clear disables globally rather than saving.
+    func donePreview() -> (hold: TriggerUpdateResult, handsFree: TriggerUpdateResult, disablesGlobally: Bool) {
+        (
+            hold: preview(slot: .hold),
+            handsFree: preview(slot: .handsFree),
+            disablesGlobally: stagedHoldCleared || stagedHandsFreeCleared
+        )
+    }
+
+    private func preview(slot: ShortcutSlot) -> TriggerUpdateResult {
+        let staged: ShortcutTrigger.Kind? = slot == .hold ? stagedHoldKind : stagedHandsFreeKind
+        guard let kind = staged else { return .unchanged }
+        let liveKind = slot == .hold ? live.hold.kind : live.handsFree.kind
+        guard kind != liveKind else { return .unchanged }
+        let other: ShortcutSlot = slot == .hold ? .handsFree : .hold
+        guard !kind.conflictsWith(effectiveKind(for: other)) else { return .blocked }
+        return .applied
+    }
+}

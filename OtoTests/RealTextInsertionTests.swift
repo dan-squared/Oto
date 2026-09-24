@@ -483,13 +483,18 @@ struct RealTextInsertionTests {
     @Test func focusRoleMapping() {
         // Text roles proceed; everything present-but-not-editable diverts;
         // a missing role is unknown (legacy path), never a guess.
+        // A focused element owned by another app is unknown too — the
+        // frontmostPID race guard owns that failure, not this layer.
         #expect(EditableFocus.classify(role: "AXTextField") == .editable)
         #expect(EditableFocus.classify(role: "AXTextArea") == .editable)
         #expect(EditableFocus.classify(role: "AXButton") == .noField)
         #expect(EditableFocus.classify(role: "AXStaticText") == .noField)
         #expect(EditableFocus.classify(role: "AXWebArea") == .noField)
         #expect(EditableFocus.classify(role: nil) == .unknown)
-        #expect(LiveFocusCheck.timeoutNanoseconds == 300_000_000)
+        #expect(EditableFocus.classify(role: "AXTextField", pidMatches: false) == .unknown)
+        #expect(EditableFocus.classify(role: "AXButton", pidMatches: false) == .unknown)
+        #expect(LiveFocusCheck.timeoutNanoseconds == 700_000_000)
+        #expect(LiveFocusCheck.maxAttempts == 3)
     }
 
     @Test func focusErrorMapping() {
