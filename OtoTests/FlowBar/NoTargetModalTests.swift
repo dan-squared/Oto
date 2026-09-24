@@ -129,15 +129,15 @@ struct NoTargetModalTests {
 
     // MARK: - v8 catchup polish (wrap, grow, cap, Copied-close)
 
-    @Test func displayWordsCapsAtOneHundred() {
+    @Test func displayWordsCapsAtFifty() {
         #expect(CatcherText.wordCount("hello brave new world") == 4)
         #expect(CatcherText.isOverLimit("hello") == false)
         let short = "dictate this exactly"
         #expect(CatcherText.displayWords(short) == short)
-        let long = Array(repeating: "word", count: 101).joined(separator: " ")
+        let long = Array(repeating: "word", count: 51).joined(separator: " ")
         #expect(CatcherText.isOverLimit(long) == true)
         let shown = CatcherText.displayWords(long)
-        #expect(CatcherText.wordCount(shown) == 100)
+        #expect(CatcherText.wordCount(shown) == 50)
         #expect(shown.hasSuffix("…"))
         // Data never truncates: the cap is pixels, recovery keeps all.
         #expect(shown != long)
@@ -146,9 +146,12 @@ struct NoTargetModalTests {
     @Test func layoutHeightGrowsAtFixedWidth() {
         let minH = NoTargetModalController.height
         let small = CatcherLayout.height(for: "hi", cardWidth: 464, minHeight: minH, maxHeight: 900)
-        #expect(small == minH)
+        // The X row lifted the chrome floor: one line now measures above
+        // the legacy minimum, which stands as a floor only.
+        #expect(small >= minH)
+        #expect(small == CatcherLayout.chromeHeight + CatcherLayout.textHeight(for: "hi", cardWidth: 464))
         let tall = CatcherLayout.height(
-            for: Array(repeating: "word", count: 100).joined(separator: " "),
+            for: Array(repeating: "word", count: 50).joined(separator: " "),
             cardWidth: 464, minHeight: minH, maxHeight: 900
         )
         #expect(tall > minH)
@@ -157,9 +160,9 @@ struct NoTargetModalTests {
         let clamped = CatcherLayout.height(for: huge, cardWidth: 464, minHeight: minH, maxHeight: 200)
         #expect(clamped == 200)
         // Chrome math is explicit: card padding, text inset, gap, button.
-        let chrome: CGFloat = 20 + 18 + 18 + 44 + 20
+        let chrome: CGFloat = 20 + 44 + 8 + 18 + 44 + 20
         #expect(CatcherLayout.chromeHeight == chrome)
-        let innerWidth: CGFloat = 464 - 40 - 56
+        let innerWidth: CGFloat = 464 - 40
         #expect(CatcherLayout.textWidth(cardWidth: 464) == innerWidth)
     }
 
@@ -186,7 +189,7 @@ struct NoTargetModalTests {
         modal.copy(pasteboard: board)
         #expect(modal.copied == true)
         #expect(board.string(forType: .string) == "kept words")
-        try? await Task.sleep(for: .milliseconds(800))
+        try? await Task.sleep(for: .milliseconds(500))
         #expect(modal.copied == false)
     }
 
@@ -195,11 +198,11 @@ struct NoTargetModalTests {
         let modal = NoTargetModalController()
         modal.show(text: "kept words", displayID: nil, reduceMotion: true)
         modal.copy(pasteboard: board)
-        try? await Task.sleep(for: .milliseconds(300))
+        try? await Task.sleep(for: .milliseconds(150))
         modal.copy(pasteboard: board)
-        // Stale timer must not clear the live Copied: still lit at +700
-        // (close lands at re-copy + 600).
-        try? await Task.sleep(for: .milliseconds(400))
+        // Stale timer must not clear the live Copied: still lit at +350
+        // (close lands at re-copy + 300).
+        try? await Task.sleep(for: .milliseconds(200))
         #expect(modal.copied == true)
         try? await Task.sleep(for: .milliseconds(400))
         #expect(modal.copied == false)

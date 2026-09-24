@@ -27,11 +27,11 @@ enum NoTargetModalSettings {
     }
 }
 
-/// Display clamp: at most 100 words, suffixed when cut. Data never
+/// Display clamp: at most 50 words, suffixed when cut. Data never
 /// truncates — recovery, clipboard, and history always keep the full
 /// transcript; this shapes pixels only.
 enum CatcherText: Sendable {
-    nonisolated static let wordLimit = 100
+    nonisolated static let wordLimit = 50
 
     nonisolated static func wordCount(_ text: String) -> Int {
         text.split(whereSeparator: \.isWhitespace).count
@@ -80,22 +80,26 @@ enum CatcherText: Sendable {
 /// Card geometry: fixed 464pt width, computed height. Pure + unit-tested;
 /// the controller supplies the screen-clamped max.
 enum CatcherLayout: Sendable {
-    /// Horizontal chrome: card padding both sides. The X zone reserve
-    /// keeps first lines clear of the overlaid dismiss control.
+    /// Horizontal chrome: card padding both sides. The X owns its own
+    /// layout row above the text, so no trailing reserve is needed and
+    /// all three right edges align.
     nonisolated static let cardPadding: CGFloat = 20
-    nonisolated static let xZoneReserve: CGFloat = 56
     /// Vertical chrome: top pad + text top + text→button gap + button
     /// row + bottom pad. Matches the view below by construction.
-    nonisolated static let chromeHeight: CGFloat = 20 + 18 + 18 + 44 + 20
-    /// SwiftUI `.title3` point size backing the transcript Text.
-    nonisolated static let textPointSize: CGFloat = 20
+    nonisolated static let chromeHeight: CGFloat = 20 + 44 + 8 + 18 + 44 + 20
+    /// The Dynamic Type title3 SwiftUI renders — same system, no guessing.
+    /// (A hardcoded size here caused the gap bug: measured tall, rendered
+    /// short, Spacer ate the difference.)
+    nonisolated static func transcriptFont() -> NSFont {
+        NSFont.preferredFont(forTextStyle: .title3, options: [:])
+    }
 
     nonisolated static func textWidth(cardWidth: CGFloat) -> CGFloat {
-        cardWidth - 2 * cardPadding - xZoneReserve
+        cardWidth - 2 * cardPadding
     }
 
     nonisolated static func textHeight(for text: String, cardWidth: CGFloat) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: textPointSize)
+        let font = Self.transcriptFont()
         let rect = (text as NSString).boundingRect(
             with: NSSize(width: textWidth(cardWidth: cardWidth), height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -148,7 +152,7 @@ final class NoTargetModalController {
     /// hosting layers).
     func prewarm() {
         if panel == nil {
-            log.info("catcher ready (dynamic height, 100-word cap)")
+            log.info("catcher ready words=\(CatcherText.wordLimit) dynamic-height")
             let hosting = NSHostingView(rootView: NoTargetModalView(controller: self))
             self.hosting = hosting
             panel = FlowBarPanel.makeHostingPanel(
@@ -367,7 +371,7 @@ final class NoTargetModalController {
         copyGeneration += 1
         let generation = copyGeneration
         Task {
-            try? await Task.sleep(for: .milliseconds(600))
+            try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, generation == self.copyGeneration else { return }
             self.copied = false
             self.hide()
@@ -431,12 +435,13 @@ struct NoTargetModalView: View {
     @State private var copyHovering = false
 
     var body: some View {
-        // v4 minimal surface (reference minus logo/hint/circled-X):
-        // plain ✕ overlaid top-trailing (never consumes layout — the
-        // transcript + Copy own the full 464×168), dictated words,
-        // Copy. Everything renders through the adaptive palette.
+        // v4 minimal surface: three stacked zones — dismiss row, words,
+        // Copy row. The X owns its own layout row (never overlaid, so no
+        // first line can ever run under it); all three right edges align
+        // at the card padding. Dictated words, Copy. Everything renders
+        // through the adaptive palette.
         let palette = CatcherPalette.current(scheme)
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             ZStack {
                 // Explicit clear root: the hosting view must paint nothing
                 // behind the card (the pill's v2 frame bug class — never again).
@@ -445,11 +450,22 @@ struct NoTargetModalView: View {
                     .fill(palette.card)
                     .shadow(color: .black.opacity(palette.shadowOpacity), radius: 22, y: 6)
                 VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Spacer()
+                        Button { controller.hide() } label: {
+                            Image(systemName: "xmark")
+                                .font(.title3)
+                        }
+                        .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
+                        .accessibilityLabel("Dismiss")
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Circle().inset(by: -10))
+                        .onHover { xHovering = $0 }
+                    }
+                    .padding(.bottom, 8)
                     Text(controller.text)
                         .font(.title3)
                         .foregroundStyle(palette.transcript)
-                        .padding(.top, 18)
-                        .padding(.trailing, CatcherLayout.xZoneReserve)
                     Spacer(minLength: 0)
                     HStack {
                         Spacer()
@@ -469,16 +485,6 @@ struct NoTargetModalView: View {
                 }
                 .padding(20)
             }
-            Button { controller.hide() } label: {
-                Image(systemName: "xmark")
-                    .font(.title3)
-            }
-            .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
-            .accessibilityLabel("Dismiss")
-            .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Circle().inset(by: -10))
-            .onHover { xHovering = $0 }
-            .padding(16)
         }
         .frame(
             width: NoTargetModalController.width,

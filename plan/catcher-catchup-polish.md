@@ -1,9 +1,16 @@
 # Catcher polish: spacing, vertical text flow, 100-word cap, Copied-close
 
-Status: IMPLEMENTED 2026-09-24 (commit on abu-dhabi). Build green,
-378 tests green twice running (4 new catcher tests; pins updated
-deliberately). Device matrix (§9) still requires a packaged/Xcode Run
-with live dictation + screenshots. Nothing merged.
+Status: IMPLEMENTED + FOLLOW-UP 2026-09-24 (commits on abu-dhabi).
+Follow-up fixes the actual render defect the stale-build chase
+obscured: the SwiftUI view kept a hardcoded 168pt frame (panel grew,
+content didn't, compression default-truncated into dots), and the
+20pt measure mismatched macOS title3. View now tracks live controller
+height + clipShape backstop + Dynamic Type title3 measurement; X owns
+a layout row (all right edges align); limit 50; Copied closes in
+0.3s; over-limit renders in the pill (latched 2.5s message, same
+size). Build green; suite green except 3 pre-existing environmental
+RealTextInsertionTests failures (clean-tree proven). Device matrix
+(§9) still requires live screenshots. Nothing merged.
 
 Reference: `.context/attachments/ScSmPv/image.png` (current catcher —
 truncated dots, cramped X, gray Copy), `.context/attachments/eRxkkB/image.png`
@@ -65,7 +72,7 @@ outer-stroke report.
   "…". `recoveryTranscript`, clipboard, and history always keep the
   FULL text — the cap is pixels, never data.
 - ≤100 words: modal as §2–3, Copy → "Copied" 0.6s → auto-close (§5).
-- >100 words: transcript auto-copied immediately; NO modal — the
+- >50 words: transcript auto-copied immediately; NO modal — the
   controller latches a 2.5s message pill at current size (greedy word
   fill + Copied, re-render never resize). Latch clears on any live
   session or deadline; stale latches cleared on silent/autoCopy routes.
