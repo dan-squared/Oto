@@ -20,11 +20,6 @@ final class FlowBarModel {
         recoveryAvailable: false
     )
     private(set) var sample = BarSample.silence
-    /// Transient pill copy (auto-copy confirmation). Overrides content and
-    /// widens the pill while set; the controller clears it on deadline.
-    /// This is the ONLY text the pill ever carries (v7: errors live in the
-    /// menu, never here).
-    private(set) var notice: String?
     /// Set by the controller from the Reduce Motion indicator each poll.
     /// Frozen: levels ignored (bars hold statically), animations off.
     var motionFrozen = false
@@ -60,13 +55,5 @@ final class FlowBarModel {
     func publishSilence() {
         smoothed = [Float](repeating: 0, count: VisualizerMath.barCount)
         sample = .silence
-    }
-
-    func showNotice(_ message: String) {
-        notice = message
-    }
-
-    func clearNotice() {
-        notice = nil
     }
 }

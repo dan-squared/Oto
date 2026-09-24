@@ -131,6 +131,12 @@ final class MediaDuck: MediaDucking {
     private var duckedSessionID: UUID?
     private var savedVolume: Float32?
     private var savedDevice: AudioObjectID?
+    /// Restore grace for adoption (double-tap converts): a parked restore
+    /// waits this long for a new duck before touching the volume. The
+    /// crash flag stays set throughout — kill-safe in every direction.
+    nonisolated static let restoreGraceNanoseconds: UInt64 = 250_000_000
+    private var restoringSessionID: UUID?
+    private var restoreTask: Task<Void, Never>?
 
     init(
         defaults: UserDefaults = .standard,
@@ -152,6 +158,28 @@ final class MediaDuck: MediaDucking {
         // a no-op (one session at a time is the coordinator invariant;
         // an already-ducked slot from another session is left alone and
         // its owner restores it — never steal a live duck).
+        if duckedSessionID == sessionID {
+            // Same session re-ducking inside its own grace: unpark (still
+            // live — the pending restore must not fire under it).
+            if restoringSessionID == sessionID {
+                restoreTask?.cancel()
+                restoreTask = nil
+                restoringSessionID = nil
+            }
+            return
+        }
+        if restoringSessionID != nil {
+            // Absorb: a restore was parked inside its grace — transfer the
+            // slot, stay muted, keep the flag set (crash-safe throughout).
+            // Double-tap converts (micro restored, hands-free ducking
+            // ~150-400 ms later) land here: no volume pump.
+            restoreTask?.cancel()
+            restoreTask = nil
+            restoringSessionID = nil
+            duckedSessionID = sessionID
+            log.info("restore absorbed (adopted)")
+            return
+        }
         guard duckedSessionID == nil else { return }
         guard let current = hal.currentVolume() else {
             log.info("duck skipped — no vmvc control on default output")
@@ -174,6 +202,26 @@ final class MediaDuck: MediaDucking {
         // Session-scoped: never clear another owner's duck. Unreachable
         // via one-live-session today, but the contract holds regardless —
         // a foreign restore is a no-op, never an early unduck.
+        guard savedVolume != nil, savedDevice != nil,
+              duckedSessionID == sessionID
+        else { return }
+        // Park the restore for the grace window (adoption bait for the
+        // next duck); superseding parks cancel their predecessor.
+        restoringSessionID = sessionID
+        restoreTask?.cancel()
+        restoreTask = Task {
+            try? await Task.sleep(nanoseconds: Self.restoreGraceNanoseconds)
+            guard !Task.isCancelled else { return }
+            await self.finishRestore(sessionID: sessionID)
+        }
+    }
+
+    /// Grace expiry: the parked restore runs only if nobody absorbed it.
+    /// Ownership re-checked (an absorb transfers the slot and cancels this
+    /// task, but defense in depth is free here).
+    private func finishRestore(sessionID: UUID) async {
+        restoreTask = nil
+        restoringSessionID = nil
         guard let volume = savedVolume, let device = savedDevice,
               duckedSessionID == sessionID
         else { return }

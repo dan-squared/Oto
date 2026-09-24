@@ -130,9 +130,8 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.panelWidth(for: .finalizing) == 95.7)
         #expect(VisualizerMath.panelWidth(for: .inserting) == 95.7)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
-        // v7: no failure arm (errors never reach the pill); the only wide
-        // pill is the transient notice.
-        #expect(VisualizerMath.noticeWidth == 165)
+        // v7: no failure arm (errors never reach the pill). The v7 wide
+        // auto-copy notice is removed: clipboard auto-copy stays silent.
         // Relaxed compact: 0.825× the v3 mini in every linear dimension
         // (112×32=3584 → 92.4×26.4=2439).
         #expect(VisualizerMath.panelWidth(for: .recording) <= 95.7)

@@ -122,11 +122,15 @@ struct FlowBarControllerTests {
 
             await sut.controller.pollOnce()
             #expect(sut.board.string(forType: .string) == "kept words")
-            #expect(sut.controller.model.notice == "Copied — paste with ⌘V.")
 
-            // Second poll: no double-write path, notice holds, no crash.
+            // Second poll: no double-write path, clipboard holds.
             await sut.controller.pollOnce()
             #expect(sut.board.string(forType: .string) == "kept words")
+            // No notice pixels, ever: the melt completes and the pill is
+            // gone (clipboard + menu own recovery now).
+            try? await Task.sleep(for: .milliseconds(250))
+            await sut.controller.pollOnce()
+            #expect(!sut.controller.isPillVisible)
         }
     }
 
@@ -261,9 +265,46 @@ struct FlowBarControllerTests {
         await sut.coordinator.finish(id!)
         await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
         await sut.controller.pollOnce()
-        try? await Task.sleep(for: .milliseconds(300))
+        // Past the adoption park (400 ms): the parked hide melts as usual.
+        try? await Task.sleep(for: .milliseconds(550))
         await sut.controller.pollOnce()
         #expect(!sut.controller.isLiveValues)
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func cancelParkAdoptsNextSessionWithoutDip() async throws {
+        // Double-tap shape: cancel parks the hide; the next session inside
+        // the window adopts the live panel — visible at every poll, no
+        // hideNow between (a dip would need hideNow, the only hider).
+        let sut = makeSUT()
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await sut.coordinator.cancel(id!)
+        await waitFor(sut.coordinator) { if case .cancelled = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        let id2 = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await sut.coordinator.finish(id2!)
+        await waitFor(sut.coordinator) { $0.isTerminal && $0 != .idle }
+    }
+
+    @Test func parkedHideExpiresWithoutNewSession() async throws {
+        let sut = makeSUT()
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await sut.coordinator.cancel(id!)
+        await waitFor(sut.coordinator) { if case .cancelled = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        try? await Task.sleep(for: .milliseconds(550))
+        await sut.controller.pollOnce()
         #expect(!sut.controller.isPillVisible)
     }
 }

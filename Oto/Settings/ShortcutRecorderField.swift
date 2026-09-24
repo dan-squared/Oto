@@ -79,7 +79,7 @@ enum KeyNames: Sendable {
     nonisolated static func chips(for kind: ShortcutTrigger.Kind) -> [String] {
         switch kind {
         case .modifierHold(let code):
-            return [holdGlyph(for: code)]
+            return [holdChip(for: code)]
         case .functionKey(let codes):
             if isFactoryDictation(codes) { return ["Dictation key"] }
             return codes.sorted().map { keyName(for: UInt32($0)) }
@@ -88,11 +88,12 @@ enum KeyNames: Sendable {
         }
     }
 
-    /// One-line label for sentences ("Hold ⌥ and speak.").
+    /// One-line label for sentences ("Hold Right ⌥ and speak." — sided,
+    /// never ambiguous).
     nonisolated static func shortLabel(for kind: ShortcutTrigger.Kind) -> String {
         switch kind {
         case .modifierHold(let code):
-            return holdGlyph(for: code)
+            return holdChip(for: code)
         case .functionKey(let codes):
             if isFactoryDictation(codes) { return "the Dictation key" }
             return codes.sorted().map { keyName(for: UInt32($0)) }.joined(separator: " ")
@@ -123,15 +124,21 @@ enum KeyNames: Sendable {
     /// Current hold-key menu label for a kind (glyph + side when known).
     nonisolated static func holdMenuLabel(for kind: ShortcutTrigger.Kind) -> String {
         guard case .modifierHold(let code) = kind else { return "Hold key" }
-        return holdOptions.first(where: { $0.code == code })?.label ?? holdGlyph(for: code)
+        return holdOptions.first(where: { $0.code == code })?.label ?? keyName(for: UInt32(code))
     }
 
-    private nonisolated static func holdGlyph(for keyCode: UInt16) -> String {
+    /// Sided chip for a held modifier ("Right ⌥", never bare "⌥" — both
+    /// sides shared one glyph and users couldn't tell them apart).
+    nonisolated static func holdChip(for keyCode: UInt16) -> String {
         switch Int(keyCode) {
-        case kVK_Command, kVK_RightCommand: return "⌘"
-        case kVK_Shift, kVK_RightShift: return "⇧"
-        case kVK_Option, kVK_RightOption: return "⌥"
-        case kVK_Control, kVK_RightControl: return "⌃"
+        case kVK_Command: return "Left ⌘"
+        case kVK_RightCommand: return "Right ⌘"
+        case kVK_Shift: return "Left ⇧"
+        case kVK_RightShift: return "Right ⇧"
+        case kVK_Option: return "Left ⌥"
+        case kVK_RightOption: return "Right ⌥"
+        case kVK_Control: return "Left ⌃"
+        case kVK_RightControl: return "Right ⌃"
         case kVK_Function: return "fn"
         default: return keyName(for: UInt32(keyCode))
         }
@@ -149,9 +156,32 @@ enum KeyNames: Sendable {
             kVK_ANSI_0: "0", kVK_ANSI_1: "1", kVK_ANSI_2: "2", kVK_ANSI_3: "3",
             kVK_ANSI_4: "4", kVK_ANSI_5: "5", kVK_ANSI_6: "6", kVK_ANSI_7: "7",
             kVK_ANSI_8: "8", kVK_ANSI_9: "9",
+            kVK_ANSI_Equal: "=", kVK_ANSI_Minus: "-",
+            kVK_ANSI_LeftBracket: "[", kVK_ANSI_RightBracket: "]",
+            kVK_ANSI_Quote: "'", kVK_ANSI_Semicolon: ";",
+            kVK_ANSI_Backslash: "\\", kVK_ANSI_Comma: ",",
+            kVK_ANSI_Slash: "/", kVK_ANSI_Period: ".",
+            kVK_ANSI_Grave: "`",
+            kVK_ANSI_Keypad0: "0", kVK_ANSI_Keypad1: "1",
+            kVK_ANSI_Keypad2: "2", kVK_ANSI_Keypad3: "3",
+            kVK_ANSI_Keypad4: "4", kVK_ANSI_Keypad5: "5",
+            kVK_ANSI_Keypad6: "6", kVK_ANSI_Keypad7: "7",
+            kVK_ANSI_Keypad8: "8", kVK_ANSI_Keypad9: "9",
+            kVK_ANSI_KeypadDecimal: ".", kVK_ANSI_KeypadMultiply: "*",
+            kVK_ANSI_KeypadPlus: "+", kVK_ANSI_KeypadClear: "Clear",
+            kVK_ANSI_KeypadDivide: "/", kVK_ANSI_KeypadEnter: "Enter",
+            kVK_ANSI_KeypadMinus: "-", kVK_ANSI_KeypadEquals: "=",
             kVK_Space: "Space", kVK_Tab: "Tab", kVK_Return: "Return",
             kVK_Delete: "Delete", kVK_ForwardDelete: "Delete",
-            kVK_Escape: "Escape",
+            kVK_Escape: "Escape", kVK_CapsLock: "Caps Lock",
+            kVK_Home: "Home", kVK_End: "End",
+            kVK_PageUp: "Page Up", kVK_PageDown: "Page Down",
+            kVK_Help: "Help", kVK_ContextualMenu: "Menu",
+            kVK_ISO_Section: "§", kVK_JIS_Yen: "¥",
+            kVK_JIS_Underscore: "_", kVK_JIS_KeypadComma: ",",
+            kVK_JIS_Eisu: "Eisu",
+            kVK_VolumeUp: "Volume Up", kVK_VolumeDown: "Volume Down",
+            kVK_Mute: "Mute",
             kVK_LeftArrow: "←", kVK_RightArrow: "→",
             kVK_DownArrow: "↓", kVK_UpArrow: "↑",
             kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4",
@@ -182,6 +212,7 @@ enum SlotKindChoice: String, CaseIterable, Identifiable {
 struct ShortcutRecorderModifier: ViewModifier {
     @Binding var isListening: Bool
     var onCapture: (UInt32, UInt32, [RecorderConflict]) -> Void
+    var onCaptureModifier: (UInt16) -> Void
     var onClear: () -> Void
     var onCancel: () -> Void
     var onInvalid: (RecorderInvalidReason) -> Void
@@ -207,7 +238,10 @@ struct ShortcutRecorderModifier: ViewModifier {
         // Snapshot once per listening session; the list cannot change
         // meaningfully mid-capture.
         let system = CarbonHotKeyCenter.enabledSystemShortcuts()
-        box.token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        box.token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [box] event in
+            // Any keyDown ends a pending lone-modifier arm (the combo path
+            // owns the gesture from here); priority order below is unchanged.
+            box.flags.stepKeyDown()
             // Tab moves focus (bubbled); everything else is consumed.
             if event.keyCode == UInt16(kVK_Tab), event.modifierFlags.isEmpty {
                 return event
@@ -230,6 +264,25 @@ struct ShortcutRecorderModifier: ViewModifier {
             }
             return nil
         }
+        // Bare modifiers emit flagsChanged, never keyDown — without this
+        // monitor they are deafeningly silent (no beep, no message). Never
+        // consumed: the system must keep seeing every modifier.
+        box.flagsToken = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [box] event in
+            guard let flag = FlagsCaptureState.nsFlag(for: event.keyCode) else { return event }
+            let down = event.modifierFlags.contains(flag)
+            let outcome = down
+                ? box.flags.stepFlagsDown(code: event.keyCode)
+                : box.flags.stepFlagsUp(code: event.keyCode)
+            switch outcome {
+            case .none:
+                break
+            case .capture(let code):
+                onCaptureModifier(code)
+            case .chord:
+                onInvalid(.chordOnly)
+            }
+            return event
+        }
     }
 
     private func stop() {
@@ -237,10 +290,17 @@ struct ShortcutRecorderModifier: ViewModifier {
             NSEvent.removeMonitor(token)
             box.token = nil
         }
+        if let token = box.flagsToken {
+            NSEvent.removeMonitor(token)
+            box.flagsToken = nil
+        }
+        box.flags.reset()
     }
 
     private final class MonitorBox {
         var token: Any?
+        var flagsToken: Any?
+        var flags = FlagsCaptureState()
     }
 }
 
@@ -248,6 +308,7 @@ extension View {
     func shortcutRecorder(
         isListening: Binding<Bool>,
         onCapture: @escaping (UInt32, UInt32, [RecorderConflict]) -> Void,
+        onCaptureModifier: @escaping (UInt16) -> Void = { _ in },
         onClear: @escaping () -> Void,
         onCancel: @escaping () -> Void,
         onInvalid: @escaping (RecorderInvalidReason) -> Void
@@ -255,6 +316,7 @@ extension View {
         modifier(ShortcutRecorderModifier(
             isListening: isListening,
             onCapture: onCapture,
+            onCaptureModifier: onCaptureModifier,
             onClear: onClear,
             onCancel: onCancel,
             onInvalid: onInvalid

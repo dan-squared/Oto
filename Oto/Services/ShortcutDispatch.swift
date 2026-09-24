@@ -227,9 +227,9 @@ final class ShortcutDispatch {
         guard fixed != current else { return .unchanged }
         guard !fixed.kind.conflictsWith(other.kind) else {
             // Silent refusals are undebuggable: name both kinds so device
-            // trails show what the person attempted (kinds only — never
-            // transcript text, and kinds never appear here anyway).
-            log.info("save blocked for \(slot == .hold ? "hold" : "hands-free", privacy: .public): conflicts with other slot")
+            // trails show what the person attempted (key metadata only —
+            // kinds never carry transcript text).
+            log.info("save blocked for \(slot == .hold ? "hold" : "hands-free", privacy: .public): \(String(describing: fixed.kind), privacy: .public) vs other \(String(describing: other.kind), privacy: .public)")
             return .blocked
         }
         cancelActiveSession()

@@ -1,7 +1,9 @@
 # Bare-modifier capture + pill/duck anti-flicker + KeyNames hardening
 
-Status: PLAN ONLY. Nothing implemented. No open questions (all decided
-with rationale). Awaiting `execute`.
+Status: IMPLEMENTED 2026-09-24 (commit on abu-dhabi). Build green,
+full suite green repeatedly (354/354). Device matrix (§7 + §7.8) still
+requires a packaged/Xcode Run with live dictation + screenshots — not
+runnable headless. Nothing merged.
 
 ## 1. Goal
 
@@ -139,7 +141,29 @@ Four live-testing complaints, one plan:
   metadata only). Blocked-save log finally names both kinds (closes the
   §2 gap from the prior plan: comment promised, code logged slot only).
 
-### 6.4 Tests (deterministic, no hardware)
+### 6.4 Remove the "Copied — paste with ⌘V" pill notice (user-ordered)
+
+Source: `FlowBarController.syncRecovery` autoCopy branch writes the
+clipboard AND shows the v7 wide pill (`model.showNotice`). The clipboard
+write stays (it is the catcher-off toggle's promise, captioned in
+Settings); the notice, its state, and its render path go — menu status +
+Copy/Retry remain the recovery home (audit: status owns errors).
+
+- `FlowBarController.swift`: autoCopy branch keeps pasteboard write,
+  drops `showNotice`; delete `hasNotice` logic (≈lines 139,174,178,213,
+  218-225), notice render branch (≈259-266), `syncDeadlines` notice
+  branch + `noticeDeadline`/`noticeDuration` + call site (≈51,153,
+  271-286); live branch takes `text: nil, centerText: false`.
+- `FlowBarModel.swift`: delete `notice` + `showNotice`/`clearNotice`.
+- `VisualizerMath.swift`: delete `noticeWidth` + fix the comment (≈72).
+- `FlowBarPanel.render` → `PillLayers.update`: delete `centerText`
+  (only ever true for notices — dead-parameter theater, audit-D4 rule).
+- Tests (deliberate): `FlowBarControllerTests:125` rewritten (clipboard
+  written, no notice state, no rewrite on second poll);
+  `VisualizerMathTests:135` deleted with the constant; `PillLayersTests`
+  `centerText` args removed (compiler-guided).
+
+### 6.5 Tests (deterministic, no hardware)
 
 - `FlagsCaptureState` matrix (new): arm → release captures sided code;
   chord → invalid; keyDown disarms; Escape/Delete priority; CapsLock

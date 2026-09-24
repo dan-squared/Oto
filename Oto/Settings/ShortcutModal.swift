@@ -16,6 +16,7 @@
 
 import Carbon.HIToolbox
 import SwiftUI
+import os
 
 /// One slot's keycap-chip field: live-or-staged binding as chips, pencil to
 /// re-record, trash to stage a clear. The combo recorder rides the field;
@@ -83,6 +84,10 @@ struct KeycapField: View {
 struct ShortcutModal: View {
     let dispatch: ShortcutDispatch
     @Environment(\.dismiss) private var dismiss
+
+    /// Capture trail: key metadata only (codes, never keystroke streams).
+    /// Names the mystery keys (e.g. key 241) at their source.
+    private let log = Logger(subsystem: "app.Oto", category: "shortcut")
 
     @State private var staging = ShortcutStaging(live: .default())
     @State private var isRecordingHold = false
@@ -175,6 +180,9 @@ struct ShortcutModal: View {
                     isListening: slot == .hold ? $isRecordingHold : $isRecordingHandsFree,
                     onCapture: { modifiers, keyCode, conflicts in
                         capture(modifiers: modifiers, keyCode: keyCode, conflicts: conflicts, slot: slot)
+                    },
+                    onCaptureModifier: { code in
+                        captureModifier(code: code, slot: slot)
                     },
                     onClear: { stageClear(slot: slot) },
                     onCancel: { cancelRecording(slot: slot) },
@@ -325,6 +333,7 @@ struct ShortcutModal: View {
     private func capture(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict], slot: ShortcutSlot) {
         dispatch.setSuspended(false)
         setRecording(false, slot: slot)
+        log.info("capture mods=\(modifiers, privacy: .public) key=\(keyCode, privacy: .public) conflicts=\(conflicts.count, privacy: .public) slot=\(slot == .hold ? "hold" : "hands-free", privacy: .public)")
         if ShortcutRecorderConflicts.blocksSaving(conflicts) {
             setMessage(ShortcutRecorderConflicts.describe(conflicts), slot: slot)
             setShowSwap(false, slot: slot)
@@ -334,6 +343,13 @@ struct ShortcutModal: View {
         if message(for: slot) == nil, !conflicts.isEmpty {
             setMessage(ShortcutRecorderConflicts.describe(conflicts), slot: slot)
         }
+    }
+
+    private func captureModifier(code: UInt16, slot: ShortcutSlot) {
+        dispatch.setSuspended(false)
+        setRecording(false, slot: slot)
+        log.info("captureModifier code=\(code, privacy: .public) slot=\(slot == .hold ? "hold" : "hands-free", privacy: .public)")
+        stage(kind: .modifierHold(keyCode: code), slot: slot)
     }
 
     private func cancelRecording(slot: ShortcutSlot) {

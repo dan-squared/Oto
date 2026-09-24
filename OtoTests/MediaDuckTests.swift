@@ -138,12 +138,50 @@ struct MediaDuckTests {
         let id = UUID()
         await duck.duck(sessionID: id)
         await duck.restore(sessionID: id)
+        // Restore parks for the grace window: nothing set yet, flag stays.
+        #expect(hal.setCalls.count == 1)
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
+        try? await Task.sleep(for: .milliseconds(350))
         #expect(hal.setCalls.count == 2)
         #expect(hal.setCalls[1].volume == 0.5)
         #expect(hal.setCalls[1].device == 70)
         #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
         await duck.restore(sessionID: id)
         #expect(hal.setCalls.count == 2)
+    }
+
+    @Test func restoreGraceAbsorbsNextDuck() async {
+        // Double-tap shape: micro restored, hands-free ducking inside the
+        // grace — slot transfers, volume never pumps, flag never clears.
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        let micro = UUID()
+        let handsFree = UUID()
+        await duck.duck(sessionID: micro)
+        await duck.restore(sessionID: micro)
+        #expect(hal.setCalls.count == 1)
+        await duck.duck(sessionID: handsFree)
+        #expect(hal.setCalls.count == 1)
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
+        await duck.restore(sessionID: handsFree)
+        try? await Task.sleep(for: .milliseconds(350))
+        #expect(hal.setCalls.count == 2)
+        #expect(hal.setCalls[1].volume == 0.5)
+        #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
+    }
+
+    @Test func foreignRestoreDuringLiveDuckIsNoop() async {
+        // A foreign restore is a no-op and never parks: the live slot and
+        // flag are untouched.
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        let id = UUID()
+        await duck.duck(sessionID: id)
+        await duck.restore(sessionID: UUID())
+        #expect(hal.setCalls.count == 1)
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
     }
 
     @Test func restoreWithoutDuckTouchesNothing() async {
@@ -183,6 +221,7 @@ struct MediaDuckTests {
         // controllable — the restore belongs to 70.
         hal.stub(volume: 0.0, device: 99, controlled: [70, 99])
         await duck.restore(sessionID: id)
+        try? await Task.sleep(for: .milliseconds(350))
         #expect(hal.setCalls.last?.device == 70)
         #expect(hal.setCalls.last?.volume == 0.5)
     }
@@ -196,6 +235,7 @@ struct MediaDuckTests {
         // fall back to the current default rather than staying muted.
         hal.stub(volume: 0.0, device: 99, controlled: [99])
         await duck.restore(sessionID: id)
+        try? await Task.sleep(for: .milliseconds(350))
         #expect(hal.setCalls.last?.device == 99)
         #expect(hal.setCalls.last?.volume == 0.5)
     }
@@ -264,6 +304,7 @@ struct MediaDuckTests {
         await duck.restore(sessionID: UUID())
         #expect(hal.setCalls.count == 1)
         await duck.restore(sessionID: a)
+        try? await Task.sleep(for: .milliseconds(350))
         #expect(hal.setCalls.count == 2)
         #expect(hal.setCalls[1].volume == 0.5)
     }
@@ -282,6 +323,7 @@ struct MediaDuckTests {
         #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
         hal.stub(volume: 0.0, device: 70, controlled: [70])
         await duck.restore(sessionID: id)
+        try? await Task.sleep(for: .milliseconds(350))
         #expect(hal.setCalls.last?.volume == 0.5)
         #expect(hal.setCalls.last?.device == 70)
         #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))

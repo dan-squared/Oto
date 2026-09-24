@@ -69,7 +69,8 @@ enum VisualizerMath {
     /// the AppKit frame animation; this table is the target.
     /// v6: preparing == recording (92.4) — starting→recording resizes
     /// nothing, waves from frame one. v7: no failure arm — errors never
-    /// reach the pill; wide pills are notices via `noticeWidth`.
+    /// reach the pill. (The v7 wide-pill auto-copy notice was removed:
+    /// clipboard auto-copy stays silent, menu owns recovery.)
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
@@ -95,9 +96,6 @@ enum VisualizerMath {
     }
     nonisolated static let swayCycle: Double = 1.6
     nonisolated static let swayStagger: Double = 0.2
-    /// Transient notice (auto-copy confirmation) width — the only wide
-    /// pill left (v7: failure panels are gone).
-    nonisolated static let noticeWidth: CGFloat = 165
 
     // MARK: - Bar shaping
 
