@@ -26,6 +26,60 @@ enum NoTargetModalSettings {
     }
 }
 
+/// Display clamp: at most 100 words, suffixed when cut. Data never
+/// truncates — recovery, clipboard, and history always keep the full
+/// transcript; this shapes pixels only.
+enum CatcherText: Sendable {
+    nonisolated static let wordLimit = 100
+
+    nonisolated static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
+    }
+
+    nonisolated static func isOverLimit(_ text: String) -> Bool {
+        wordCount(text) > wordLimit
+    }
+
+    nonisolated static func displayWords(_ text: String, limit: Int = wordLimit) -> String {
+        let words = text.split(whereSeparator: \.isWhitespace)
+        guard words.count > limit else { return text }
+        return words.prefix(limit).joined(separator: " ") + "…"
+    }
+}
+
+/// Card geometry: fixed 464pt width, computed height. Pure + unit-tested;
+/// the controller supplies the screen-clamped max.
+enum CatcherLayout: Sendable {
+    /// Horizontal chrome: card padding both sides. The X zone reserve
+    /// keeps first lines clear of the overlaid dismiss control.
+    nonisolated static let cardPadding: CGFloat = 20
+    nonisolated static let xZoneReserve: CGFloat = 56
+    /// Vertical chrome: top pad + text top + text→button gap + button
+    /// row + bottom pad. Matches the view below by construction.
+    nonisolated static let chromeHeight: CGFloat = 20 + 14 + 18 + 44 + 20
+    /// SwiftUI `.title3` point size backing the transcript Text.
+    nonisolated static let textPointSize: CGFloat = 20
+
+    nonisolated static func textWidth(cardWidth: CGFloat) -> CGFloat {
+        cardWidth - 2 * cardPadding - xZoneReserve
+    }
+
+    nonisolated static func textHeight(for text: String, cardWidth: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: textPointSize)
+        let rect = (text as NSString).boundingRect(
+            with: NSSize(width: textWidth(cardWidth: cardWidth), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        )
+        return ceil(rect.height)
+    }
+
+    /// Total card height for display text, clamped to [minHeight, maxHeight].
+    nonisolated static func height(for text: String, cardWidth: CGFloat, minHeight: CGFloat, maxHeight: CGFloat) -> CGFloat {
+        min(max(minHeight, chromeHeight + textHeight(for: text, cardWidth: cardWidth)), maxHeight)
+    }
+}
+
 @Observable @MainActor
 final class NoTargetModalController {
     nonisolated static let width: CGFloat = 464
@@ -76,18 +130,22 @@ final class NoTargetModalController {
     func show(
         text: String,
         displayID: CGDirectDisplayID?,
-        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+        autoCopied: Bool = false
     ) {
-        self.text = text
+        self.text = CatcherText.displayWords(text)
         copied = false
+        // Invalidate any pending auto-close: a re-show owns a fresh second.
+        copyGeneration += 1
         prewarm()
         refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let visible = screen.visibleFrame
+        let height = cardHeight(for: self.text, visible: visible)
         let endFrame = NSRect(
             x: visible.midX - Self.width / 2,
-            y: visible.midY - Self.height / 2,
-            width: Self.width, height: Self.height
+            y: visible.midY - height / 2,
+            width: Self.width, height: height
         )
         // Soft land (v4 F3): start 3% small + transparent, ease out to
         // full in 0.18s. Quick (no travel, no bounce) yet buttery.
@@ -100,7 +158,12 @@ final class NoTargetModalController {
         panel?.alphaValue = 0
         // orderFront, never key: focus must stay wherever the user had it.
         panel?.orderFront(nil)
-        scheduleContentMask()
+        scheduleContentMask(size: NSSize(width: Self.width, height: height))
+        if autoCopied {
+            // Over-limit path: the transcript is already the clipboard's;
+            // render Copied, then close on the same 1s cadence.
+            copy()
+        }
         guard !reduceMotion else {
             panel?.setFrame(endFrame, display: true)
             panel?.alphaValue = 1
@@ -132,17 +195,21 @@ final class NoTargetModalController {
         text: String,
         displayID: CGDirectDisplayID?,
         position: FlowBarPosition = FlowBarPosition.current(),
-        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+        autoCopied: Bool = false
     ) {
-        self.text = text
+        self.text = CatcherText.displayWords(text)
         copied = false
+        // Invalidate any pending auto-close: a re-show owns a fresh second.
+        copyGeneration += 1
         prewarm()
         refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else {
-            show(text: text, displayID: displayID, reduceMotion: reduceMotion)
+            show(text: text, displayID: displayID, reduceMotion: reduceMotion, autoCopied: autoCopied)
             return
         }
-        let endFrame = Self.morphEndFrameAtSlot(visible: screen.visibleFrame, position: position)
+        let height = cardHeight(for: self.text, visible: screen.visibleFrame)
+        let endFrame = Self.morphEndFrameAtSlot(visible: screen.visibleFrame, position: position, height: height)
         morphGeneration += 1
         let generation = morphGeneration
         panel?.setFrame(pillFrame, display: false)
@@ -151,7 +218,10 @@ final class NoTargetModalController {
         // the 6C1 load-bearing call — editing lives in the optional
         // scratchpad, never here).
         panel?.orderFront(nil)
-        scheduleContentMask()
+        scheduleContentMask(size: NSSize(width: Self.width, height: height))
+        if autoCopied {
+            copy()
+        }
         guard !reduceMotion else {
             panel?.setFrame(endFrame, display: true)
             panel?.alphaValue = 1
@@ -167,16 +237,25 @@ final class NoTargetModalController {
         })
     }
 
+    /// Card height for display text on a screen: fixed width, measured
+    /// text, clamped to a screen fraction so tiny displays never overflow.
+    private func cardHeight(for display: String, visible: NSRect) -> CGFloat {
+        CatcherLayout.height(
+            for: display,
+            cardWidth: Self.width,
+            minHeight: Self.height,
+            maxHeight: max(visible.height * 0.6, Self.height)
+        )
+    }
+
     /// Rounded-rect mask path for the hosting layer (v6 variant B):
     /// clips EVERYTHING SwiftUI paints — including any opaque root
     /// background it resolves on render — to the card silhouette.
-    /// Static geometry: hosting bounds never change (the panel frame
-    /// animates, not the content), so one mask holds for life. Immune
-    /// to re-renders by construction (the mask is ours, the paint is
-    /// theirs). Pure geometry, unit-tested.
-    nonisolated static func contentMaskPath() -> CGPath {
+    /// Sized per show (heights vary now): pass the live card size.
+    /// Pure geometry, unit-tested.
+    nonisolated static func contentMaskPath(size: CGSize) -> CGPath {
         CGPath(
-            roundedRect: NSRect(x: 0, y: 0, width: Self.width, height: Self.height),
+            roundedRect: NSRect(x: 0, y: 0, width: size.width, height: size.height),
             cornerWidth: Self.cornerRadius, cornerHeight: Self.cornerRadius, transform: nil
         )
     }
@@ -186,30 +265,34 @@ final class NoTargetModalController {
     /// orderFront — clearing at prewarm is a silent no-op on a nil
     /// layer (why variant A failed). Retries twice when the layer
     /// isn't ready yet (audit: single-shot scheduling never recovers);
-    /// skips when a mask is already installed. Idempotent.
-    private func scheduleContentMask(attempts: Int = 3) {
+    /// skips when the installed mask already matches this size.
+    /// Idempotent.
+    private var lastMaskSize: CGSize?
+    private func scheduleContentMask(size: CGSize, attempts: Int = 3) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             guard let layer = self.hosting?.layer else {
-                if attempts > 1 { self.scheduleContentMask(attempts: attempts - 1) }
+                if attempts > 1 { self.scheduleContentMask(size: size, attempts: attempts - 1) }
                 return
             }
-            guard layer.mask == nil else { return }
+            guard self.lastMaskSize != size else { return }
             let mask = CAShapeLayer()
-            mask.path = Self.contentMaskPath()
+            mask.path = Self.contentMaskPath(size: size)
             layer.mask = mask
+            self.lastMaskSize = size
         }
     }
-    /// Slot-anchored 464×168 card (v6): the pill's own slot helper with
-    /// card dimensions — same margins, clamp, and centering as the pill,
-    /// so x matches exactly and growth is purely vertical. Width FLOOR
-    /// at full card size (audit F1): a squeezed frame amputates the
-    /// trailing Copy button silently; edge overflow on tiny screens is
-    /// explicit and visible instead. Height guard for pathological
-    /// frames: keep the slot edge, shrink inward. Pure geometry,
-    /// unit-tested.
-    nonisolated static func morphEndFrameAtSlot(visible: NSRect, position: FlowBarPosition) -> NSRect {
-        var frame = FlowBarPosition.frame(width: Self.width, height: Self.height, on: visible, position: position)
+    /// Slot-anchored card (v6): the pill's own slot helper with card
+    /// dimensions — same margins, clamp, and centering as the pill, so x
+    /// matches exactly and growth is purely vertical. Width FLOOR at full
+    /// card size (audit F1): a squeezed frame amputates the trailing Copy
+    /// button silently; edge overflow on tiny screens is explicit and
+    /// visible instead. Height comes from measured text (v8: grows away
+    /// from the pill edge — top grows down, bottom grows up); the guard
+    /// below only shrinks pathological frames, keeping the slot edge.
+    /// Pure geometry, unit-tested.
+    nonisolated static func morphEndFrameAtSlot(visible: NSRect, position: FlowBarPosition, height: CGFloat) -> NSRect {
+        var frame = FlowBarPosition.frame(width: Self.width, height: height, on: visible, position: position)
         if frame.width < Self.width {
             frame.size.width = Self.width
             frame.origin.x = visible.midX - Self.width / 2
@@ -218,15 +301,25 @@ final class NoTargetModalController {
             frame.size.height = visible.height
             if position == .top { frame.origin.y = visible.maxY - visible.height }
         }
+        // Pathological rooms: X overflow stays explicit (audit F1), but a
+        // card must never park itself off-screen vertically — clamp into
+        // visible, slot edge preferred, visibility required.
+        if frame.maxY > visible.maxY {
+            frame.origin.y = visible.maxY - frame.height
+        }
+        if frame.minY < visible.minY {
+            frame.origin.y = visible.minY
+        }
         return frame
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
     /// Manual Copy primitive (same pasteboard discipline as history Copy).
-    /// Never dismisses — the user may still need to find a textbox.
-    /// Generation-guarded reset (audit): a second Copy (or a re-show)
-    /// inside 1.5s must not let the stale timer clear the live feedback.
+    /// Shows Copied for 1s, then auto-closes: the user pressed Copy
+    /// because the transcript is going somewhere now. Generation-guarded
+    /// (audit): a second Copy (or a re-show) inside the window restarts
+    /// the close instead of double-hiding or stranding Copied lit.
     private var copyGeneration = 0
     func copy(pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
@@ -235,9 +328,10 @@ final class NoTargetModalController {
         copyGeneration += 1
         let generation = copyGeneration
         Task {
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, generation == self.copyGeneration else { return }
-            copied = false
+            self.copied = false
+            self.hide()
         }
     }
 }
@@ -267,6 +361,7 @@ struct CatcherXStyle: ButtonStyle {
 /// 0.97 (springs back on leave), click to 0.92 with one rebound.
 /// Disabled ("Copied") passes through with the same look.
 struct CatcherCopyStyle: ButtonStyle {
+    var background: Color
     var hovering: Bool
 
     func makeBody(configuration: Configuration) -> some View {
@@ -274,7 +369,7 @@ struct CatcherCopyStyle: ButtonStyle {
             .font(.body)
             .padding(.horizontal, 14)
             .padding(.vertical, 5)
-            .background(.gray.opacity(configuration.isPressed ? 0.45 : 0.35), in: RoundedRectangle(cornerRadius: 8))
+            .background(background.opacity(configuration.isPressed ? 1.0 : 0.9), in: RoundedRectangle(cornerRadius: 8))
             .foregroundStyle(.white)
             .scaleEffect(configuration.isPressed ? 0.92 : hovering ? 0.97 : 1.0)
             .animation(
@@ -314,21 +409,24 @@ struct NoTargetModalView: View {
                     Text(controller.text)
                         .font(.title3)
                         .foregroundStyle(palette.transcript)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
                         .padding(.top, 14)
+                        .padding(.trailing, CatcherLayout.xZoneReserve)
                     Spacer(minLength: 0)
                     HStack {
                         Spacer()
                         Button(controller.copied ? "Copied" : "Copy") {
                             controller.copy()
                         }
-                        .buttonStyle(CatcherCopyStyle(hovering: copyHovering && !controller.copied))
+                        .buttonStyle(CatcherCopyStyle(
+                            background: palette.copyBackground,
+                            hovering: copyHovering && !controller.copied
+                        ))
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                         .onHover { copyHovering = $0 }
                         .disabled(controller.copied)
                     }
+                    .padding(.top, 18)
                 }
                 .padding(20)
             }
@@ -339,9 +437,9 @@ struct NoTargetModalView: View {
             .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
             .accessibilityLabel("Dismiss")
             .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Rectangle())
+            .contentShape(Circle().inset(by: -10))
             .onHover { xHovering = $0 }
-            .padding(8)
+            .padding(12)
         }
         .frame(
             width: NoTargetModalController.width,

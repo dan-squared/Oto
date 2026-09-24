@@ -65,16 +65,6 @@ struct KeycapField: View {
             .disabled(disabled)
 
             Button {
-                onArm()
-            } label: {
-                Image(systemName: "pencil")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .disabled(disabled)
-            .help("Record a new shortcut")
-
-            Button {
                 onTrash()
             } label: {
                 Image(systemName: "trash")

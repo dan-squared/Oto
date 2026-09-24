@@ -1,6 +1,9 @@
 # Catcher polish: spacing, vertical text flow, 100-word cap, Copied-close
 
-Status: PLAN ONLY. Nothing implemented. Awaiting `execute`.
+Status: IMPLEMENTED 2026-09-24 (commit on abu-dhabi). Build green,
+378 tests green twice running (4 new catcher tests; pins updated
+deliberately). Device matrix (§9) still requires a packaged/Xcode Run
+with live dictation + screenshots. Nothing merged.
 
 Reference: `.context/attachments/ScSmPv/image.png` (current catcher —
 truncated dots, cramped X, gray Copy), `.context/attachments/eRxkkB/image.png`

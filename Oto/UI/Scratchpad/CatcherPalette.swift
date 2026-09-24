@@ -23,16 +23,23 @@ struct CatcherPalette: Equatable, Sendable {
     var shadowOpacity: Double
     /// Transcript/✕ hue follows the scheme (white on dark, black on light).
     var lightText: Bool
+    /// Copy button fill: system gray on dark, solid black on light.
+    var copyRed: Double
+    var copyGreen: Double
+    var copyBlue: Double
+    var copyOpacity: Double
 
     static let dark = CatcherPalette(
         cardRed: 0.055, cardGreen: 0.055, cardBlue: 0.065,
         textOpacity: 0.9, dimOpacity: 0.6, shadowOpacity: 0.5,
-        lightText: true
+        lightText: true,
+        copyRed: 0.5, copyGreen: 0.5, copyBlue: 0.5, copyOpacity: 0.35
     )
     static let light = CatcherPalette(
         cardRed: 1.0, cardGreen: 1.0, cardBlue: 1.0,
         textOpacity: 0.85, dimOpacity: 0.55, shadowOpacity: 0.25,
-        lightText: false
+        lightText: false,
+        copyRed: 0.0, copyGreen: 0.0, copyBlue: 0.0, copyOpacity: 1.0
     )
 
     static func current(_ scheme: ColorScheme) -> CatcherPalette {
@@ -45,4 +52,7 @@ extension CatcherPalette {
     var ink: Color { lightText ? .white : .black }
     var transcript: Color { ink.opacity(textOpacity) }
     var dim: Color { ink.opacity(dimOpacity) }
+    var copyBackground: Color {
+        Color(red: copyRed, green: copyGreen, blue: copyBlue).opacity(copyOpacity)
+    }
 }

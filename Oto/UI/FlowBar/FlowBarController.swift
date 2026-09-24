@@ -306,15 +306,19 @@ final class FlowBarController {
             // v6 morph: grow out of the live pill frame at its own slot
             // (top grows down, bottom grows up — zero travel). Pill hidden
             // or Reduce Motion → today's centered fade, byte-identical.
+            // Over-limit transcripts (>100 words) auto-copy with the modal
+            // rendering Copied: pixels stay capped, data stays whole.
+            let overLimit = CatcherText.isOverLimit(text)
             if let pillFrame = panel?.frameForMorph {
                 modal.showFromPill(
                     pillFrame: pillFrame, text: text,
                     displayID: Self.targetScreen(of: state),
                     position: FlowBarPosition.current(),
-                    reduceMotion: model.motionFrozen
+                    reduceMotion: model.motionFrozen,
+                    autoCopied: overLimit
                 )
             } else {
-                modal.show(text: text, displayID: Self.targetScreen(of: state))
+                modal.show(text: text, displayID: Self.targetScreen(of: state), autoCopied: overLimit)
             }
         case .autoCopy(_, let text):
             // Silent auto-copy: the catcher-off toggle promises the
