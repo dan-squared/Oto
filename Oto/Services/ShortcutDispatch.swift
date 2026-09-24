@@ -53,6 +53,22 @@ final class ShortcutDispatch {
     /// Timing only — routing decisions stay in the transition machines
     /// and the coordinator guards.
     private var holdTap = DoubleTapTracker()
+    /// fn-hold confirmation threshold: fn taps at/under this belong to
+    /// macOS (emoji, dictation, remap, or nothing — varies by device and
+    /// is unobservable), holds past it are Oto's. Matches the tap constant
+    /// so the story is single: one number separates system taps from Oto.
+    nonisolated static let fnHoldConfirmNanoseconds: UInt64 = 250_000_000
+    /// Pending/confirmed bare-fn press. The shared machine stays pristine
+    /// for fn (it never steps it); this pair is the whole fn state.
+    private var fnPendingDown: ContinuousClock.Instant?
+    private var fnConfirmed = false
+    private var fnConfirmTask: Task<Void, Never>?
+
+    /// True when the hold slot is a bare fn key — the only trigger with
+    /// system tap behavior. All other holds stay instant.
+    private var isFnHold: Bool {
+        trigger(for: .hold).kind == .modifierHold(keyCode: UInt16(kVK_Function))
+    }
     /// Begin-generation counter: every routed begin bumps it synchronously;
     /// the routing Task settles it after storing the id (or nil-ing).
     /// Conversion spins on it so cancel+toggle can never run ahead of a
@@ -163,6 +179,7 @@ final class ShortcutDispatch {
         holdTransition = HotkeyTransitionState()
         handsFreeTransition = HotkeyTransitionState()
         holdTap.reset()
+        dropFnPending()
     }
 
     /// Suspend global registration while the recorder listens, resume after.
@@ -198,7 +215,7 @@ final class ShortcutDispatch {
             // slots are AX-gated there is nothing to heal.
             if holdGated && freeGated { return }
         }
-        guard !holdTransition.isDown, !handsFreeTransition.isDown else { return }
+        guard !holdTransition.isDown, !handsFreeTransition.isDown, fnPendingDown == nil else { return }
         // Re-register to heal a timed-out tap or revoked backend.
         start()
     }
@@ -400,6 +417,12 @@ final class ShortcutDispatch {
 
     /// Time-injected core: production passes `.now`, tests script instants.
     private func receive(_ event: ShortcutEvent, from slot: ShortcutSlot, at now: ContinuousClock.Instant) {
+        // Bare fn bypasses the shared machine (which begins instantly):
+        // its taps belong to macOS, only sustained holds are Oto's.
+        if slot == .hold, isFnHold {
+            receiveFnHold(event, at: now)
+            return
+        }
         if case .keyDown = event {
             noteObserved(down: true, slot: slot)
         } else if case .keyUp = event {
@@ -425,9 +448,56 @@ final class ShortcutDispatch {
         route(action, mode: mode)
     }
 
+    /// Bare-fn hold path. fn taps belong to macOS (emoji, dictation,
+    /// remap, or nothing — varies by device/setting and is unobservable),
+    /// so Oto commits nothing until a sustained hold: early release drops
+    /// silently (no session, no pill, no duck, no conversion, no
+    /// calibration trace). Confirmed holds route exactly like any hold.
+    /// Events pass through untouched either way — the native tap behavior
+    /// is byte-identical. fn never feeds the double-tap tracker: taps are
+    /// system gestures, converting them would double-fire against macOS.
+    private func receiveFnHold(_ event: ShortcutEvent, at now: ContinuousClock.Instant) {
+        switch event {
+        case .keyDown(let isRepeat):
+            guard !isRepeat, fnPendingDown == nil, !fnConfirmed else { return }
+            fnPendingDown = now
+            fnConfirmTask?.cancel()
+            fnConfirmTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.fnHoldConfirmNanoseconds)
+                guard let self else { return }
+                // Same press, still held, still fn-hold configured and live.
+                // (Reconfig/teardown disarms via stop(); suspend/Escape too.)
+                guard self.fnPendingDown == now, self.isFnHold,
+                      self.configuration.enabled, !self.isSuspended
+                else { return }
+                self.fnConfirmed = true
+                self.noteObserved(down: true, slot: .hold)
+                self.route(.begin, mode: .holdToTalk)
+            }
+        case .keyUp:
+            fnConfirmTask?.cancel()
+            fnConfirmTask = nil
+            guard fnPendingDown != nil else { return }
+            fnPendingDown = nil
+            guard fnConfirmed else { return }  // sub-threshold tap: the system's.
+            fnConfirmed = false
+            noteObserved(down: false, slot: .hold)
+            route(.finish, mode: .holdToTalk)
+        case .monitorLost:
+            dropFnPending()
+        }
+    }
+
+    /// Disarm fn-hold without touching the coordinator (nothing began, so
+    /// there is nothing to cancel — the whole point of confirmation).
+    private func dropFnPending() {
+        fnConfirmTask?.cancel()
+        fnConfirmTask = nil
+        fnPendingDown = nil
+        fnConfirmed = false
+    }
     /// Double-tap confirmed on the hold slot: the tap's own micro-session
     /// is cancelled best-effort (non-terminal → discarded pre-insertion;
-    /// terminal-empty → cancel no-ops; terminal-inserted is a
     /// near-impossible race watched by the matrix), then the existing
     /// hands-free toggle path begins. Sequenced in ONE Task — cancel
     /// before toggle — so the toggle can never run ahead of the cancel
@@ -455,6 +525,7 @@ final class ShortcutDispatch {
     private func receiveEscape() {
         _ = holdTransition.step(.escape, mode: .holdToTalk)
         _ = handsFreeTransition.step(.escape, mode: .handsFree)
+        dropFnPending()
         guard let id = activeSessionID else { return }
         Task { [weak self] in
             guard let self else { return }

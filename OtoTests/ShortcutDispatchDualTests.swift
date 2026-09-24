@@ -387,6 +387,91 @@ struct ShortcutDispatchDualTests {
         #expect(await inserter.calls.count == 2)
     }
 
+    // MARK: - Bare-fn hold confirmation
+
+    private func fnHoldConfig() -> DualShortcutConfiguration {
+        DualShortcutConfiguration(
+            hold: ShortcutTrigger(
+                kind: .modifierHold(keyCode: UInt16(kVK_Function)),
+                interaction: .holdToTalk
+            ),
+            handsFree: .dictationKeyHandsFree(),
+            enabled: true
+        )
+    }
+
+    @Test func fnTapCreatesNothing() async {
+        // Sub-threshold tap: the system's (emoji or nothing). No session,
+        // no insert, no calibration trace — and nothing late either.
+        let (coordinator, inserter) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(100))
+        // Past the confirmation threshold: a late begin would land here.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard case .idle = await coordinator.state else {
+            Issue.record("fn tap created a session: \(await coordinator.state)")
+            return
+        }
+        #expect(await inserter.calls.count == 0)
+        #expect(dispatch.calibrationHold == .untested)
+    }
+
+    @Test func fnSustainedHoldRecordsNormally() async {
+        let (coordinator, inserter) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold)
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+
+        guard case .completed(let context) = await coordinator.state else {
+            Issue.record("expected completed, got \(await coordinator.state)")
+            return
+        }
+        #expect(context.interaction == .holdToTalk)
+        #expect(await inserter.calls.count == 1)
+        #expect(dispatch.calibrationHold == .ready)
+    }
+
+    @Test func fnDoubleTapNeverConverts() async {
+        // fn taps belong to macOS (emoji/dictation): converting them would
+        // double-fire against the system.
+        let (coordinator, inserter) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+        let t0 = ContinuousClock().now
+
+        tap(dispatch, from: t0, downMs: 0, upMs: 100)
+        tap(dispatch, from: t0, downMs: 250, upMs: 330)
+        // Past every window: neither a convert nor a late begin may land.
+        try? await Task.sleep(for: .milliseconds(500))
+        guard case .idle = await coordinator.state else {
+            Issue.record("fn double-tap converted: \(await coordinator.state)")
+            return
+        }
+        #expect(await inserter.calls.count == 0)
+    }
+
+    @Test func reconfigDropsFnPending() async {
+        let (coordinator, _) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+        defer { cleanDualKey() }
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        _ = dispatch.updateHoldTrigger(.defaultHoldToTalk())
+        // The armed press belonged to the old trigger: nothing may begin.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard case .idle = await coordinator.state else {
+            Issue.record("reconfig leaked a session: \(await coordinator.state)")
+            return
+        }
+    }
+
     @Test func tapsDuringHandsFreeKeepTranscriptAndConvert() async {
         let (coordinator, inserter, _) = makeGatedCoordinator()
         let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
