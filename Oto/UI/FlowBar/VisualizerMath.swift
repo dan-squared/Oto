@@ -78,6 +78,7 @@ enum VisualizerMath {
         case .recording: 92.4
         case .finalizing: 95.7
         case .inserting: 95.7
+        case .message: 92.4
         }
     }
 

@@ -26,7 +26,7 @@ enum FlowBarState: Equatable, Sendable {
         switch (lhs, rhs) {
         case (.hidden, .hidden), (.preparing, .preparing),
              (.recording, .recording), (.finalizing, .finalizing),
-             (.inserting, .inserting):
+             (.inserting, .inserting), (.message, .message):
             return true
         default:
             return false
@@ -38,6 +38,10 @@ enum FlowBarState: Equatable, Sendable {
     case recording
     case finalizing
     case inserting
+    /// Transient over-limit Copied pill (controller latched, §catcher
+    /// polish). Never produced by `project()` — the coordinator owns no
+    /// such state; the latch lives in the controller.
+    case message
 }
 
 /// Everything one poll snapshot needs: the case, intent identity, and

@@ -130,6 +130,9 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.panelWidth(for: .finalizing) == 95.7)
         #expect(VisualizerMath.panelWidth(for: .inserting) == 95.7)
         #expect(VisualizerMath.panelWidth(for: .hidden) == 0)
+        // Over-limit Copied pill renders at current pill size: switching
+        // from dictation visuals is a re-render, never a resize.
+        #expect(VisualizerMath.panelWidth(for: .message) == 92.4)
         // v7: no failure arm (errors never reach the pill). The v7 wide
         // auto-copy notice is removed: clipboard auto-copy stays silent.
         // Relaxed compact: 0.825× the v3 mini in every linear dimension

@@ -46,6 +46,35 @@ enum CatcherText: Sendable {
         guard words.count > limit else { return text }
         return words.prefix(limit).joined(separator: " ") + "…"
     }
+
+    /// Pill-sized display for over-limit transcripts: leading words
+    /// greedily filled to fit, suffixed with Copied. Single line that
+    /// never overflows the current pill width — the switch from dictation
+    /// visuals is a re-render, never a resize. Pure + unit-tested.
+    nonisolated static func pillWords(
+        _ text: String,
+        maxWidth: CGFloat = 76,
+        fontSize: CGFloat = 11
+    ) -> String {
+        let font = NSFont.systemFont(ofSize: fontSize)
+        func fits(_ s: String) -> Bool {
+            (s as NSString).boundingRect(
+                with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin],
+                attributes: [.font: font]
+            ).width <= maxWidth
+        }
+        let suffix = "… Copied"
+        guard fits(suffix) else { return "Copied" }
+        var words: [String] = []
+        for word in text.split(whereSeparator: \.isWhitespace) {
+            let candidate = (words + [String(word)]).joined(separator: " ") + suffix
+            guard fits(candidate) else { break }
+            words.append(String(word))
+        }
+        guard !words.isEmpty else { return "Copied" }
+        return words.joined(separator: " ") + suffix
+    }
 }
 
 /// Card geometry: fixed 464pt width, computed height. Pure + unit-tested;
@@ -57,7 +86,7 @@ enum CatcherLayout: Sendable {
     nonisolated static let xZoneReserve: CGFloat = 56
     /// Vertical chrome: top pad + text top + text→button gap + button
     /// row + bottom pad. Matches the view below by construction.
-    nonisolated static let chromeHeight: CGFloat = 20 + 14 + 18 + 44 + 20
+    nonisolated static let chromeHeight: CGFloat = 20 + 18 + 18 + 44 + 20
     /// SwiftUI `.title3` point size backing the transcript Text.
     nonisolated static let textPointSize: CGFloat = 20
 
@@ -68,7 +97,7 @@ enum CatcherLayout: Sendable {
     nonisolated static func textHeight(for text: String, cardWidth: CGFloat) -> CGFloat {
         let font = NSFont.systemFont(ofSize: textPointSize)
         let rect = (text as NSString).boundingRect(
-            with: NSSize(width: textWidth(cardWidth: cardWidth), height: .greatestFiniteMagnitude),
+            with: NSSize(width: textWidth(cardWidth: cardWidth), height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font]
         )
@@ -93,6 +122,11 @@ final class NoTargetModalController {
 
     private(set) var text = ""
     private(set) var copied = false
+    /// Live card height for the SwiftUI view frame. Set on every show
+    /// BEFORE refreshContent, so content and panel never disagree (a stale
+    /// fixed frame compresses text into default truncation — the dots bug
+    /// class). Starts at the minimum.
+    private(set) var cardHeight: CGFloat = height
     /// Build-identity + geometry trail: every catcher appearance logs
     /// words, size, and mode, so a screenshot without a matching line is
     /// stale by construction (never chase ghosts again).
@@ -136,8 +170,7 @@ final class NoTargetModalController {
     func show(
         text: String,
         displayID: CGDirectDisplayID?,
-        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-        autoCopied: Bool = false
+        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     ) {
         self.text = CatcherText.displayWords(text)
         copied = false
@@ -148,7 +181,8 @@ final class NoTargetModalController {
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let visible = screen.visibleFrame
         let height = cardHeight(for: self.text, visible: visible)
-        log.info("catcher show words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height)) autoCopied=\(autoCopied)")
+        log.info("catcher show words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height))")
+        self.cardHeight = height
         let endFrame = NSRect(
             x: visible.midX - Self.width / 2,
             y: visible.midY - height / 2,
@@ -166,11 +200,6 @@ final class NoTargetModalController {
         // orderFront, never key: focus must stay wherever the user had it.
         panel?.orderFront(nil)
         scheduleContentMask(size: NSSize(width: Self.width, height: height))
-        if autoCopied {
-            // Over-limit path: the transcript is already the clipboard's;
-            // render Copied, then close on the same 1s cadence.
-            copy()
-        }
         guard !reduceMotion else {
             panel?.setFrame(endFrame, display: true)
             panel?.alphaValue = 1
@@ -202,8 +231,7 @@ final class NoTargetModalController {
         text: String,
         displayID: CGDirectDisplayID?,
         position: FlowBarPosition = FlowBarPosition.current(),
-        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-        autoCopied: Bool = false
+        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     ) {
         self.text = CatcherText.displayWords(text)
         copied = false
@@ -212,11 +240,12 @@ final class NoTargetModalController {
         prewarm()
         refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else {
-            show(text: text, displayID: displayID, reduceMotion: reduceMotion, autoCopied: autoCopied)
+            show(text: text, displayID: displayID, reduceMotion: reduceMotion)
             return
         }
         let height = cardHeight(for: self.text, visible: screen.visibleFrame)
-        log.info("catcher show words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height)) autoCopied=\(autoCopied)")
+        log.info("catcher show words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height))")
+        self.cardHeight = height
         let endFrame = Self.morphEndFrameAtSlot(visible: screen.visibleFrame, position: position, height: height)
         morphGeneration += 1
         let generation = morphGeneration
@@ -227,9 +256,6 @@ final class NoTargetModalController {
         // scratchpad, never here).
         panel?.orderFront(nil)
         scheduleContentMask(size: NSSize(width: Self.width, height: height))
-        if autoCopied {
-            copy()
-        }
         guard !reduceMotion else {
             panel?.setFrame(endFrame, display: true)
             panel?.alphaValue = 1
@@ -341,7 +367,7 @@ final class NoTargetModalController {
         copyGeneration += 1
         let generation = copyGeneration
         Task {
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, generation == self.copyGeneration else { return }
             self.copied = false
             self.hide()
@@ -422,7 +448,7 @@ struct NoTargetModalView: View {
                     Text(controller.text)
                         .font(.title3)
                         .foregroundStyle(palette.transcript)
-                        .padding(.top, 14)
+                        .padding(.top, 18)
                         .padding(.trailing, CatcherLayout.xZoneReserve)
                     Spacer(minLength: 0)
                     HStack {
@@ -452,11 +478,14 @@ struct NoTargetModalView: View {
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Circle().inset(by: -10))
             .onHover { xHovering = $0 }
-            .padding(12)
+            .padding(16)
         }
         .frame(
             width: NoTargetModalController.width,
-            height: NoTargetModalController.height
+            height: controller.cardHeight
         )
+        // Belt-and-braces with the layer mask: content can never paint
+        // outside the card even if a mask install ever lags a resize.
+        .clipShape(RoundedRectangle(cornerRadius: NoTargetModalController.cornerRadius))
     }
 }

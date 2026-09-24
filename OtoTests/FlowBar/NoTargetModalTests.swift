@@ -157,10 +157,26 @@ struct NoTargetModalTests {
         let clamped = CatcherLayout.height(for: huge, cardWidth: 464, minHeight: minH, maxHeight: 200)
         #expect(clamped == 200)
         // Chrome math is explicit: card padding, text inset, gap, button.
-        let chrome: CGFloat = 20 + 14 + 18 + 44 + 20
+        let chrome: CGFloat = 20 + 18 + 18 + 44 + 20
         #expect(CatcherLayout.chromeHeight == chrome)
         let innerWidth: CGFloat = 464 - 40 - 56
         #expect(CatcherLayout.textWidth(cardWidth: 464) == innerWidth)
+    }
+
+    @Test func pillWordsFitPillWidth() {
+        // Greedy fill at pill metrics: never overflows, always Copied.
+        let shown = CatcherText.pillWords(
+            Array(repeating: "word", count: 101).joined(separator: " ")
+        )
+        #expect(shown.hasSuffix("Copied"))
+        let font = NSFont.systemFont(ofSize: 11)
+        let width = (shown as NSString).boundingRect(
+            with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin],
+            attributes: [.font: font]
+        ).width
+        #expect(width <= 76)
+        #expect(CatcherText.pillWords("hi") == "hi… Copied")
     }
 
     @Test func copyShowsCopiedThenCloses() async {
@@ -170,7 +186,7 @@ struct NoTargetModalTests {
         modal.copy(pasteboard: board)
         #expect(modal.copied == true)
         #expect(board.string(forType: .string) == "kept words")
-        try? await Task.sleep(for: .milliseconds(1200))
+        try? await Task.sleep(for: .milliseconds(800))
         #expect(modal.copied == false)
     }
 
@@ -179,12 +195,13 @@ struct NoTargetModalTests {
         let modal = NoTargetModalController()
         modal.show(text: "kept words", displayID: nil, reduceMotion: true)
         modal.copy(pasteboard: board)
-        try? await Task.sleep(for: .milliseconds(700))
+        try? await Task.sleep(for: .milliseconds(300))
         modal.copy(pasteboard: board)
-        // Stale timer must not clear the live Copied: still lit at +1400.
-        try? await Task.sleep(for: .milliseconds(700))
+        // Stale timer must not clear the live Copied: still lit at +700
+        // (close lands at re-copy + 600).
+        try? await Task.sleep(for: .milliseconds(400))
         #expect(modal.copied == true)
-        try? await Task.sleep(for: .milliseconds(600))
+        try? await Task.sleep(for: .milliseconds(400))
         #expect(modal.copied == false)
     }
 }

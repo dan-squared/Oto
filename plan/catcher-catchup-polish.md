@@ -51,25 +51,32 @@ removal excepted — explicitly ordered).
 
 ## 4. 100-word policy (display clamp only — data never truncates)
 
+Amended during execution: over-limit renders in the PILL, not the
+modal (user-ordered). RecoveryRouter is untouched; the controller
+latches a 2.5s message pill (same size, re-render never resize) with
+greedily-filled leading words + Copied, auto-copied whole transcript.
+Root cause found en route: the SwiftUI view kept a hardcoded 168pt
+frame, so taller panels compressed text into default truncation (the
+dots) — the view now tracks a live controller height with a clipShape
+backstop, which also retires the mismatch family behind the
+outer-stroke report.
+
 - Pure `CatcherText.displayWords(_:limit: 100)`: first 100 words +
   "…". `recoveryTranscript`, clipboard, and history always keep the
   FULL text — the cap is pixels, never data.
-- ≤100 words: modal as §2–3, Copy → "Copied" 1s → auto-close (§5).
-- >100 words: transcript auto-copied immediately; modal opens showing
-  the capped padded text WITH the button already in "Copied" state,
-  then auto-closes after 1s. No new pill system, no notice resurrection:
-  the over-limit path reuses the modal + clipboard discipline already
-  in-tree (`syncRecovery` auto-copy write + modal show).
+- ≤100 words: modal as §2–3, Copy → "Copied" 0.6s → auto-close (§5).
+- >100 words: transcript auto-copied immediately; NO modal — the
+  controller latches a 2.5s message pill at current size (greedy word
+  fill + Copied, re-render never resize). Latch clears on any live
+  session or deadline; stale latches cleared on silent/autoCopy routes.
 
-## 5. Copy → Copied 1s → auto-close (explicit user override)
+## 5. Copy → Copied 0.6s → auto-close (explicit user override)
 
 - Overrides the "Copy never dismisses" rule (user-tested flow wins):
-  `copy()` sets Copied, writes clipboard, and after 1s hides the panel
-  and resets state — one generation-guarded block (existing
+  `copy()` sets Copied, writes clipboard, and after 0.6s hides the
+  panel and resets state — one generation-guarded block (existing
   `copyGeneration` discipline extended: re-copy inside the window
   restarts the second, never double-hides).
-- `show(text:autoCopied:)` variant for the over-limit path: writes,
-  renders Copied immediately, same 1s close.
 
 ## 6. Shortcut pencil removal
 
