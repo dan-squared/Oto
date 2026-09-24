@@ -122,6 +122,15 @@ final class HIDEventMonitor {
         isLive = false
     }
 
+    /// Read-only combination-use probe: true when another key/mouse went
+    /// down while this hold code was held (fn+arrows, fn+click, …). Lets
+    /// fn-hold confirmation drop system gestures instead of committing.
+    func isInCombination(code: UInt16) -> Bool {
+        if let state = slotHolds[code] { return state.usedInCombination }
+        if holdCode == code { return hold.usedInCombination }
+        return false
+    }
+
     func noteMonitorLost() {
         hold = ModifierHoldState()
         pressedFunctionCode = nil

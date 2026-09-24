@@ -149,4 +149,33 @@ struct HIDDecideDualTests {
         }
         #expect(fires == 2)
     }
+
+    // MARK: - Combination-use probe (fn-hold confirmation consults this)
+
+    @Test func combinationProbeReflectsHeldSlotUse() {
+        let monitor = HIDEventMonitor()
+        monitor.configure(
+            holdSlots: [UInt16(kVK_Function): .hold],
+            functionSlots: [:]
+        )
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(monitor.isInCombination(code: UInt16(kVK_Function)) == false)
+        // fn held + another key: system gesture (fn+arrows, fn+click class).
+        _ = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_D),
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(monitor.isInCombination(code: UInt16(kVK_Function)) == true)
+        // Clean release resets the flag.
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: []
+        )
+        #expect(monitor.isInCombination(code: UInt16(kVK_Function)) == false)
+        // Untracked codes never report combination use.
+        #expect(monitor.isInCombination(code: UInt16(kVK_RightOption)) == false)
+    }
 }

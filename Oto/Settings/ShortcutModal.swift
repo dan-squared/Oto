@@ -136,11 +136,13 @@ struct ShortcutModal: View {
                 Button("Reset to default") {
                     resetToDefaults()
                 }
+                .disabled(isRecordingHold || isRecordingHandsFree)
                 Spacer()
                 Button("Done") {
                     applyDone()
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(isRecordingHold || isRecordingHandsFree)
             }
         }
         .padding(20)
@@ -248,20 +250,20 @@ struct ShortcutModal: View {
         )
     }
 
-    /// Concise reason for the current refusal shape. The beep says *that*;
-    /// this says *why* — one line per case.
-    private func invalidReason() -> String {
-        "That key can't be a combination — try ⌘⇧D style keys, or pick a bare key above."
-    }
-
     // MARK: - Staging
 
     private func presetBinding(for slot: ShortcutSlot) -> Binding<SlotKindChoice> {
         Binding(
             get: { slotChoice(for: staging.effectiveKind(for: slot)) },
             set: { choice in
-                guard choice != .combo else { return }
-                stage(kind: presetKind(for: choice), slot: slot)
+                switch choice {
+                case .holdKey:
+                    stage(kind: .modifierHold(keyCode: UInt16(kVK_RightOption)), slot: slot)
+                case .dictationKey:
+                    stage(kind: .functionKey(codes: [Int64(kVK_F5), 176]), slot: slot)
+                case .combo:
+                    break // captures stage via capture(), never presets
+                }
             }
         )
     }
@@ -274,25 +276,24 @@ struct ShortcutModal: View {
         }
     }
 
-    private func presetKind(for choice: SlotKindChoice) -> ShortcutTrigger.Kind {
-        switch choice {
-        case .holdKey:
-            return .modifierHold(keyCode: UInt16(kVK_RightOption))
-        case .dictationKey:
-            return .functionKey(codes: [Int64(kVK_F5), 176])
-        case .combo:
-            // Unreachable: combo picks arrive via capture, not presets.
-            return .modifierHold(keyCode: UInt16(kVK_RightOption))
-        }
-    }
-
     private func trigger(kind: ShortcutTrigger.Kind, slot: ShortcutSlot) -> ShortcutTrigger {
         ShortcutTrigger(kind: kind, interaction: slot == .hold ? .holdToTalk : .handsFree)
     }
 
     /// Stage a kind; a kind equal to live unstages (no phantom change).
     /// Advisory gate runs immediately so conflicts surface before Done.
+    /// Bare fn is hold-only: an instant toggle cannot share a key with
+    /// system taps, so staging it hands-free is refused with guidance
+    /// (never staged, never saved).
     private func stage(kind: ShortcutTrigger.Kind, slot: ShortcutSlot) {
+        if slot == .handsFree,
+           case .modifierHold(let code) = kind,
+           code == UInt16(kVK_Function)
+        {
+            setMessage("fn taps belong to macOS — use Push to talk or a combination.", slot: slot)
+            setShowSwap(false, slot: slot)
+            return
+        }
         let liveKind = slot == .hold ? staging.live.hold.kind : staging.live.handsFree.kind
         if kind == liveKind {
             if slot == .hold {
@@ -362,6 +363,8 @@ struct ShortcutModal: View {
     }
 
     /// Advisory gate: same refusal Done would give, shown early with Swap.
+    /// A grandfathered live fn in hands-free (swap predating the gate)
+    /// gets guidance here, never a block.
     private func refreshAdvisory(for slot: ShortcutSlot) {
         let preview = staging.donePreview()
         let result = slot == .hold ? preview.hold : preview.handsFree
@@ -371,9 +374,26 @@ struct ShortcutModal: View {
                 slot: slot
             )
             setShowSwap(true, slot: slot)
+        } else if slot == .handsFree,
+                  case .modifierHold(let code) = staging.effectiveKind(for: slot),
+                  code == UInt16(kVK_Function)
+        {
+            setMessage("fn taps belong to macOS — use Push to talk or a combination.", slot: slot)
+            setShowSwap(false, slot: slot)
         } else {
             setMessage(nil, slot: slot)
             setShowSwap(false, slot: slot)
+        }
+    }
+
+    /// Surfaces the hands-free fn guidance after resyncs that clear
+    /// staged state (open, swap, reset). Hold card untouched.
+    private func refreshFnGuidance() {
+        if case .modifierHold(let code) = staging.effectiveKind(for: .handsFree),
+           code == UInt16(kVK_Function)
+        {
+            setMessage("fn taps belong to macOS — use Push to talk or a combination.", slot: .handsFree)
+            setShowSwap(false, slot: .handsFree)
         }
     }
 
@@ -390,6 +410,11 @@ struct ShortcutModal: View {
                     slot: .hold
                 )
                 setShowSwap(true, slot: .hold)
+            } else {
+                // Applied: the staged value is live now — a stale message
+                // (e.g. a capture-time warning) must not survive it.
+                setMessage(nil, slot: .hold)
+                setShowSwap(false, slot: .hold)
             }
         }
         if staging.stagedHandsFreeKind != nil {
@@ -402,6 +427,9 @@ struct ShortcutModal: View {
                     slot: .handsFree
                 )
                 setShowSwap(true, slot: .handsFree)
+            } else {
+                setMessage(nil, slot: .handsFree)
+                setShowSwap(false, slot: .handsFree)
             }
         }
         // Clears land last: an explicit staged clear wins over F1 re-enable.
@@ -425,6 +453,7 @@ struct ShortcutModal: View {
         dispatch.swapHoldAndHandsFree()
         staging = ShortcutStaging(live: dispatch.configuration)
         clearMessages()
+        refreshFnGuidance()
     }
 
     // MARK: - Per-slot state helpers

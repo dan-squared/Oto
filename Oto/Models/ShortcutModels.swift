@@ -291,6 +291,73 @@ struct DoubleTapTracker: Equatable, Sendable {
     }
 }
 
+/// Bare-fn hold confirmation: pure timing core (instants in, verdicts
+/// out — no timers, no clock reads, fully deterministic tests). The
+/// dispatch owns the single confirm Task; this owns the rules.
+/// Taps at/under threshold belong to macOS; only a still-held press past
+/// threshold confirms. Single source with the tap constant by construction
+/// (see threshold).
+struct FnHoldConfirm: Equatable, Sendable {
+    /// Confirmation threshold. Aliased to the tap constant deliberately:
+    /// one number separates system taps from Oto holds.
+    nonisolated static let threshold: Duration = DoubleTapTracker.maxPressDuration
+
+    /// Press outcome for release routing.
+    enum UpResult: Equatable, Sendable {
+        /// Sub-threshold release: the system's, drop silently.
+        case droppedTap
+        /// Release of a confirmed hold: route finish normally.
+        case finishedHold
+        /// No press tracked (stray release): ignore.
+        case ignored
+
+        nonisolated static func == (lhs: UpResult, rhs: UpResult) -> Bool {
+            switch (lhs, rhs) {
+            case (.droppedTap, .droppedTap), (.finishedHold, .finishedHold), (.ignored, .ignored):
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private var downAt: ContinuousClock.Instant?
+    private var confirmed = false
+
+    /// Arm on physical down. False when already tracking (repeat/duplicate).
+    nonisolated mutating func down(at now: ContinuousClock.Instant) -> Bool {
+        guard downAt == nil, !confirmed else { return false }
+        downAt = now
+        return true
+    }
+
+    /// True while a press is tracked (physical down, resolving or live).
+    nonisolated var isDown: Bool { downAt != nil }
+
+    /// Confirm check for the timer firing: same press, still held, past
+    /// threshold. The caller re-validates config/liveness (reconfig and
+    /// teardown disarm via reset).
+    nonisolated func shouldConfirm(at now: ContinuousClock.Instant) -> Bool {
+        guard let down = downAt, !confirmed else { return false }
+        return down.duration(to: now) >= Self.threshold
+    }
+
+    nonisolated mutating func markConfirmed() { confirmed = true }
+
+    nonisolated mutating func up() -> UpResult {
+        guard downAt != nil else { return .ignored }
+        downAt = nil
+        guard confirmed else { return .droppedTap }
+        confirmed = false
+        return .finishedHold
+    }
+
+    nonisolated mutating func reset() {
+        downAt = nil
+        confirmed = false
+    }
+}
+
 /// Staged shortcut edits for the Shortcuts modal. Pure value: the live
 /// config snapshot plus per-slot staged kinds (nil = untouched). The modal
 /// applies through the dispatch gate; this type previews outcomes so the
