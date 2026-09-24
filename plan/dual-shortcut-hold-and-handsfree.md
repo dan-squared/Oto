@@ -164,6 +164,14 @@ SDK: `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0), checked
    - `isEscapeCancelAvailable`, `requiresAccessibility`, `backendsLive`
      computed PER SLOT; overall calibration = worst-of for menu callers that
      need one value (keep single-value API as derived, not stored).
+   - Menu-compat (added 2026-09-24): `Oto/UI/OtoMenuBarView.swift:33-34`
+      reads `refreshAvailability()` + single-value `isEscapeCancelAvailable`
+      and is NOT changed. Both signatures are preserved as derived values:
+      `refreshAvailability()` keeps its shape (heals both slots via `start()`);
+      single-value `isEscapeCancelAvailable` = shared-tap liveness
+      (`hidMonitor.isLive` — Escape rides the one tap in every
+      configuration); single-value `calibration` = worst-of both slots.
+      Per-slot accessors are additive only.
 
 3. `Oto/Services/HIDEventMonitor.swift`
    - `configure(functionCodes:holdKeyCode:)` → slot-tagged:
@@ -201,7 +209,9 @@ SDK: `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0), checked
    `Oto/Services/HotkeyTransitionState.swift` — NO change (already
    mode-parameterized). `Oto/Services/ShortcutRecorder.swift` — NO change
    (rules reused per slot). `Oto/Services/CarbonHotKey.swift` — NO change
-   (multi-key already). `Oto/Coordinator/DictationCoordinator.swift` — NO change
+   (multi-key already). `Oto/UI/OtoMenuBarView.swift` — NO change
+   (menu-compat: derived single-value API preserved, see §5.2).
+   `Oto/Coordinator/DictationCoordinator.swift` — NO change
    (single-session guard + cross-mode no-ops already correct:
    `toggleHandsFree` on a hold session → `begin(.handsFree)` → nil while
    non-terminal; `beginHold` during hands-free → nil).
