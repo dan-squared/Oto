@@ -45,6 +45,15 @@ extension ShortcutDispatch {
     /// Human-readable calibration for the test-shortcut row. Set ONLY by
     /// observed real global events — never by the recorder.
     var calibrationText: String {
+        Self.describe(calibration)
+    }
+
+    /// Per-slot calibration text for the dual-slot rows.
+    func calibrationText(for slot: ShortcutSlot) -> String {
+        Self.describe(slot == .hold ? calibrationHold : calibrationHandsFree)
+    }
+
+    private nonisolated static func describe(_ calibration: ShortcutCalibration) -> String {
         switch calibration {
         case .untested: return "Untested"
         case .ready: return "Ready"
@@ -52,6 +61,68 @@ extension ShortcutDispatch {
         case .conflicts: return "Conflicts with another shortcut"
         case .requiresAccessibility: return "Requires Accessibility"
         }
+    }
+}
+
+/// One slot's kind picker. Bare-modifier and F-key capture are NOT in the
+/// recorder; they arrive via these presets (Hold key / Dictation key),
+/// mirroring the old TriggerChoice — zero new validation rules.
+enum SlotKindChoice: String, CaseIterable, Identifiable {
+    case holdKey = "Hold key"
+    case dictationKey = "Dictation key"
+    case combo = "Custom combo"
+
+    var id: String { rawValue }
+}
+
+/// One live slot's settings row: kind presets + press-to-record combo field
+/// (combo kind only) + per-slot calibration + conflict message. The pane
+/// owns dispatch calls; this row only renders and forwards.
+struct ShortcutSlotRow: View {
+    let title: String
+    @Binding var choice: SlotKindChoice
+    let comboLabel: String
+    let conflictMessage: String?
+    let calibrationText: String
+    @Binding var isRecording: Bool
+    /// While the OTHER row records, this row's recorder is disabled (only
+    /// one listener at a time; dispatch suspends both slots either way).
+    let recordingDisabled: Bool
+    let onKindChange: () -> Void
+    let onBeginRecording: () -> Void
+    let onCapture: (UInt32, UInt32, [RecorderConflict]) -> Void
+    let onClear: () -> Void
+    let onCancel: () -> Void
+    let onInvalid: () -> Void
+
+    var body: some View {
+        Picker(title, selection: $choice) {
+            ForEach(SlotKindChoice.allCases) { kind in
+                Text(kind.rawValue).tag(kind)
+            }
+        }
+        .onChange(of: choice) { onKindChange() }
+
+        if choice == .combo {
+            Button(comboLabel) {
+                onBeginRecording()
+                isRecording = true
+            }
+            .disabled(recordingDisabled)
+            .shortcutRecorder(
+                isListening: $isRecording,
+                onCapture: onCapture,
+                onClear: onClear,
+                onCancel: onCancel,
+                onInvalid: onInvalid
+            )
+            if let conflictMessage {
+                Text(conflictMessage)
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        LabeledContent("Test shortcut", value: calibrationText)
     }
 }
 

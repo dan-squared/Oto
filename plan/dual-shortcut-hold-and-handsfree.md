@@ -1,6 +1,9 @@
 # Dual shortcut: hold-to-talk + hands-free live together, per-mode recorders
 
-Status: PLAN ONLY. Nothing implemented.
+Status: IMPLEMENTED 2026-09-24 (commit on abu-dhabi). Build green,
+full suite green repeatedly (286 baseline + 25 new = 311).
+Device matrix (§6 rounds 1–8) still requires a packaged/Xcode Run with
+live dictation — not runnable headless. Nothing merged to main.
 Decisions locked 2026-09-23 (user accepted all recommendations):
 D1 two separate live shortcuts, one per mode. D2 defaults: hold = Right
 Option, hands-free = Dictation/F5. D3 recorder = combo-only + presets per

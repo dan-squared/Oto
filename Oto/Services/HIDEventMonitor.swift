@@ -49,6 +49,47 @@ final class HIDEventMonitor {
     private var runLoopSource: CFRunLoopSource?
     private var pressedFunctionCode: Int64?
 
+    // MARK: - Dual-slot path (hold + hands-free live together)
+
+    /// Tagged events for the dual-slot dispatch. Set only by the slot-tagged
+    /// `configure` below; the legacy `onEvent` stays silent in slot mode so
+    /// the two paths never double-emit.
+    var onSlotEvent: ((ShortcutEvent, ShortcutSlot) -> Void)?
+
+    /// Whether the last `configure` was the slot-tagged one. Decides which
+    /// decision layer the C callback drives.
+    private var slotMode = false
+    private var holdSlots: [UInt16: ShortcutSlot] = [:]
+    private var functionSlots: [Int64: ShortcutSlot] = [:]
+    private var slotHolds: [UInt16: ModifierHoldState] = [:]
+    private var pressedFunction: (code: Int64, slot: ShortcutSlot)?
+
+    /// Slot-tagged configuration: two hold codes + a function-code→slot map
+    /// multiplexed over the ONE tap, with a single shared Escape observation.
+    /// Single-slot convenience for the legacy path is preserved separately
+    /// below (existing decide-matrix tests keep passing unmodified).
+    func configure(
+        holdSlots: [UInt16: ShortcutSlot],
+        functionSlots: [Int64: ShortcutSlot],
+        escapeObserved: Bool = true
+    ) {
+        self.holdSlots = holdSlots
+        self.functionSlots = functionSlots
+        self.escapeObserved = escapeObserved
+        slotMode = true
+        slotHolds = Dictionary(uniqueKeysWithValues: holdSlots.keys.map { ($0, ModifierHoldState()) })
+        pressedFunction = nil
+        // Clear legacy state so the paths never mix.
+        functionCodes = []
+        holdCode = nil
+        hold = ModifierHoldState()
+        pressedFunctionCode = nil
+        sync()
+        isLive = tap != nil
+    }
+
+    // MARK: - Legacy single-slot path (unchanged)
+
     func configure(functionCodes: Set<Int64>, holdKeyCode: UInt16?, escapeObserved: Bool = true) {
         self.functionCodes = functionCodes
         self.holdCode = holdKeyCode
@@ -58,6 +99,11 @@ final class HIDEventMonitor {
         self.escapeObserved = escapeObserved
         hold = ModifierHoldState()
         pressedFunctionCode = nil
+        slotMode = false
+        holdSlots = [:]
+        functionSlots = [:]
+        slotHolds = [:]
+        pressedFunction = nil
         sync()
         isLive = tap != nil
     }
@@ -68,13 +114,27 @@ final class HIDEventMonitor {
         holdCode = nil
         hold = ModifierHoldState()
         pressedFunctionCode = nil
+        slotMode = false
+        holdSlots = [:]
+        functionSlots = [:]
+        slotHolds = [:]
+        pressedFunction = nil
         isLive = false
     }
 
     func noteMonitorLost() {
         hold = ModifierHoldState()
         pressedFunctionCode = nil
-        onEvent?(.monitorLost)
+        slotHolds = Dictionary(uniqueKeysWithValues: slotHolds.keys.map { ($0, ModifierHoldState()) })
+        pressedFunction = nil
+        if slotMode {
+            // Both transition machines reset their local pressed state; the
+            // coordinator owns the session outcome either way.
+            onSlotEvent?(.monitorLost, .hold)
+            onSlotEvent?(.monitorLost, .handsFree)
+        } else {
+            onEvent?(.monitorLost)
+        }
     }
 
     // MARK: - Private
@@ -168,6 +228,15 @@ final class HIDEventMonitor {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         let flags = event.flags
+        if MainActor.assumeIsolated({ self.slotMode }) {
+            let routed: (slot: ShortcutSlot?, emit: ShortcutEvent?, consume: Bool) = MainActor.assumeIsolated {
+                self.decideRouted(type: type, keyCode: keyCode, isRepeat: isRepeat, flags: flags)
+            }
+            if let emit = routed.emit, let slot = routed.slot {
+                DispatchQueue.main.async { [weak self] in self?.onSlotEvent?(emit, slot) }
+            }
+            return routed.consume ? nil : Unmanaged.passUnretained(event)
+        }
         let decided: (emit: ShortcutEvent?, consume: Bool) = MainActor.assumeIsolated {
             self.decide(type: type, keyCode: keyCode, isRepeat: isRepeat, flags: flags)
         }
@@ -260,6 +329,98 @@ final class HIDEventMonitor {
             }
             pressedFunctionCode = nil
             return (.keyUp, true)
+        }
+    }
+
+    /// Slot-tagged decision layer for dual-slot mode. Same rules as the
+    /// legacy `decide` above, routed per key: each hold code steps its own
+    /// `ModifierHoldState`, each function code maps to its slot, and
+    /// combination-use marks every held slot. Exposed internal for the
+    /// dual decide-matrix tests; the C callback and tap lifecycle stay
+    /// private, exactly like the legacy layer.
+    func decideRouted(
+        type: CGEventType,
+        keyCode: Int64,
+        isRepeat: Bool,
+        flags: CGEventFlags
+    ) -> (slot: ShortcutSlot?, emit: ShortcutEvent?, consume: Bool) {
+        switch type {
+        case .flagsChanged:
+            return decideRoutedHold(keyCode: keyCode, flags: flags)
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            markAllHoldsCombinationUse()
+            return (nil, nil, false)
+        case .keyDown:
+            markAllHoldsCombinationUse()
+            if escapeObserved, keyCode == Int64(kVK_Escape) {
+                let onEscape = onEscape
+                DispatchQueue.main.async { onEscape?() }
+                return (nil, nil, false)
+            }
+            return decideRoutedFunction(keyCode: keyCode, isRepeat: isRepeat, flags: flags, isDown: true)
+        case .keyUp:
+            markAllHoldsCombinationUse()
+            return decideRoutedFunction(keyCode: keyCode, isRepeat: false, flags: flags, isDown: false)
+        default:
+            return (nil, nil, false)
+        }
+    }
+
+    private func decideRoutedHold(keyCode: Int64, flags: CGEventFlags) -> (slot: ShortcutSlot?, emit: ShortcutEvent?, consume: Bool) {
+        let code = UInt16(clamping: keyCode)
+        guard let slot = holdSlots[code], keyCode == Int64(code) else {
+            return (nil, nil, false)
+        }
+        guard let flag = ModifierHoldState.flag(for: code) else {
+            return (nil, nil, false)
+        }
+        let down = flags.contains(flag)
+        var state = slotHolds[code] ?? ModifierHoldState()
+        let emit = state.step(.flags(down: down))
+        slotHolds[code] = state
+        // NEVER consume flagsChanged: the system must still see the modifier.
+        return (slot, emit, false)
+    }
+
+    private func markAllHoldsCombinationUse() {
+        for code in slotHolds.keys {
+            _ = slotHolds[code]?.step(.otherActivity)
+        }
+    }
+
+    private func decideRoutedFunction(
+        keyCode: Int64,
+        isRepeat: Bool,
+        flags: CGEventFlags,
+        isDown: Bool
+    ) -> (slot: ShortcutSlot?, emit: ShortcutEvent?, consume: Bool) {
+        if isDown {
+            if isRepeat {
+                return pressedFunction.flatMap { $0.code == keyCode ? ($0.slot, .keyDown(isRepeat: true), true) : nil }
+                    ?? (nil, nil, false)
+            }
+            guard let slot = functionSlots[keyCode],
+                  FunctionKeyMatching.shouldFire(
+                      codes: Set(functionSlots.keys),
+                      keyCode: keyCode,
+                      flags: flags,
+                      isRepeat: false
+                  )
+            else {
+                return (nil, nil, false)
+            }
+            guard pressedFunction == nil else { return (slot, nil, true) }
+            pressedFunction = (keyCode, slot)
+            return (slot, .keyDown(isRepeat: false), true)
+        } else {
+            guard let pressed = pressedFunction,
+                  pressed.code == keyCode,
+                  functionSlots[keyCode] != nil
+            else {
+                return (nil, nil, false)
+            }
+            pressedFunction = nil
+            return (pressed.slot, .keyUp, true)
         }
     }
 }

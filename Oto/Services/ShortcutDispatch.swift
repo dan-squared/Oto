@@ -21,43 +21,68 @@ enum ShortcutCalibration: Equatable, Sendable {
     case requiresAccessibility
 }
 
-/// MainActor owner of the shortcut layer. Holds the monitors, the config,
-/// and the transition machine; translates transitions into the ONE async
-/// hop to the coordinator. Backends emit values; this decides nothing
-/// about sessions beyond routing intents.
+/// Outcome of a per-slot trigger save. `.blocked` keeps the old trigger
+/// (the UI shows "Same as your <other> shortcut — pick a different one").
+enum TriggerUpdateResult: Equatable, Sendable {
+    case applied
+    case unchanged
+    case blocked
+}
+
+/// MainActor owner of the shortcut layer. Holds the monitors, the dual
+/// config, and one transition machine per slot; translates transitions into
+/// the ONE async hop to the coordinator. Backends emit values; this decides
+/// nothing about sessions beyond routing intents.
+///
+/// Two slots live at once with fixed modes (hold = hold-to-talk,
+/// hands-free = hands-free toggle). The coordinator's single-session guard
+/// arbitrates simultaneous presses: the first begin wins, the second is a
+/// proven no-op.
 @MainActor
 final class ShortcutDispatch {
     private let coordinator: DictationCoordinator
     private let log = Logger(subsystem: "app.Oto", category: "shortcut")
 
-    private let modifierMonitor = ModifierHotkeyMonitor()
+    private let holdComboMonitor = ModifierHotkeyMonitor()
+    private let handsFreeComboMonitor = ModifierHotkeyMonitor()
     private let hidMonitor = HIDEventMonitor()
 
-    private var transition = HotkeyTransitionState()
+    private var holdTransition = HotkeyTransitionState()
+    private var handsFreeTransition = HotkeyTransitionState()
     /// Latest session ID returned by the coordinator. Never cleared
     /// eagerly: cancel/finish are idempotent, so a stale ID is a harmless
     /// no-op — but clearing it would strand an Escape-during-starting
     /// cancel. Overwritten by each new begin.
     private var activeSessionID: UUID?
-    private(set) var configuration: ShortcutConfiguration {
+    private(set) var configuration: DualShortcutConfiguration {
         didSet { configuration.save() }
     }
 
-    /// Last real global down/up observed (for calibration). Nil until a
-    /// full press-release cycle arrives through a live backend.
-    private var observedDown = false
-    private var observedUpAfterDown = false
-    private(set) var calibration: ShortcutCalibration = .untested
+    /// Last real global down/up observed per slot (for calibration). Nil
+    /// until a full press-release cycle arrives through a live backend.
+    private var observedDownHold = false
+    private var observedUpAfterDownHold = false
+    private var observedDownHandsFree = false
+    private var observedUpAfterDownHandsFree = false
+    private(set) var calibrationHold: ShortcutCalibration = .untested
+    private(set) var calibrationHandsFree: ShortcutCalibration = .untested
+
+    /// Derived single-value calibration (worst-of) for callers that need one
+    /// value. Menu-compat: preserved as a derived value, never stored.
+    var calibration: ShortcutCalibration {
+        Self.worst(of: calibrationHold, and: calibrationHandsFree)
+    }
 
     /// While true, global registration is suspended (recorder listening).
     private(set) var isSuspended = false
 
-    init(coordinator: DictationCoordinator, configuration: ShortcutConfiguration = .load()) {
+    init(coordinator: DictationCoordinator, configuration: DualShortcutConfiguration = .load()) {
         self.coordinator = coordinator
         self.configuration = configuration
 
-        modifierMonitor.onEvent = { [weak self] in self?.receive($0) }
-        hidMonitor.onEvent = { [weak self] in self?.receive($0) }
+        holdComboMonitor.onEvent = { [weak self] in self?.receive($0, from: .hold) }
+        handsFreeComboMonitor.onEvent = { [weak self] in self?.receive($0, from: .handsFree) }
+        hidMonitor.onSlotEvent = { [weak self] in self?.receive($0, from: $1) }
         hidMonitor.onEscape = { [weak self] in self?.receiveEscape() }
     }
 
@@ -72,45 +97,59 @@ final class ShortcutDispatch {
             updateCalibrationForAvailability()
             return
         }
-        switch configuration.trigger.kind {
-        case .modifierHold(let keyCode):
-            // HID tap path (NSEvent monitors are banned: proven to wedge
-            // MenuBarExtra tracking). Requires Accessibility trust.
-            hidMonitor.configure(functionCodes: [], holdKeyCode: keyCode)
-            if !hidMonitor.isLive {
-                calibration = .requiresAccessibility
-                log.error("HID tap unavailable (accessibility?)")
-                return
-            }
-        case .combo(let modifiers, let keyCode):
-            modifierMonitor.configure(comboModifiers: modifiers, keyCode: keyCode)
-            if !modifierMonitor.isLive {
-                calibration = .conflicts
-                log.error("combo registration failed (conflict)")
-                return
-            }
-            // Escape still rides the HID tap (best-effort: tap liveness
-            // must NOT gate combo calibration — combos work without AX).
-            hidMonitor.configure(functionCodes: [], holdKeyCode: nil)
-        case .functionKey(let codes):
-            hidMonitor.configure(functionCodes: codes, holdKeyCode: nil)
-            if !hidMonitor.isLive {
-                calibration = .requiresAccessibility
-                log.error("HID tap unavailable (accessibility?)")
-                return
-            }
+        var holdSlots: [UInt16: ShortcutSlot] = [:]
+        var functionSlots: [Int64: ShortcutSlot] = [:]
+        configureSlot(trigger: configuration.hold, slot: .hold, holdSlots: &holdSlots, functionSlots: &functionSlots)
+        configureSlot(
+            trigger: configuration.handsFree, slot: .handsFree,
+            holdSlots: &holdSlots, functionSlots: &functionSlots
+        )
+        // One shared HID tap for both slots + one shared Escape observation.
+        hidMonitor.configure(holdSlots: holdSlots, functionSlots: functionSlots, escapeObserved: true)
+        // HID-kind slots need a live tap; combo slots already reported above.
+        for slot in ShortcutSlot.allCases where slotUsesHIDTap(slot) && !hidMonitor.isLive {
+            setCalibration(.requiresAccessibility, for: slot)
+            log.error("HID tap unavailable (accessibility?)")
         }
         // Escape observation rides the HID tap (zero NSEvent monitors in
         // the trigger path); combo triggers need no Escape backend change.
-        transition = HotkeyTransitionState()
+        holdTransition = HotkeyTransitionState()
+        handsFreeTransition = HotkeyTransitionState()
         updateCalibrationForAvailability()
         log.info("shortcut dispatch started")
     }
 
+    /// Register one slot's Carbon combo (if any) and collect its HID codes.
+    /// A failed Carbon registration surfaces per slot (the other slot keeps
+    /// working — no shared failure mode).
+    private func configureSlot(
+        trigger: ShortcutTrigger,
+        slot: ShortcutSlot,
+        holdSlots: inout [UInt16: ShortcutSlot],
+        functionSlots: inout [Int64: ShortcutSlot]
+    ) {
+        switch trigger.kind {
+        case .modifierHold(let keyCode):
+            // HID tap path (NSEvent monitors are banned: proven to wedge
+            // MenuBarExtra tracking). Requires Accessibility trust.
+            holdSlots[keyCode] = slot
+        case .combo(let modifiers, let keyCode):
+            comboMonitor(for: slot).configure(comboModifiers: modifiers, keyCode: keyCode)
+            if !comboMonitor(for: slot).isLive {
+                setCalibration(.conflicts, for: slot)
+                log.error("combo registration failed (conflict)")
+            }
+        case .functionKey(let codes):
+            for code in codes { functionSlots[code] = slot }
+        }
+    }
+
     func stop() {
-        modifierMonitor.stop()
+        holdComboMonitor.stop()
+        handsFreeComboMonitor.stop()
         hidMonitor.stop()
-        transition = HotkeyTransitionState()
+        holdTransition = HotkeyTransitionState()
+        handsFreeTransition = HotkeyTransitionState()
     }
 
     /// Suspend global registration while the recorder listens, resume after.
@@ -120,7 +159,8 @@ final class ShortcutDispatch {
     func setSuspended(_ suspended: Bool) {
         guard isSuspended != suspended else { return }
         isSuspended = suspended
-        transition = HotkeyTransitionState()
+        holdTransition = HotkeyTransitionState()
+        handsFreeTransition = HotkeyTransitionState()
         if suspended {
             cancelActiveSession()
             stop()
@@ -133,32 +173,56 @@ final class ShortcutDispatch {
     /// open (the one hook guaranteed to run while the user is present —
     /// audit F2 wired the previously zero-caller path here). Revocation
     /// surfaces as unavailable; recovery re-registers. Never rebuilds
-    /// while the trigger is physically down — tearing down mid-hold would
+    /// while either trigger is physically down — tearing down mid-hold would
     /// strand the release.
     func refreshAvailability() {
-        if requiresAccessibility && !isAccessibilityTrusted() {
-            calibration = .requiresAccessibility
-            return
+        if !isAccessibilityTrusted() {
+            let holdGated = slotRequiresAccessibility(.hold)
+            let freeGated = slotRequiresAccessibility(.handsFree)
+            if holdGated { setCalibration(.requiresAccessibility, for: .hold) }
+            if freeGated { setCalibration(.requiresAccessibility, for: .handsFree) }
+            // A lone combo slot can still heal without trust; when both
+            // slots are AX-gated there is nothing to heal.
+            if holdGated && freeGated { return }
         }
-        guard !transition.isDown else { return }
+        guard !holdTransition.isDown, !handsFreeTransition.isDown else { return }
         // Re-register to heal a timed-out tap or revoked backend.
         start()
     }
 
     // MARK: - Configuration changes
 
-    func updateTrigger(_ trigger: ShortcutTrigger) {
-        cancelActiveSession()
-        configuration.trigger = trigger
-        resetCalibration()
-        start()
+    func updateHoldTrigger(_ trigger: ShortcutTrigger) -> TriggerUpdateResult {
+        updateSlot(trigger, slot: .hold)
     }
 
-    func updateInteraction(_ interaction: InteractionMode) {
+    func updateHandsFreeTrigger(_ trigger: ShortcutTrigger) -> TriggerUpdateResult {
+        updateSlot(trigger, slot: .handsFree)
+    }
+
+    /// Per-slot save gate: same-slot equality is a no-op, a trigger that
+    /// conflicts with the OTHER slot is refused without saving (preset picks
+    /// route through here too — no bypass), otherwise cancel the active
+    /// session, save, reset that slot's calibration, and re-register.
+    /// Any successful save re-enables globally (F1: today's Delete is a
+    /// one-way door — `updateTrigger` never re-enabled — so a fresh explicit
+    /// assignment is intent to have shortcuts on).
+    private func updateSlot(_ trigger: ShortcutTrigger, slot: ShortcutSlot) -> TriggerUpdateResult {
+        let fixed = trigger.withInteraction(slot == .hold ? .holdToTalk : .handsFree)
+        let current = slot == .hold ? configuration.hold : configuration.handsFree
+        let other = slot == .hold ? configuration.handsFree : configuration.hold
+        guard fixed != current else { return .unchanged }
+        guard !fixed.kind.conflictsWith(other.kind) else { return .blocked }
         cancelActiveSession()
-        configuration.trigger.interaction = interaction
-        resetCalibration()
-        transition = HotkeyTransitionState()
+        if slot == .hold {
+            configuration.hold = fixed
+        } else {
+            configuration.handsFree = fixed
+        }
+        configuration.enabled = true
+        resetCalibration(for: slot)
+        start()
+        return .applied
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -172,29 +236,73 @@ final class ShortcutDispatch {
 
     // MARK: - Calibration
 
-    /// Mark a full observed press-release cycle. Called only from `receive`
-    /// on real backend events.
-    private func noteObserved(down: Bool) {
-        if down {
-            observedDown = true
-        } else if observedDown {
-            observedUpAfterDown = true
-            calibration = .ready
+    /// Mark a full observed press-release cycle for a slot. Called only from
+    /// `receive` on real backend events.
+    private func noteObserved(down: Bool, slot: ShortcutSlot) {
+        if slot == .hold {
+            if down {
+                observedDownHold = true
+            } else if observedDownHold {
+                observedUpAfterDownHold = true
+                calibrationHold = .ready
+            }
+        } else {
+            if down {
+                observedDownHandsFree = true
+            } else if observedDownHandsFree {
+                observedUpAfterDownHandsFree = true
+                calibrationHandsFree = .ready
+            }
         }
     }
 
     func resetCalibration() {
-        observedDown = false
-        observedUpAfterDown = false
-        calibration = .untested
+        resetCalibration(for: .hold)
+        resetCalibration(for: .handsFree)
+    }
+
+    func resetCalibration(for slot: ShortcutSlot) {
+        if slot == .hold {
+            observedDownHold = false
+            observedUpAfterDownHold = false
+            calibrationHold = .untested
+        } else {
+            observedDownHandsFree = false
+            observedUpAfterDownHandsFree = false
+            calibrationHandsFree = .untested
+        }
         updateCalibrationForAvailability()
     }
 
-    private var requiresAccessibility: Bool {
+    private func calibration(for slot: ShortcutSlot) -> ShortcutCalibration {
+        slot == .hold ? calibrationHold : calibrationHandsFree
+    }
+
+    private func setCalibration(_ value: ShortcutCalibration, for slot: ShortcutSlot) {
+        if slot == .hold {
+            calibrationHold = value
+        } else {
+            calibrationHandsFree = value
+        }
+    }
+
+    private func comboMonitor(for slot: ShortcutSlot) -> ModifierHotkeyMonitor {
+        slot == .hold ? holdComboMonitor : handsFreeComboMonitor
+    }
+
+    private func trigger(for slot: ShortcutSlot) -> ShortcutTrigger {
+        slot == .hold ? configuration.hold : configuration.handsFree
+    }
+
+    private func slotRequiresAccessibility(_ slot: ShortcutSlot) -> Bool {
         // Carbon combos ride the window-server hotkey path (no AX needed);
         // anything on the HID tap needs trust.
-        if case .combo = configuration.trigger.kind { return false }
+        if case .combo = trigger(for: slot).kind { return false }
         return true
+    }
+
+    private func slotUsesHIDTap(_ slot: ShortcutSlot) -> Bool {
+        slotRequiresAccessibility(slot)
     }
 
     private func isAccessibilityTrusted() -> Bool {
@@ -203,19 +311,35 @@ final class ShortcutDispatch {
 
     private func updateCalibrationForAvailability() {
         guard configuration.enabled, !isSuspended else { return }
-        if requiresAccessibility, !isAccessibilityTrusted() {
-            calibration = .requiresAccessibility
-        } else if calibration == .untested, !backendsLive {
-            calibration = .notReceivedGlobally
+        for slot in ShortcutSlot.allCases {
+            if slotRequiresAccessibility(slot), !isAccessibilityTrusted() {
+                setCalibration(.requiresAccessibility, for: slot)
+            } else if calibration(for: slot) == .untested, !slotBackendsLive(slot) {
+                setCalibration(.notReceivedGlobally, for: slot)
+            }
         }
     }
 
-    private var backendsLive: Bool {
-        switch configuration.trigger.kind {
+    private func slotBackendsLive(_ slot: ShortcutSlot) -> Bool {
+        switch trigger(for: slot).kind {
         case .combo:
-            return modifierMonitor.isLive
+            return comboMonitor(for: slot).isLive
         case .modifierHold, .functionKey:
             return hidMonitor.isLive
+        }
+    }
+
+    private nonisolated static func worst(of a: ShortcutCalibration, and b: ShortcutCalibration) -> ShortcutCalibration {
+        rank(a) >= rank(b) ? a : b
+    }
+
+    private nonisolated static func rank(_ calibration: ShortcutCalibration) -> Int {
+        switch calibration {
+        case .requiresAccessibility: return 4
+        case .conflicts: return 3
+        case .notReceivedGlobally: return 2
+        case .untested: return 1
+        case .ready: return 0
         }
     }
 
@@ -235,19 +359,28 @@ final class ShortcutDispatch {
     /// One Task per user gesture at most (begin/finish only — repeats and
     /// ignores never hop). The 12 "no per-event task" limit constrains
     /// event streams, not gesture intents.
-    private func receive(_ event: ShortcutEvent) {
+    private func receive(_ event: ShortcutEvent, from slot: ShortcutSlot) {
         if case .keyDown = event {
-            noteObserved(down: true)
+            noteObserved(down: true, slot: slot)
         } else if case .keyUp = event {
-            noteObserved(down: false)
+            noteObserved(down: false, slot: slot)
         }
-        let mode = configuration.trigger.interaction
-        let action = transition.step(.event(event), mode: mode)
+        // Modes are slot properties: hold is always hold-to-talk,
+        // hands-free always toggles. The transition machines are already
+        // mode-parameterized, so each slot steps its own.
+        let mode: InteractionMode = slot == .hold ? .holdToTalk : .handsFree
+        let action: ShortcutTransition
+        if slot == .hold {
+            action = holdTransition.step(.event(event), mode: mode)
+        } else {
+            action = handsFreeTransition.step(.event(event), mode: mode)
+        }
         route(action, mode: mode)
     }
 
     private func receiveEscape() {
-        _ = transition.step(.escape, mode: configuration.trigger.interaction)
+        _ = holdTransition.step(.escape, mode: .holdToTalk)
+        _ = handsFreeTransition.step(.escape, mode: .handsFree)
         guard let id = activeSessionID else { return }
         Task { [weak self] in
             guard let self else { return }
@@ -255,23 +388,20 @@ final class ShortcutDispatch {
         }
     }
 
-    /// Escape-cancel availability (escape workstream): Escape rides the
-    /// HID tap, which needs Accessibility trust — but combo triggers work
-    /// without AX. So on a combo with a dead tap, dictation works while
-    /// Escape cancel silently doesn't; the menu surfaces that instead of
-    /// lying. HID-trigger configs are dead as a whole without the tap
-    /// (calibration already reports it), so no second warning there.
+    /// Escape-cancel availability (escape workstream): Escape rides the one
+    /// shared HID tap, which needs Accessibility trust. Menu-compat: kept as
+    /// a single derived value (shared-tap liveness) so the menu compiles
+    /// unchanged; per-slot escape state follows each slot's calibration row.
     var isEscapeCancelAvailable: Bool {
-        if case .combo = configuration.trigger.kind {
-            return hidMonitor.isLive
-        }
-        return true
+        hidMonitor.isLive
     }
 
     /// Test hooks: drive Escape→cancel without hardware. Seeding mirrors
     /// what route(.begin) stores on a real key-down.
     func seedActiveSessionForTests(_ id: UUID) { activeSessionID = id }
     func receiveEscapeForTests() { receiveEscape() }
+    /// Test hook: drive a backend event for a slot without hardware.
+    func receiveForTests(_ event: ShortcutEvent, from slot: ShortcutSlot) { receive(event, from: slot) }
 
     private func route(_ action: ShortcutTransition, mode: InteractionMode) {
         switch action {
