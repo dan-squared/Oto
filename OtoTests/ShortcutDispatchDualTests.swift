@@ -57,6 +57,28 @@ struct ShortcutDispatchDualTests {
         }
     }
 
+    /// Waits for a hands-free recording specifically. The generic waitFor
+    /// matches ANY recording — vacuous right after a tap that is about to
+    /// convert (it matches the micro's recording, then the guard races
+    /// the cancel). This polls in the test body (MainActor) so the
+    /// interaction check is legal.
+    private func waitForHandsFree(
+        _ coordinator: DictationCoordinator,
+        timeout: Duration = .seconds(5)
+    ) async -> DictationState {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            let state = await coordinator.state
+            if case .recording(let context) = state, context.interaction == .handsFree {
+                return state
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("timed out waiting for hands-free recording")
+        return await coordinator.state
+    }
+
     private func combo(_ keyCode: Int, modifiers: Int) -> ShortcutTrigger.Kind {
         .combo(modifiers: UInt32(modifiers), keyCode: UInt32(keyCode))
     }
@@ -250,5 +272,145 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.configuration.enabled == true)
         #expect(dispatch.configuration.hold == .dictationKeyHandsFree().withInteraction(.holdToTalk))
         #expect(dispatch.configuration.handsFree == .defaultHoldToTalk().withInteraction(.handsFree))
+    }
+
+    // MARK: - Double-tap to hands-free
+
+    private func makeGatedCoordinator(
+        finalText: String = "hello oto",
+        finishGateOpen: Bool = true
+    ) -> (coordinator: DictationCoordinator, inserter: FakeTextInsertion, speech: FakeSpeechService) {
+        let inserter = FakeTextInsertion(result: .inserted)
+        let speech = FakeSpeechService(finalText: finalText, finishGateOpen: finishGateOpen)
+        let coordinator = DictationCoordinator(
+            audio: FakeAudioCapture(),
+            speech: speech,
+            targetService: FakeTargetCapture(stubTarget: Self.stubTarget),
+            inserter: inserter,
+            history: nil,
+            micDeniedOverride: { false }
+        )
+        return (coordinator, inserter, speech)
+    }
+
+    private func tap(
+        _ dispatch: ShortcutDispatch,
+        from base: ContinuousClock.Instant,
+        downMs: Int,
+        upMs: Int
+    ) {
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: base + .milliseconds(downMs))
+        dispatch.receiveForTests(.keyUp, from: .hold, at: base + .milliseconds(upMs))
+    }
+
+    @Test func doubleTapCancelsMicroAndBeginsHandsFree() async {
+        // Finish gate closed: the first tap's micro-session is stuck
+        // finalizing at confirm time, so cancel wins deterministically.
+        let (coordinator, inserter, speech) = makeGatedCoordinator(finishGateOpen: false)
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(100))
+        // Micro-session stuck finalizing (finish gate closed): the confirm
+        // below cancels it deterministically via cancel-wins.
+        tap(dispatch, from: t0, downMs: 250, upMs: 330)
+        // Confirm path: micro cancelled, hands-free begins.
+        _ = await waitForHandsFree(coordinator)
+        #expect(await inserter.calls.count == 0)
+        guard case .recording(let context) = await coordinator.state else {
+            Issue.record("expected hands-free recording, got \(await coordinator.state)")
+            return
+        }
+        #expect(context.interaction == .handsFree)
+
+        // Tidy: open the gate and stop via the hands-free press.
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        await speech.openFinishGate()
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(await inserter.calls.count == 1)
+    }
+
+    @Test func doubleTapConvergesWhenMicroAlreadyTerminal() async {
+        // Gates open: the first tap finalizes instantly (short session takes
+        // the full path and inserts). Conversion still lands hands-free.
+        let (coordinator, inserter, _) = makeGatedCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(100))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(await inserter.calls.count == 1)
+
+        tap(dispatch, from: t0, downMs: 250, upMs: 330)
+        _ = await waitForHandsFree(coordinator)
+        // Micro two was cancelled before it could insert.
+        #expect(await inserter.calls.count == 1)
+        guard case .recording(let converted) = await coordinator.state,
+              converted.interaction == .handsFree
+        else {
+            Issue.record("expected hands-free recording, got \(await coordinator.state)")
+            return
+        }
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(await inserter.calls.count == 2)
+    }
+
+    @Test func slowPatternStaysTwoOrdinaryHolds() async {
+        let (coordinator, inserter, _) = makeGatedCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(100))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+
+        // Far outside the tap window: injected future instants script a
+        // genuinely slow pattern with zero wall-clock sleep (the tracker
+        // reasons purely over injected time; routing never reads it).
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0 + .milliseconds(2000))
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(2100))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+
+        guard case .completed(let context) = await coordinator.state else {
+            Issue.record("expected completed, got \(await coordinator.state)")
+            return
+        }
+        #expect(context.interaction == .holdToTalk)
+        #expect(await inserter.calls.count == 2)
+    }
+
+    @Test func tapsDuringHandsFreeKeepTranscriptAndConvert() async {
+        let (coordinator, inserter, _) = makeGatedCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+
+        // Two quick hold taps: the first tap's release finalizes the live
+        // hands-free session (transcript KEPT via finalize, never cancel),
+        // the pair then converts into a fresh hands-free session.
+        let t0 = ContinuousClock().now
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(100))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(await inserter.calls.count == 1)
+
+        tap(dispatch, from: t0, downMs: 250, upMs: 330)
+        _ = await waitForHandsFree(coordinator)
+        #expect(await inserter.calls.count == 1)
+        guard case .recording(let converted) = await coordinator.state,
+              converted.interaction == .handsFree
+        else {
+            Issue.record("expected fresh hands-free recording, got \(await coordinator.state)")
+            return
+        }
     }
 }

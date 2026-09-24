@@ -242,6 +242,55 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
     }
 }
 
+/// Double-tap-to-hands-free tracker for the hold slot. Pure: instants in,
+/// confirmation out — no timers, no clock reads, fully deterministic tests.
+/// Stale pendings die by arithmetic (a huge gap simply never confirms).
+///
+/// Rule: confirm on the second RELEASE only (tap tempo measured
+/// down-to-down). Single taps, slow presses, wide gaps, and tap-then-hold
+/// all behave exactly as before — only a confirmed quick-quick pattern
+/// converts, and conversion itself is cancel-best-effort + toggle (both
+/// idempotent), never a new coordinator call. Thresholds are starting
+/// values tuned by the device matrix (silence-gate precedent).
+struct DoubleTapTracker: Equatable, Sendable {
+    /// Press at-or-under this counts as a tap.
+    nonisolated static let maxPressDuration: Duration = .milliseconds(250)
+    /// Down-to-down gap at-or-under this confirms the pair.
+    nonisolated static let maxGap: Duration = .milliseconds(350)
+
+    private var downAt: ContinuousClock.Instant?
+    private var pendingDownAt: ContinuousClock.Instant?
+
+    nonisolated mutating func down(at now: ContinuousClock.Instant) {
+        downAt = now
+    }
+
+    /// Returns true when this release confirms a double-tap.
+    nonisolated mutating func up(at now: ContinuousClock.Instant) -> Bool {
+        guard let down = downAt else { return false }
+        downAt = nil
+        let press = down.duration(to: now)
+        guard press <= Self.maxPressDuration else {
+            // Slow press: an ordinary hold, never part of a pair.
+            pendingDownAt = nil
+            return false
+        }
+        if let previous = pendingDownAt,
+           previous.duration(to: down) <= Self.maxGap
+        {
+            pendingDownAt = nil
+            return true
+        }
+        pendingDownAt = down
+        return false
+    }
+
+    nonisolated mutating func reset() {
+        downAt = nil
+        pendingDownAt = nil
+    }
+}
+
 /// Staged shortcut edits for the Shortcuts modal. Pure value: the live
 /// config snapshot plus per-slot staged kinds (nil = untouched). The modal
 /// applies through the dispatch gate; this type previews outcomes so the

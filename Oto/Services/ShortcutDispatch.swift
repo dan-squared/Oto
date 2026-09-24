@@ -49,6 +49,18 @@ final class ShortcutDispatch {
 
     private var holdTransition = HotkeyTransitionState()
     private var handsFreeTransition = HotkeyTransitionState()
+    /// Double-tap-to-hands-free tracker for the hold slot (any kind).
+    /// Timing only — routing decisions stay in the transition machines
+    /// and the coordinator guards.
+    private var holdTap = DoubleTapTracker()
+    /// Begin-generation counter: every routed begin bumps it synchronously;
+    /// the routing Task settles it after storing the id (or nil-ing).
+    /// Conversion spins on it so cancel+toggle can never run ahead of a
+    /// routed begin and nil on a session whose id hasn't landed yet.
+    /// (Without this, down2's begin lands between convert's cancel of the
+    /// stale id and its toggle — the toggle then nils on the live micro.)
+    private var beginGeneration = 0
+    private var beginSettledThrough = 0
     /// Latest session ID returned by the coordinator. Never cleared
     /// eagerly: cancel/finish are idempotent, so a stale ID is a harmless
     /// no-op — but clearing it would strand an Escape-during-starting
@@ -150,6 +162,7 @@ final class ShortcutDispatch {
         hidMonitor.stop()
         holdTransition = HotkeyTransitionState()
         handsFreeTransition = HotkeyTransitionState()
+        holdTap.reset()
     }
 
     /// Suspend global registration while the recorder listens, resume after.
@@ -382,6 +395,11 @@ final class ShortcutDispatch {
     /// ignores never hop). The 12 "no per-event task" limit constrains
     /// event streams, not gesture intents.
     private func receive(_ event: ShortcutEvent, from slot: ShortcutSlot) {
+        receive(event, from: slot, at: ContinuousClock().now)
+    }
+
+    /// Time-injected core: production passes `.now`, tests script instants.
+    private func receive(_ event: ShortcutEvent, from slot: ShortcutSlot, at now: ContinuousClock.Instant) {
         if case .keyDown = event {
             noteObserved(down: true, slot: slot)
         } else if case .keyUp = event {
@@ -394,10 +412,44 @@ final class ShortcutDispatch {
         let action: ShortcutTransition
         if slot == .hold {
             action = holdTransition.step(.event(event), mode: mode)
+            if case .keyDown = event {
+                holdTap.down(at: now)
+            } else if case .keyUp = event {
+                if holdTap.up(at: now) {
+                    convertDoubleTapToHandsFree()
+                }
+            }
         } else {
             action = handsFreeTransition.step(.event(event), mode: mode)
         }
         route(action, mode: mode)
+    }
+
+    /// Double-tap confirmed on the hold slot: the tap's own micro-session
+    /// is cancelled best-effort (non-terminal → discarded pre-insertion;
+    /// terminal-empty → cancel no-ops; terminal-inserted is a
+    /// near-impossible race watched by the matrix), then the existing
+    /// hands-free toggle path begins. Sequenced in ONE Task — cancel
+    /// before toggle — so the toggle can never run ahead of the cancel
+    /// and nil on a still-live micro. The Task first spins past every
+    /// begin routed before the confirm (generation gate): down2's begin
+    /// id may not have landed yet, and cancelling the stale id while the
+    /// toggle meets the live micro nils the conversion. Zero new
+    /// coordinator calls.
+    private func convertDoubleTapToHandsFree() {
+        let generation = beginGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            while self.beginSettledThrough < generation {
+                await Task.yield()
+            }
+            if let current = self.activeSessionID {
+                await self.coordinator.cancel(current)
+            }
+            if let newID = await self.coordinator.toggleHandsFree() {
+                self.activeSessionID = newID
+            }
+        }
     }
 
     private func receiveEscape() {
@@ -424,12 +476,20 @@ final class ShortcutDispatch {
     func receiveEscapeForTests() { receiveEscape() }
     /// Test hook: drive a backend event for a slot without hardware.
     func receiveForTests(_ event: ShortcutEvent, from slot: ShortcutSlot) { receive(event, from: slot) }
+    /// Test hook: deterministic time-injected variant (double-tap tests).
+    func receiveForTests(_ event: ShortcutEvent, from slot: ShortcutSlot, at now: ContinuousClock.Instant) {
+        receive(event, from: slot, at: now)
+    }
 
     private func route(_ action: ShortcutTransition, mode: InteractionMode) {
         switch action {
         case .ignore, .reset:
             break
         case .begin:
+            // Generation-gated by convertDoubleTapToHandsFree: bumped
+            // synchronously here, settled by the Task after storing.
+            beginGeneration += 1
+            let generation = beginGeneration
             // Hands-free begins through the toggle path so the session is
             // recorded with the mode the person actually chose (audit F1).
             // `beginHold` would label it `.holdToTalk` and leave the tested
@@ -437,6 +497,7 @@ final class ShortcutDispatch {
             if mode == .handsFree {
                 Task { [weak self] in
                     guard let self else { return }
+                    defer { self.beginSettledThrough = max(self.beginSettledThrough, generation) }
                     if let id = await self.coordinator.toggleHandsFree() {
                         self.activeSessionID = id
                     }
@@ -444,6 +505,7 @@ final class ShortcutDispatch {
             } else {
                 Task { [weak self] in
                     guard let self else { return }
+                    defer { self.beginSettledThrough = max(self.beginSettledThrough, generation) }
                     if let id = await self.coordinator.beginHold() {
                         self.activeSessionID = id
                     }

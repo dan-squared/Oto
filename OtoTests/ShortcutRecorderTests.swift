@@ -30,13 +30,13 @@ struct ShortcutRecorderTests {
 
     @Test func plainLetterIsInvalid() {
         #expect(
-            ShortcutRecorderRules.classify(keyCode: UInt16(kVK_ANSI_D), modifiers: [], systemShortcuts: []) == .invalid
+            ShortcutRecorderRules.classify(keyCode: UInt16(kVK_ANSI_D), modifiers: [], systemShortcuts: []) == .invalid(reason: .plainKey)
         )
     }
 
     @Test func bareShiftIsInvalid() {
         #expect(
-            ShortcutRecorderRules.classify(keyCode: UInt16(kVK_Shift), modifiers: [.shift], systemShortcuts: []) == .invalid
+            ShortcutRecorderRules.classify(keyCode: UInt16(kVK_Shift), modifiers: [.shift], systemShortcuts: []) == .invalid(reason: .modifiersOnly)
         )
     }
 
@@ -46,8 +46,10 @@ struct ShortcutRecorderTests {
                 keyCode: UInt16(kVK_ANSI_D),
                 modifiers: [.shift],
                 systemShortcuts: []
-            ) == .invalid
+            ) == .invalid(reason: .modifiersOnly)
         )
+        #expect(RecorderInvalidReason.plainKey.message.contains("modifier"))
+        #expect(RecorderInvalidReason.modifiersOnly.message.contains("Shift"))
     }
 
     @Test func validComboCapturesWithoutConflicts() {

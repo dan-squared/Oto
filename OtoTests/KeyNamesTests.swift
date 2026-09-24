@@ -54,4 +54,14 @@ struct KeyNamesTests {
     @Test func factoryDefaultsRenderHuman() {
         #expect(KeyNames.shortLabel(for: DualShortcutConfiguration.default().hold.kind) == "⌥")
     }
+
+    @Test func holdOptionsCoverEveryModifierSided() {
+        #expect(KeyNames.holdOptions.count == 9)
+        #expect(KeyNames.holdMenuLabel(for: .modifierHold(keyCode: UInt16(kVK_RightOption))) == "Right Option")
+        #expect(KeyNames.holdMenuLabel(for: .modifierHold(keyCode: UInt16(kVK_Control))) == "Left Control")
+        #expect(KeyNames.holdMenuLabel(for: .modifierHold(keyCode: UInt16(kVK_Function))) == "fn")
+        #expect(KeyNames.holdMenuLabel(for: .combo(
+            modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_D)
+        )) == "Hold key")
+    }
 }

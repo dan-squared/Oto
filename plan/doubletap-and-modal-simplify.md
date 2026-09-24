@@ -59,7 +59,9 @@ Four asks from live testing, one plan:
   (zero latency change) and confirms the double-tap on the *second
   release*: single taps, slow taps, and tap-then-hold behave exactly as
   today; only a confirmed quick-quick pattern converts — and conversion
-  is cancel-best-effort + toggle, both idempotent.
+  is cancel-best-effort + toggle, both idempotent, sequenced cancel-then-
+  toggle in ONE Task (the toggle can never run ahead of the cancel and
+  nil on a still-live micro).
 - **"Conversion loses transcripts" — disproven by ordering.** At confirm
   time the first tap's micro-session is either non-terminal (cancel wins,
   discarded pre-insertion) or terminal-empty (silent-skip completed with
@@ -89,8 +91,13 @@ stay taps.
 **Dispatch wiring (hold slot, any kind — modifier, combo, either side).**
 `receive(_:from:at:)` core takes an `Instant` (production passes
 `.now`, tests inject): on hold-slot up with confirm-true → route the up
-normally (micro finalizes-or-skips on its own), then best-effort
-`cancel(activeSessionID)` + `toggleHandsFree` hop storing the new id.
+normally (it no-ops against the stale terminal id — the finish was
+already consumed by the first tap), then convert. Conversion spins past
+every begin routed before the confirm (begin-generation gate: down2's
+begin id may not have landed yet — without the gate the toggle nils on
+the live micro while cancel hits the stale id), then cancels the live
+micro and toggles. The up's machine state stays consistent because
+routing is never skipped.
 Convergence in every order (proven against §3 guards):
 - Micro non-terminal → cancel wins → discarded → hands-free begins.
 - Micro terminal-empty → cancel no-ops → hands-free begins.
@@ -164,7 +171,8 @@ down3 begin-nils, up3 finish-finalizes). Nothing new to learn.
 
 - `DoubleTapTracker` pure tests (new file): quick-quick confirms; slow
   press clears; wide gap rejects; single tap silent; stale pending dies;
-  triple-tap reconfirms fresh; thresholds pinned.
+  pairs are non-overlapping (taps 1+2 confirm, tap 3 alone silent, taps
+  3+4 confirm anew); thresholds pinned.
 - Dispatch double-tap tests (fake coordinator, injected instants):
   gated-finish variant proves the micro is cancelled (0 inserts) and
   hands-free records; gates-open variant proves convergence (micro

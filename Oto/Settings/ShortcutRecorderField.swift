@@ -47,7 +47,7 @@ extension ShortcutDispatch {
         switch calibration {
         case .untested: return "Untested"
         case .ready: return "Ready"
-        case .notReceivedGlobally: return "Not received globally"
+        case .notReceivedGlobally: return "Not detected yet"
         case .conflicts: return "Conflicts with another shortcut"
         case .requiresAccessibility: return "Requires Accessibility"
         }
@@ -105,6 +105,27 @@ enum KeyNames: Sendable {
         codes == Set([Int64(kVK_F5), 176])
     }
 
+    /// All holdable modifier keys, sided, for the hold-key menu.
+    nonisolated static var holdOptions: [(label: String, code: UInt16)] {
+        [
+            ("fn", UInt16(kVK_Function)),
+            ("Left Control", UInt16(kVK_Control)),
+            ("Right Control", UInt16(kVK_RightControl)),
+            ("Left Option", UInt16(kVK_Option)),
+            ("Right Option", UInt16(kVK_RightOption)),
+            ("Left Command", UInt16(kVK_Command)),
+            ("Right Command", UInt16(kVK_RightCommand)),
+            ("Left Shift", UInt16(kVK_Shift)),
+            ("Right Shift", UInt16(kVK_RightShift)),
+        ]
+    }
+
+    /// Current hold-key menu label for a kind (glyph + side when known).
+    nonisolated static func holdMenuLabel(for kind: ShortcutTrigger.Kind) -> String {
+        guard case .modifierHold(let code) = kind else { return "Hold key" }
+        return holdOptions.first(where: { $0.code == code })?.label ?? holdGlyph(for: code)
+    }
+
     private nonisolated static func holdGlyph(for keyCode: UInt16) -> String {
         switch Int(keyCode) {
         case kVK_Command, kVK_RightCommand: return "⌘"
@@ -149,7 +170,7 @@ enum KeyNames: Sendable {
 enum SlotKindChoice: String, CaseIterable, Identifiable {
     case holdKey = "Hold key"
     case dictationKey = "Dictation key"
-    case combo = "Custom combo"
+    case combo = "Custom"
 
     var id: String { rawValue }
 }
@@ -163,7 +184,7 @@ struct ShortcutRecorderModifier: ViewModifier {
     var onCapture: (UInt32, UInt32, [RecorderConflict]) -> Void
     var onClear: () -> Void
     var onCancel: () -> Void
-    var onInvalid: () -> Void
+    var onInvalid: (RecorderInvalidReason) -> Void
 
     @State private var box = MonitorBox()
 
@@ -202,8 +223,8 @@ struct ShortcutRecorderModifier: ViewModifier {
                 onCancel()
             case .cleared:
                 onClear()
-            case .invalid:
-                onInvalid()
+            case .invalid(let reason):
+                onInvalid(reason)
             case .captured(let modifiers, let keyCode, let conflicts):
                 onCapture(modifiers, keyCode, conflicts)
             }
@@ -229,7 +250,7 @@ extension View {
         onCapture: @escaping (UInt32, UInt32, [RecorderConflict]) -> Void,
         onClear: @escaping () -> Void,
         onCancel: @escaping () -> Void,
-        onInvalid: @escaping () -> Void
+        onInvalid: @escaping (RecorderInvalidReason) -> Void
     ) -> some View {
         modifier(ShortcutRecorderModifier(
             isListening: isListening,

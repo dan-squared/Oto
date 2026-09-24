@@ -17,19 +17,49 @@ enum RecorderOutcome: Equatable, Sendable {
     /// Delete/backspace with empty modifiers: clear to unassigned.
     case cleared
     /// Invalid (modifier-only, plain letter, bare shift): keep old + beep.
-    case invalid
+    /// The reason names the case so the UI can explain instead of beeping.
+    case invalid(reason: RecorderInvalidReason)
     /// Valid combo captured; conflicts listed for the UI to present.
     case captured(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict])
 
     // Explicit: compared in tests from nonisolated contexts (Swift 6).
     nonisolated static func == (lhs: RecorderOutcome, rhs: RecorderOutcome) -> Bool {
         switch (lhs, rhs) {
-        case (.cancelled, .cancelled), (.cleared, .cleared), (.invalid, .invalid):
+        case (.cancelled, .cancelled), (.cleared, .cleared):
             return true
+        case (.invalid(let a), .invalid(let b)):
+            return a == b
         case (.captured(let lm, let lk, let lc), .captured(let rm, let rk, let rc)):
             return lm == rm && lk == rk && lc == rc
         default:
             return false
+        }
+    }
+}
+
+/// Why a capture was refused. One concise UI line per case (§capsule).
+enum RecorderInvalidReason: Equatable, Sendable {
+    /// Bare key with no usable modifier: would fire while typing.
+    case plainKey
+    /// Shift (only) held: unusable as a combination on its own.
+    case modifiersOnly
+
+    // Explicit: compared in tests from nonisolated contexts (Swift 6).
+    nonisolated static func == (lhs: RecorderInvalidReason, rhs: RecorderInvalidReason) -> Bool {
+        switch (lhs, rhs) {
+        case (.plainKey, .plainKey), (.modifiersOnly, .modifiersOnly):
+            return true
+        default:
+            return false
+        }
+    }
+
+    nonisolated var message: String {
+        switch self {
+        case .plainKey:
+            return "Letters need a modifier, or they'd fire while you type."
+        case .modifiersOnly:
+            return "Shift alone never works — add another key, or pick a bare key in presets."
         }
     }
 }
@@ -87,7 +117,7 @@ enum ShortcutRecorderRules: Sendable {
         let isFunction = Self.functionKeyCodes.contains(keyCode)
         let hasRealModifier = !relevant.subtracting([.shift, .function]).isEmpty
         guard hasRealModifier || isFunction else {
-            return .invalid
+            return .invalid(reason: relevant.isEmpty ? .plainKey : .modifiersOnly)
         }
 
         let carbon = relevant.carbonMask

@@ -91,66 +91,57 @@ struct ShortcutModal: View {
     @State private var handsFreeMessage: String?
     @State private var showSwapHold = false
     @State private var showSwapHandsFree = false
-    @State private var holdCalibration = "Untested"
-    @State private var handsFreeCalibration = "Untested"
 
     private static let recorderHint =
         "Combinations like ⌘⇧D record here — bare keys live in presets below. Delete clears, Escape cancels."
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Shortcuts")
-                            .font(.title2)
-                            .bold()
-                        Text("Choose your preferred shortcuts for Oto.")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Discard changes")
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Shortcuts")
+                        .font(.title2)
+                        .bold()
+                    Text("Two ways to talk. Click a shortcut to change it.")
+                        .foregroundStyle(.secondary)
                 }
-
-                slotCard(
-                    slot: .hold,
-                    title: "Push to talk",
-                    subtitle: "Hold to say something short"
-                )
-                slotCard(
-                    slot: .handsFree,
-                    title: "Hands-free mode",
-                    subtitle: "Press once to start, press again to stop"
-                )
-
-                HStack {
-                    Button("Reset to default") {
-                        resetToDefaults()
-                    }
-                    Spacer()
-                    Button("Done") {
-                        applyDone()
-                    }
-                    .buttonStyle(.borderedProminent)
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .help("Discard changes")
             }
-            .padding(24)
+
+            slotCard(
+                slot: .hold,
+                title: "Push to talk",
+                subtitle: "Hold to say something short"
+            )
+            slotCard(
+                slot: .handsFree,
+                title: "Hands-free mode",
+                subtitle: "Press once to start, press again to stop"
+            )
+
+            HStack {
+                Button("Reset to default") {
+                    resetToDefaults()
+                }
+                Spacer()
+                Button("Done") {
+                    applyDone()
+                }
+                .buttonStyle(.borderedProminent)
+            }
         }
+        .padding(20)
         .frame(minWidth: 560)
         .task {
             staging = ShortcutStaging(live: dispatch.configuration)
-            while !Task.isCancelled {
-                holdCalibration = dispatch.calibrationText(for: .hold)
-                handsFreeCalibration = dispatch.calibrationText(for: .handsFree)
-                try? await Task.sleep(for: .milliseconds(500))
-            }
         }
         .onDisappear {
             // Safety: an armed recording suspends global shortcuts — never
@@ -164,7 +155,7 @@ struct ShortcutModal: View {
     private func slotCard(slot: ShortcutSlot, title: String, subtitle: String) -> some View {
         let recording = slot == .hold ? isRecordingHold : isRecordingHandsFree
         let otherRecording = slot == .hold ? isRecordingHandsFree : isRecordingHold
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
             Text(subtitle)
@@ -187,20 +178,36 @@ struct ShortcutModal: View {
                     },
                     onClear: { stageClear(slot: slot) },
                     onCancel: { cancelRecording(slot: slot) },
-                    onInvalid: {
+                    onInvalid: { reason in
                         NSSound.beep()
-                        setMessage("That can't be a shortcut — " + Self.recorderHint, slot: slot)
+                        setMessage(reason.message, slot: slot)
                     }
                 )
             )
 
-            Picker("Type", selection: presetBinding(for: slot)) {
-                ForEach(SlotKindChoice.allCases) { kind in
-                    Text(kind.rawValue).tag(kind)
+            HStack {
+                Picker("Type", selection: presetBinding(for: slot)) {
+                    ForEach(SlotKindChoice.allCases) { kind in
+                        Text(kind.rawValue).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(otherRecording)
+
+                if slotChoice(for: staging.effectiveKind(for: slot)) == .holdKey {
+                    Menu {
+                        ForEach(KeyNames.holdOptions, id: \.code) { option in
+                            Button(option.label) {
+                                stage(kind: .modifierHold(keyCode: option.code), slot: slot)
+                            }
+                        }
+                    } label: {
+                        Text(KeyNames.holdMenuLabel(for: staging.effectiveKind(for: slot)))
+                    }
+                    .disabled(otherRecording)
+                    .help("Choose which key to hold")
                 }
             }
-            .pickerStyle(.segmented)
-            .disabled(otherRecording)
 
             if recording, message(for: slot) == nil {
                 Text(Self.recorderHint)
@@ -208,24 +215,35 @@ struct ShortcutModal: View {
                     .foregroundStyle(.secondary)
             }
             if let message = message(for: slot) {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if showSwap(for: slot) {
-                Button("Swap shortcuts") {
-                    swapSlots()
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text(message)
+                        .font(.caption)
+                    if showSwap(for: slot) {
+                        Spacer()
+                        Button("Swap") {
+                            swapSlots()
+                        }
+                        .buttonStyle(.link)
+                    }
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
-
-            LabeledContent("Status", value: slot == .hold ? holdCalibration : handsFreeCalibration)
-                .font(.caption)
         }
-        .padding(16)
+        .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
+    }
+
+    /// Concise reason for the current refusal shape. The beep says *that*;
+    /// this says *why* — one line per case.
+    private func invalidReason() -> String {
+        "That key can't be a combination — try ⌘⇧D style keys, or pick a bare key above."
     }
 
     // MARK: - Staging
