@@ -36,7 +36,17 @@ toggle, plus Reset/Done footer.
   derived row exactly like the reference. The editable toggle stays
   independent (defaults already distinct — no shared-shortcut confusion).
 
-## 3. Spec: double-tap surfacing (reference-shaped)
+## 3. Spec: double-tap surfacing (reference-shaped) — IMPLEMENTED
+
+- Hands-free card shows a derived, non-editable `Double tap` + live
+  hold-chip row (staged or saved — follows any hold key), no recorder,
+  no toggle, no state. fn-hold shows a static `Double taps are handled
+  by macOS` caption (dynamic copy deferred — needs the §7.1 mapping).
+- Conversion fires for every hold kind EXCEPT bare fn (fn presses bypass
+  the machine, so no third-tap stop path exists for a converted
+  session — plus system double-fire). Covered by
+  `fnDoubleTapNeverConverts` + existing convert tests; no new tests
+  needed (derivation reuses tested `effectiveKind`).
 
 - Hands-free card gains a derived row above the editable field:
   `Double tap` + live hold chips (e.g. `Double tap Right ⌥`), disabled,

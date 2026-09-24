@@ -169,6 +169,39 @@ struct ShortcutModal: View {
                 .foregroundStyle(.secondary)
                 .font(.subheadline)
 
+            if slot == .handsFree {
+                // Derived, non-editable double-tap row: always the hold
+                // key, whatever it is. No recorder, no toggle, no state —
+                // it mirrors the effective hold binding live (staged or
+                // saved). Conversion itself lives in dispatch and fires
+                // for every hold kind EXCEPT bare fn: fn taps belong to
+                // macOS, and fn presses bypass the machine that would
+                // finish a converted session (no third-tap stop exists).
+                HStack(spacing: 4) {
+                    Text("Double tap")
+                        .foregroundStyle(.secondary)
+                    ForEach(KeyNames.chips(for: staging.effectiveKind(for: .hold)), id: \.self) { chip in
+                        Text(chip)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(.quaternary, lineWidth: 1)
+                )
+                if case .modifierHold(let code) = staging.effectiveKind(for: .hold),
+                   code == UInt16(kVK_Function)
+                {
+                    Text("Double taps are handled by macOS.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             KeycapField(
                 chips: KeyNames.chips(for: staging.effectiveKind(for: slot)),
                 isRecording: recording,
