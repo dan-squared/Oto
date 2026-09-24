@@ -1,7 +1,15 @@
-# Focus detection hardening + shortcut settings redo
+# Focus detection hardening + shortcut settings redo (modal)
 
 Status: PLAN ONLY. Nothing implemented.
-Decisions needed on §8 Q1–Q2 (recommendations given). Awaiting `execute`.
+Decisions locked 2026-09-24 (user took all recommendations, §9 resolved).
+Awaiting `execute`.
+
+Reference UI (attached, gitignored under `.context/attachments/`): Wispr
+Flow-style Shortcuts — a summary card ("Hold fn and speak." + Change
+button) opening a `Shortcuts` modal with one card per action, keycap-chip
+fields with pencil/trash affordances, `Reset to default` + `Done` footer.
+Oto adopts this shape with exactly one binding per slot (the reference's
+`+` alternate-binding buttons are out of scope, §8).
 
 ## 1. Goal
 
@@ -13,9 +21,11 @@ Two complaints from live testing, one plan:
    existing latency budget) without changing any fail-closed policy.
 2. **Settings rejects with no path forward.** Same-slot-both-slots saves are
    refused silently (no log line), and bare-modifier/F-key captures just
-   beep. Redo the rows: plain names, a capture *field* (not a button),
-   staged edits with per-row Save, and a Swap offer so two shortcuts can be
-   exchanged instead of refused.
+   beep. Redo settings as a summary row + `Shortcuts` modal per the
+   reference: plain names, keycap-chip fields, staged edits applied by
+   Done, and a Swap offer so two shortcuts can be exchanged instead of
+   refused. The sheet must not nest another rectangle frame inside itself
+   (§6.3 frameless rule).
 
 ## 2. Log evidence (PID 18155, session `78bba17600`, read 2026-09-24)
 
@@ -118,42 +128,92 @@ SDK `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0):
   silent-reject gap from §2).
 - Updaters, gate, F1, D4 otherwise untouched (Save reuses them).
 
-### 6.3 Settings rows (names + field + staged Save + Swap)
+### 6.3 Settings: summary row + Shortcuts modal (reference-shaped)
 
-`Oto/Settings/DictationPane.swift`, `Oto/Settings/ShortcutRecorderField.swift`
-(recorder rules, local monitor, suspend discipline all reused verbatim):
+`Oto/Settings/DictationPane.swift`, `Oto/Settings/ShortcutRecorderField.swift`,
+plus new `Oto/Settings/ShortcutModal.swift` (the modal is a self-contained
+surface, not pane chrome — this is also what keeps it out of the pane's
+`Form`, see the frameless rule below). Recorder rules, local monitor, and
+the suspend-while-recording discipline are reused verbatim; only the
+surface changes.
 
-- **Names.** Rows: "Hold to talk" + subtitle "Hold a key — release to
-  insert"; "Hands-free" + subtitle "Press once to start, again to stop".
-  Presets: "Right Option — hold" / "Dictation key — F5" /
-  "Custom combination". Capture field placeholder: "Click here, then press
-  your shortcut…". Live binding shown as a human name (§6.4), never a raw
-  keycode.
-- **Field, not button.** The capture control becomes a bordered,
-  keyboard-focusable field displaying the live binding; click (or Tab +
-  Space) arms recording. Same machinery, honest affordance.
-- **Staged Save.** Every change (preset pick, capture, clear) stages per
-  row; per-row Save enabled only when staged ≠ live. Save → updater →
-  applied (unstage, F1 re-enables) / blocked (message + Swap button).
-  Staged-clear + Save = today's Delete semantics (kept trigger,
-  `setEnabled(false)`, D4).
-- **Swap.** Blocked message gains "Swap shortcuts" → single
-  `swapHoldAndHandsFree()` call → both rows resync. The exchange flow the
-  user asked for, with zero new conflict states.
-- **Hints that end the mystery beep.** Under-field caption: combinations
-  like ⌘⇧D record here (bare keys live in presets above); Delete clears
-  and turns shortcuts off; Escape cancels. `invalid` keeps the beep AND
-  sets the hint line to what was wrong (modifier-only / plain key).
-- Calibration polling per row unchanged.
+**Summary row (replaces today's two inline `ShortcutSlotRow`s).** One card
+in the Shortcut section: title "Shortcuts", subtitle "Hold ⌥ and speak."
+(the hold binding's human name, dynamic — §6.4), combined status
+(`dispatch.calibrationText` worst-of, already derived), and a Change
+button. No "Learn more" link — dead controls are banned (pane rule: rows
+without backends do not exist). Tapping Change presents the sheet with a
+snapshot of both live triggers.
 
-### 6.4 Human key names (new, small, pure, tested)
+**Modal layout (mirrors the reference).** Header: "Shortcuts" + subtitle
+"Choose your preferred shortcuts for Oto." + ✕ (discard staged, dismiss).
+One card per slot — "Push to talk" / "Hold to say something short" and
+"Hands-free mode" / "Press once to start, press again to stop" (these
+names replace "Hold to talk"/"Hands-free" everywhere in Settings). Each
+card: keycap-chip field (§6.4) with pencil (arm recording) and trash
+(stage clear) affordances, a one-line status caption (per-slot
+calibration — the AX troubleshooting signal stays, minimized), and the
+recorder hint line while armed ("Combinations like ⌘⇧D — bare keys live
+in presets below. Delete clears, Escape cancels."). A kind preset row per
+card ("Right Option — hold" / "Dictation key — F5" / "Custom combination")
+stages the preset; presets are NOT a second recorder. Footer: `Reset to
+default` (applies factory defaults immediately via the existing updaters
+— provably non-conflicting — clears staged, resyncs) and `Done` (applies
+staged through the gate; any blocked entry keeps its old value with
+message + Swap, modal stays open; clean → dismiss).
+
+**Staging model (pure, tested — §6.5).** `ShortcutStaging` value type:
+live config + per-slot staged kinds. Effective value = staged ?? live.
+Done gates each staged slot against the OTHER slot's *effective* value
+(staged if present, else live). Blocked → inline message + Swap button;
+Swap exchanges the two LIVE values (clearing both staged) via the new
+atomic dispatch call — the pair multiset never changes, so the gate
+cannot newly fire. Staged-clear + Done = today's Delete semantics (kept
+trigger, `setEnabled(false)`, D4); F1 re-enable rides the existing
+updaters. ✕/sheet-ESC discards staged. `onDisappear` resumes dispatch if
+a recording was armed (safety; the recorder's own Escape-cancel already
+resumes on the armed path, so no double-resume: `setSuspended(false)` is
+idempotent by guard).
+
+**Frameless-sheet rule (the no-nested-rectangle requirement).** The sheet
+window already provides the outer frame — the content adds NONE of its
+own:
+- FORBIDDEN inside the sheet: `Form`, `GroupBox`, `List`, or any
+  full-bleed background panel behind the cards (each renders its own
+  grouped rectangle on macOS → the doubled frame in the complaint).
+- Shape: `ScrollView` + `VStack` + plain cards (`RoundedRectangle` fill
+  `Color(nsColor: .controlBackgroundColor)`, radius 12 — the reference's
+  subtle card tone), 24 pt padding, fixed `minWidth: 560`.
+- Dismiss via `@Environment(\.dismiss)` only. No custom traffic lights,
+  no second window (house rule: Flow Bar is the only custom surface).
+- No new API adopted (`.sheet`, `dismiss`, `controlBackgroundColor` are
+  long-standing; `defaultSize` precedent already in `OtoApp.swift`).
+- Proof is visual: device-matrix screenshot (§7) must show sheet chrome
+  exactly once.
+
+**Explicitly out of scope:** the reference's `+` alternate-binding buttons
+(a second binding per slot doubles transition machines and the conflict
+matrix for zero asked value — one binding per slot stands); double-tap
+gestures (no disambiguation timer, per the dual plan's rejected
+alternative); spoken triggers; per-app shortcuts.
+
+### 6.4 Human key names + keycap chips (new, small, pure, tested)
 
 - ADD `KeyNames.describe(modifiers:keyCode:)` (home: `ShortcutRecorderField.swift`
   or models): ANSI letters/digits table + named keys (Space, Tab, Delete,
-  Escape, arrows, F1–F12…), `"key <code>"` fallback only when truly
-  unknown. Replaces `describeCombo`'s raw `"key 2"` output everywhere
-  (recorder labels, conflict messages). `describeCombo` kept as a thin
-  wrapper or deleted — implementer's choice, tests pin the new one.
+  Escape, arrows, F1–F12, `fn` for `kVK_Function 0x3F`…), `"key <code>"`
+  fallback only when truly unknown. Replaces `describeCombo`'s raw
+  `"key 2"` output everywhere (recorder labels, conflict messages).
+  `describeCombo` kept as a thin wrapper or deleted — implementer's
+  choice, tests pin the new one.
+- ADD `KeycapField` view (home: `ShortcutModal.swift`): chips for the
+  effective binding — modifier glyphs ⌃⌥⇧⌘ + key name chips (`fn`,
+  `Space`, `D`…) in `RoundedRectangle` borders exactly like the reference.
+  Multi-code `functionKey` sets render as one honest label: the factory
+  dictation set (`F5`+`176`) shows "Dictation key"; any other set joins
+  chip names. Recording state shows the placeholder
+  "Press your shortcut…" in place of chips. Pencil arms, trash stages
+  clear; the field disables while the other card records.
 
 ### 6.5 Tests (all deterministic, no hardware)
 
@@ -161,7 +221,10 @@ SDK `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0):
   on-second-read + retry-exhausts→noField via injected reader (new);
   existing `classify`/`verdictForFocusError`/timeout tests updated only
   for the deliberate signature growth.
-- `KeyNames` table tests (new).
+- `KeyNames` table + dictation-set label tests (new).
+- `ShortcutStaging` pure tests (new): effective values, Done-gate preview
+  (applied + blocked against the other's effective value), Swap clears
+  staged, staged-clear semantics.
 - Dispatch swap tests (new, fake coordinator): swap exchanges, enables,
   resets both calibrations; swap of identical kinds is a safe no-op…
   (it re-registers; assert state, not cleverness).
@@ -195,10 +258,10 @@ SDK `/Applications/Xcode.app/.../MacOSX27.0.sdk` (Xcode 27.0):
 - Out of scope: per-app shortcuts, tap-vs-hold disambiguation, spoken
   triggers.
 
-## 9. Open questions
+## 9. Open questions — ALL RESOLVED 2026-09-24 (user took recommendations)
 
-1. **Uniform staging?** (Recommended: yes — presets stage like captures,
-   one Save mental model, one extra click on preset switches.) Alternative:
-   presets apply immediately, staging only for captures.
-2. **Ambiguous roles** (AXWebArea/AXGroup focused): keep today's divert
-   (recommended — zero regression) vs `AXIsEditable`-gated proceed?
+1. ~~Uniform staging?~~ YES — and it fits the modal even better than
+   per-row Save: everything stages, Done is the single Save. No extra
+   per-row buttons, one mental model.
+2. ~~Ambiguous roles?~~ Keep today's divert. `AXIsEditable` stays deferred
+   per §4.
