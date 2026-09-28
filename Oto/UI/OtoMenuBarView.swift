@@ -16,6 +16,7 @@ struct OtoMenuBarView: View {
     let coordinator: DictationCoordinator
     let inserter: RealTextInsertion
     let dispatch: ShortcutDispatch
+    let onboarding: OnboardingWindowController
 
     @State private var status = "idle — no session yet"
     @State private var recoveryAvailable = false
@@ -80,6 +81,9 @@ struct OtoMenuBarView: View {
         }
 
         SettingsLink()
+        Button("Show onboarding…") {
+            onboarding.show()
+        }
         Divider()
         Button("Quit Oto") {
             NSApplication.shared.terminate(nil)

@@ -13,8 +13,14 @@ import SwiftUI
 /// the delegate — silent on failure by design: Regular remains and the
 /// stored pref is untouched for next launch (apply writes only on success).
 final class DockRestoreDelegate: NSObject, NSApplicationDelegate {
+    /// Owned by OtoApp (set in init, before launch finishes). The delegate
+    /// carries it because scenes cannot trigger first-launch presentation:
+    /// no Oto view instantiates at launch to call `openWindow` from.
+    static var onboarding: OnboardingWindowController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = DockVisibility.apply(shown: DockVisibility.isShown())
+        Self.onboarding?.showIfNeeded()
     }
 }
 
@@ -49,6 +55,10 @@ struct OtoApp: App {
     private let dictionaryStore: DictionaryStore
     private let snippetStore: SnippetStore
     private let historyStore: HistoryStore
+    // First-run onboarding window (AppKit-hosted — see
+    // OnboardingWindowController for why no SwiftUI scene). Shared with
+    // the menu bar re-run entry; single instance, audit S2 rule.
+    private let onboarding: OnboardingWindowController
 
     init() {
         // Crash backstop first: a kill mid-dictation leaves the duck flag
@@ -104,6 +114,13 @@ struct OtoApp: App {
         // default). No NSEvent monitors in the trigger path — they wedge
         // MenuBarExtra menu tracking (bisect-proven, see HIDEventMonitor).
         dispatch.start()
+        let onboarding = OnboardingWindowController(
+            dispatch: dispatch,
+            preparer: preparer,
+            permissions: permissions
+        )
+        self.onboarding = onboarding
+        DockRestoreDelegate.onboarding = onboarding
         // Stores load off the launch path; rules push when ready. Dictation
         // before this lands uses trim-only (today's behavior), never blocks.
         Task {
@@ -116,7 +133,7 @@ struct OtoApp: App {
 
     var body: some Scene {
         MenuBarExtra("Oto", systemImage: "waveform") {
-            OtoMenuBarView(coordinator: coordinator, inserter: inserter, dispatch: dispatch)
+            OtoMenuBarView(coordinator: coordinator, inserter: inserter, dispatch: dispatch, onboarding: onboarding)
         }
         .menuBarExtraStyle(.menu)
 

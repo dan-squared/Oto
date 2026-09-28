@@ -62,6 +62,18 @@ Checked 2026-09-28 via Xcode ACP + `MacOSX27.0.sdk` headers/`.swiftinterface`:
   `@Environment(\.dismissWindow)` (`DismissWindowAction`, line 30540)
   confirmed present — menubar re-run and Finish/close paths.
 - `SettingsLink` confirmed (line 11907) — untouched.
+- **Mechanism correction (found during execute):** a named SwiftUI scene
+  never opens itself — something must call `openWindow`, and no Oto view
+  instantiates at launch (MenuBarExtra content is lazy, Settings is
+  on-demand), so there is no reliable SwiftUI-side first-launch trigger
+  in either Dock or menu-bar-only mode. Onboarding is therefore an
+  AppKit-hosted fixed window (`NSWindow` + `NSHostingView`, 620×480,
+  titled+closable, centered) owned by a single
+  `OnboardingWindowController`: the existing `DockRestoreDelegate`
+  calls `showIfNeeded()` at launch, the menu calls `show()`. All plan
+  semantics hold (pages, store, no-skip, menubar re-run); only the
+  window mechanism differs. ESC does nothing (skip-safe by doing
+  nothing — the plan's "or nothing" branch).
 - Permissions: `AVAudioApplication.requestRecordPermissionWithCompletionHandler`
   `API_AVAILABLE(macos(14.0))` (`AVAudioApplication.h:119`); 
   `SFSpeechRecognizer.authorizationStatus`
@@ -141,6 +153,10 @@ pickers, analytics, custom window chrome, `+` alternate bindings.
    static let current = 1; static func shouldShow(defaults:) -> Bool;
    static func markSeen(defaults:) }` — absent = show, `>= current` =
    hidden, bump re-shows. `NoTargetModalSettings` precedent.
+2. `Oto/Onboarding/OnboardingWindowController.swift` (new): single
+   fixed 620×480 `NSWindow` + `NSHostingView`; `showIfNeeded()` (launch)
+   vs `show()` (menu, rebuilds content from live config); Finish-only
+   `markSeen` + close; red-close marks nothing.
 2. `Oto/Onboarding/OnboardingView.swift` (new): 5-step pager per §3;
    takes `dispatch/preparer/permissions` as params (owns no
    services); reuses `KeycapField`, `ShortcutRecorderModifier`,
