@@ -260,3 +260,17 @@ so light mode stays correct). Say `execute` to build as specced.
   Settings01, waveform AudioWaveform, mic Mic01, book Book01, clock
   Clock01, quote QuoteDown, tap Tap01, check Tick01, search Search01,
   accessibility Accessibility, archive Archive01, keyboard Keyboard.
+
+## 10. Addendum — icon revert (user verdict: "a mess")
+
+- All HugeIcons code and traces removed: `OtoIcon.swift`,
+  `OtoIconData.swift`, `OtoIconTests.swift`, `.context/hugeicons-src/`
+  deleted. `OtoDoor`/`OtoNothing` take SF `systemName` strings; every
+  call site restored to native symbols (rail: gearshape/waveform/
+  text.book.closed/clock). `MenuBarExtra` was never changed.
+- Palette test kept as `OtoThemeTests.swift` (pair resolution is
+  independent of glyph source).
+- Over-limit Copied follow-up: label bumped 11→12pt and now
+  sizeToFits + centers in the pill (NSTextField draws from the top of
+  a tall frame — the horizontal-only centering was the whole bug).
+  Width unchanged: `.message == 92.4 == .recording` (test-pinned).

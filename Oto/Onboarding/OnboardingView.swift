@@ -123,7 +123,8 @@ struct OnboardingView: View {
 
     private var welcomePage: some View {
         VStack(spacing: 22) {
-            OtoIconView(icon: .waveform, size: 40)
+            Image(systemName: "waveform")
+                .font(.system(size: 40))
                 .foregroundStyle(OtoPalette.ink)
             VStack(spacing: 10) {
                 Text("Welcome to Oto")
@@ -148,26 +149,27 @@ struct OnboardingView: View {
                 "Three things, each one press away. Everything else lives in Settings."
             )
             featureRow(
-                icon: .keyboard,
+                icon: "keyboard",
                 title: "Push to talk",
                 subtitle: "Hold \(KeyNames.shortLabel(for: holdKind)) for quick bursts."
             )
             featureRow(
-                icon: .tap,
+                icon: "hand.tap",
                 title: "Double-tap for hands-free",
                 subtitle: "Tap-tap the same key for long talks. Press again to stop. No setup."
             )
             featureRow(
-                icon: .archive,
+                icon: "tray.full",
                 title: "Never lose words",
                 subtitle: "No text field? The catcher keeps your transcript — one click to copy."
             )
         }
     }
 
-    private func featureRow(icon: OtoIcon, title: String, subtitle: String) -> some View {
+    private func featureRow(icon: String, title: String, subtitle: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            OtoIconView(icon: icon, size: 18)
+            Image(systemName: icon)
+                .font(.system(size: 18))
                 .foregroundStyle(OtoPalette.muted)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
@@ -259,7 +261,8 @@ struct OnboardingView: View {
 
             if let holdMessage {
                 HStack(spacing: 6) {
-                    OtoIconView(icon: .warning, size: 12)
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 12))
                         .foregroundStyle(.orange)
                     Text(holdMessage)
                         .font(.system(size: 12))
@@ -349,7 +352,7 @@ struct OnboardingView: View {
             )
             VStack(alignment: .leading, spacing: 14) {
                 permissionRow(
-                    icon: .mic,
+                    icon: "mic",
                     title: "Microphone",
                     status: micText,
                     actionTitle: micText == "Allowed" ? nil : "Allow microphone access",
@@ -361,7 +364,7 @@ struct OnboardingView: View {
                     }
                 )
                 permissionRow(
-                    icon: .accessibility,
+                    icon: "accessibility",
                     title: "Accessibility",
                     status: axTrusted ? "Allowed" : "Not allowed",
                     actionTitle: axTrusted ? nil : "Open Accessibility settings",
@@ -374,7 +377,7 @@ struct OnboardingView: View {
                     }
                 )
                 permissionRow(
-                    icon: .check,
+                    icon: "checkmark",
                     title: "Speech recognition",
                     status: speechText,
                     actionTitle: nil,
@@ -384,9 +387,10 @@ struct OnboardingView: View {
         }
     }
 
-    private func permissionRow(icon: OtoIcon, title: String, status: String, actionTitle: String?, action: @escaping () -> Void) -> some View {
+    private func permissionRow(icon: String, title: String, status: String, actionTitle: String?, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
-            OtoIconView(icon: icon, size: 18)
+            Image(systemName: icon)
+                .font(.system(size: 18))
                 .foregroundStyle(OtoPalette.muted)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
@@ -401,7 +405,8 @@ struct OnboardingView: View {
             if let actionTitle {
                 OtoPill(actionTitle, action: action)
             } else if status == "Allowed" {
-                OtoIconView(icon: .check, size: 14)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14))
                     .foregroundStyle(OtoPalette.ink)
             }
         }

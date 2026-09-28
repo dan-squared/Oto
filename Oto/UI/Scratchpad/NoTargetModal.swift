@@ -399,7 +399,8 @@ struct NoTargetModalView: View {
                     HStack {
                         Spacer()
                         Button { controller.hide() } label: {
-                            OtoIconView(icon: .xmark, size: 14)
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14))
                         }
                         .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
                         .accessibilityLabel("Dismiss")

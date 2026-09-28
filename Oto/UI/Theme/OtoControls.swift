@@ -130,7 +130,7 @@ struct OtoSegmented<Option: Hashable>: View {
 
 /// A small square holding one icon. The panel cross, lit when open.
 struct OtoDoor: View {
-    let icon: OtoIcon
+    let systemName: String
     var on = false
     var help = ""
     let act: () -> Void
@@ -138,7 +138,7 @@ struct OtoDoor: View {
 
     var body: some View {
         Button(action: act) {
-            OtoIconView(icon: icon, size: 11)
+            Image(systemName: systemName)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(on ? OtoPalette.ink : (hovering ? OtoPalette.ink.opacity(0.7) : OtoPalette.muted))
                 .frame(width: 26, height: 26)
@@ -179,7 +179,8 @@ struct OtoHunt: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            OtoIconView(icon: .search, size: 11)
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(OtoPalette.muted)
             ZStack(alignment: .leading) {
                 if text.isEmpty {
@@ -193,7 +194,8 @@ struct OtoHunt: View {
             .font(.system(size: 13))
             if !text.isEmpty {
                 Button { text = "" } label: {
-                    OtoIconView(icon: .xmark, size: 11)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(OtoPalette.faint)
                 }
                 .buttonStyle(.plain)

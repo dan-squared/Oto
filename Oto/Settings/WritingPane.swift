@@ -129,7 +129,7 @@ struct WritingPane: View {
             if dictionary.rules.isEmpty {
                 OtoCard {
                     OtoNothing(
-                        icon: .book,
+                        systemName: "text.book.closed",
                         text: "No dictionary rules",
                         detail: "Add a spoken form and its replacement. Rules apply to future dictation."
                     )
@@ -248,7 +248,7 @@ struct WritingPane: View {
             if snippets.snippets.isEmpty {
                 OtoCard {
                     OtoNothing(
-                        icon: .quote,
+                        systemName: "text.quote",
                         text: "No snippets",
                         detail: "Save repeated text once, then copy it wherever you need it."
                     )

@@ -171,7 +171,7 @@ struct NoTargetModalTests {
         // pill frame, padded by the symmetric label insets. No transcript
         // words ever reach pill pixels (recovery owns them).
         #expect(CatcherText.overLimitMessage == "Copied")
-        let font = NSFont.systemFont(ofSize: 11)
+        let font = NSFont.systemFont(ofSize: 12)
         let width = (CatcherText.overLimitMessage as NSString).boundingRect(
             with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin],

@@ -81,13 +81,14 @@ struct OtoCaption: View {
 
 /// What a panel says when its list is empty.
 struct OtoNothing: View {
-    let icon: OtoIcon
+    let systemName: String
     let text: String
     let detail: String
 
     var body: some View {
         VStack(spacing: 8) {
-            OtoIconView(icon: icon, size: 22)
+            Image(systemName: systemName)
+                .font(.system(size: 22))
                 .foregroundStyle(OtoPalette.faint)
             Text(text)
                 .font(.system(size: 13, weight: .medium))

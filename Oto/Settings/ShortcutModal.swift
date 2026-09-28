@@ -72,7 +72,8 @@ struct KeycapField: View {
             Button {
                 onTrash()
             } label: {
-                OtoIconView(icon: .trash, size: 13)
+                Image(systemName: "trash")
+                    .font(.system(size: 13))
                     .foregroundStyle(OtoPalette.muted)
             }
             .buttonStyle(.plain)
@@ -117,7 +118,8 @@ struct ShortcutModal: View {
                 Button {
                     dismiss()
                 } label: {
-                    OtoIconView(icon: .xmark, size: 11)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11))
                         .foregroundStyle(OtoPalette.muted)
                 }
                 .buttonStyle(.plain)
@@ -276,7 +278,8 @@ struct ShortcutModal: View {
             }
             if let message = message(for: slot) {
                 HStack(spacing: 6) {
-                    OtoIconView(icon: .warning, size: 12)
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 12))
                         .foregroundStyle(.orange)
                     Text(message)
                         .font(.system(size: 11.5))

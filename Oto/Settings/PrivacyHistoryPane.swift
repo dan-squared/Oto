@@ -93,7 +93,7 @@ struct PrivacyHistoryPane: View {
             if !historyEnabled {
                 OtoCard {
                     OtoNothing(
-                        icon: .clock,
+                        systemName: "clock",
                         text: "History is off",
                         detail: "Turn it on to recall past dictation."
                     )
@@ -101,7 +101,7 @@ struct PrivacyHistoryPane: View {
             } else if history.entries.isEmpty {
                 OtoCard {
                     OtoNothing(
-                        icon: .clock,
+                        systemName: "clock",
                         text: "No remembered transcripts",
                         detail: "Finished dictation appears here."
                     )

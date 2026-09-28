@@ -30,12 +30,12 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
         }
     }
 
-    var icon: OtoIcon {
+    var symbol: String {
         switch self {
-        case .general: .gear
-        case .dictation: .waveform
-        case .writing: .book
-        case .privacyHistory: .clock
+        case .general: "gearshape"
+        case .dictation: "waveform"
+        case .writing: "text.book.closed"
+        case .privacyHistory: "clock"
         }
     }
 }
@@ -98,7 +98,8 @@ struct SettingsRoot: View {
         var body: some View {
             Button(action: act) {
                 HStack(spacing: 9) {
-                    OtoIconView(icon: item.icon, size: 12)
+                    Image(systemName: item.symbol)
+                        .font(.system(size: 12, weight: .medium))
                         .frame(width: 16)
                     Text(item.title)
                         .font(.system(size: 13, weight: on ? .medium : .regular))
