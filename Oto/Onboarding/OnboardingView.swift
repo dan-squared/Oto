@@ -2,15 +2,11 @@
 //  OnboardingView.swift
 //  Oto
 //
-//  Five-page first-run flow in a compact fixed window (620×480, content
-//  column 480). No Skip anywhere: footer is dots + Back + Continue/Finish
-//  only, and window-close never marks seen (the controller owns that).
-//
-//  Owns no services: dispatch/preparer/permissions arrive as params, like
-//  Settings panes. The hold-key card reuses the exact Settings machinery
-//  (`KeycapField`, `ShortcutRecorderModifier`, `KeyNames`, the dispatch
-//  save gate) but applies immediately — there is no Done staging here, so
-//  every capture/menu pick either saves or explains itself on the spot.
+//  Five-page first-run flow, dressed like the reference welcome: ground
+//  canvas, 520 column, 26pt page titles, Big capsule footer (dots + Back +
+//  Continue/Finish — no Skip), asymmetric slide transitions. Owns no
+//  services: dispatch/preparer/permissions arrive as params. The hold-key
+//  card reuses the Settings machinery and applies immediately.
 //
 
 import ApplicationServices
@@ -27,6 +23,7 @@ struct OnboardingView: View {
     let onFinish: () -> Void
 
     @State private var page = 0
+    @State private var forward = true
 
     // Hold-key card state. `holdKind` mirrors the live config after every
     // apply (single source stays in dispatch); messages are local.
@@ -48,26 +45,32 @@ struct OnboardingView: View {
     @State private var trialText = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            pageBody
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        ZStack {
+            OtoPalette.ground.ignoresSafeArea()
 
-            HStack {
-                dots
-                Spacer()
-                if page > 0 {
-                    Button("Back") { page -= 1 }
-                        .buttonStyle(.link)
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                ZStack {
+                    switch page {
+                    case 0: welcomePage
+                    case 1: featuresPage
+                    case 2: holdKeyPage
+                    case 3: permissionsPage
+                    default: readyPage
+                    }
                 }
-                Button(page == Self.pageCount - 1 ? "Finish" : "Continue") {
-                    advance()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
+                .frame(maxWidth: 520)
+                .id(page)
+                .transition(.asymmetric(
+                    insertion: .offset(x: forward ? 40 : -40).combined(with: .opacity),
+                    removal: .offset(x: forward ? -40 : 40).combined(with: .opacity)
+                ))
+                Spacer(minLength: 0)
+                foot
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
+            .padding(40)
         }
+        .animation(OtoMotion.glide, value: page)
         .frame(width: 620, height: 480)
         .task {
             holdKind = dispatch.configuration.hold.kind
@@ -81,33 +84,37 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Pager
+    // MARK: - the bottom edge
 
-    @ViewBuilder
-    private var pageBody: some View {
-        switch page {
-        case 0: welcomePage
-        case 1: featuresPage
-        case 2: holdKeyPage
-        case 3: permissionsPage
-        default: readyPage
-        }
-    }
-
-    private var dots: some View {
-        HStack(spacing: 6) {
-            ForEach(0..<Self.pageCount, id: \.self) { index in
-                Circle()
-                    .fill(index == page ? Color.primary : Color.secondary.opacity(0.35))
-                    .frame(width: 6, height: 6)
+    private var foot: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 6) {
+                ForEach(0..<Self.pageCount, id: \.self) { i in
+                    Circle()
+                        .fill(i == page ? OtoPalette.ink : OtoPalette.faint.opacity(0.6))
+                        .frame(width: 6, height: 6)
+                }
             }
+            Spacer()
+            if page > 0 {
+                Button("Back") { forward = false; page -= 1 }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(OtoPalette.muted)
+            }
+            OtoBig(page == Self.pageCount - 1 ? "Finish" : "Continue") {
+                advance()
+            }
+            .keyboardShortcut(.defaultAction)
         }
+        .frame(maxWidth: 520)
     }
 
     private func advance() {
         if page == Self.pageCount - 1 {
             onFinish()
         } else {
+            forward = true
             page += 1
         }
     }
@@ -115,146 +122,148 @@ struct OnboardingView: View {
     // MARK: - Page 1: Welcome
 
     private var welcomePage: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: "waveform")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-            Text("Welcome to Oto")
-                .font(.largeTitle)
-                .bold()
-            Text("Hold a key, speak in any app, release — your words appear where you were typing.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: 400)
-            Text("Private by design: on-device Apple Speech. No account, no cloud, no recordings kept.")
-                .font(.callout)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: 400)
-            Spacer()
+        VStack(spacing: 22) {
+            OtoIconView(icon: .waveform, size: 40)
+                .foregroundStyle(OtoPalette.ink)
+            VStack(spacing: 10) {
+                Text("Welcome to Oto")
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(OtoPalette.ink)
+                Text("Hold a key, speak in any app, release — your words appear where you were typing. Private by design: on-device Apple Speech. No account, no cloud, no recordings kept.")
+                    .font(.system(size: 14.5))
+                    .foregroundStyle(OtoPalette.muted)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .frame(maxWidth: 400)
+            }
         }
-        .padding(.horizontal, 24)
     }
 
     // MARK: - Page 2: Features
 
     private var featuresPage: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("What Oto does for you")
-                .font(.title2)
-                .bold()
-                .padding(.top, 36)
+        VStack(alignment: .leading, spacing: 22) {
+            heading(
+                "What Oto does for you.",
+                "Three things, each one press away. Everything else lives in Settings."
+            )
             featureRow(
-                symbol: "keyboard",
+                icon: .keyboard,
                 title: "Push to talk",
                 subtitle: "Hold \(KeyNames.shortLabel(for: holdKind)) for quick bursts."
             )
             featureRow(
-                symbol: "hand.tap",
+                icon: .tap,
                 title: "Double-tap for hands-free",
                 subtitle: "Tap-tap the same key for long talks. Press again to stop. No setup."
             )
             featureRow(
-                symbol: "tray.full",
+                icon: .archive,
                 title: "Never lose words",
                 subtitle: "No text field? The catcher keeps your transcript — one click to copy."
             )
-            Text("Works offline once speech is prepared.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
         }
-        .padding(.horizontal, 70)
     }
 
-    private func featureRow(symbol: String, title: String, subtitle: String) -> some View {
+    private func featureRow(icon: OtoIcon, title: String, subtitle: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol)
-                .font(.title3)
-                .foregroundStyle(.secondary)
+            OtoIconView(icon: icon, size: 18)
+                .foregroundStyle(OtoPalette.muted)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.headline)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(OtoPalette.ink)
                 Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(OtoPalette.muted)
             }
+        }
+    }
+
+    private func heading(_ title: String, _ line: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(OtoPalette.ink)
+            Text(line)
+                .font(.system(size: 14))
+                .foregroundStyle(OtoPalette.muted)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     // MARK: - Page 3: Hold key
 
     private var holdKeyPage: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Your hold key")
-                .font(.title2)
-                .bold()
-                .padding(.top, 28)
-            Text("This is the key you'll hold while you talk. Keep it, or click the field and press a new one.")
-                .foregroundStyle(.secondary)
-                .font(.subheadline)
-
-            KeycapField(
-                chips: KeyNames.chips(for: holdKind),
-                isRecording: isRecording,
-                disabled: false,
-                emptyPlaceholder: "Click to record…",
-                trashHelp: "Oto always needs a hold key",
-                onArm: {
-                    dispatch.setSuspended(true)
-                    isRecording = true
-                },
-                onTrash: {
-                    holdMessage = "Oto needs a hold key to listen — pick one instead."
-                    showSwap = false
-                },
-                recorder: ShortcutRecorderModifier(
-                    isListening: $isRecording,
-                    onCapture: { modifiers, keyCode, conflicts in
-                        captureCombo(modifiers: modifiers, keyCode: keyCode, conflicts: conflicts)
-                    },
-                    onCaptureModifier: { code in
-                        captureModifier(code: code)
-                    },
-                    onClear: {
-                        dispatch.setSuspended(false)
-                        isRecording = false
-                    },
-                    onCancel: {
-                        dispatch.setSuspended(false)
-                        isRecording = false
-                    },
-                    onInvalid: { reason in
-                        NSSound.beep()
-                        holdMessage = reason.message
-                        showSwap = false
-                    }
-                )
+        VStack(alignment: .leading, spacing: 22) {
+            heading(
+                "Your hold key.",
+                "This is the key you'll hold while you talk. Keep it, or click the field and press a new one."
             )
+            VStack(alignment: .leading, spacing: 14) {
+                KeycapField(
+                    chips: KeyNames.chips(for: holdKind),
+                    isRecording: isRecording,
+                    disabled: false,
+                    emptyPlaceholder: "Click to record…",
+                    trashHelp: "Oto always needs a hold key",
+                    onArm: {
+                        dispatch.setSuspended(true)
+                        isRecording = true
+                    },
+                    onTrash: {
+                        holdMessage = "Oto needs a hold key to listen — pick one instead."
+                        showSwap = false
+                    },
+                    recorder: ShortcutRecorderModifier(
+                        isListening: $isRecording,
+                        onCapture: { modifiers, keyCode, conflicts in
+                            captureCombo(modifiers: modifiers, keyCode: keyCode, conflicts: conflicts)
+                        },
+                        onCaptureModifier: { code in
+                            captureModifier(code: code)
+                        },
+                        onClear: {
+                            dispatch.setSuspended(false)
+                            isRecording = false
+                        },
+                        onCancel: {
+                            dispatch.setSuspended(false)
+                            isRecording = false
+                        },
+                        onInvalid: { reason in
+                            NSSound.beep()
+                            holdMessage = reason.message
+                            showSwap = false
+                        }
+                    )
+                )
 
-            // Sided modifier menu + presets note. The recorder above already
-            // covers combos and bare modifiers; the menu is the sided picker.
-            // (A Dictation-key-as-hold preset exists in Settings for
-            // grandfathered configs; onboarding teaches the two live paths.)
-            Menu {
-                ForEach(KeyNames.holdOptions, id: \.code) { option in
-                    Button(option.label) {
-                        applyHold(kind: .modifierHold(keyCode: option.code))
+                // Sided modifier menu. The recorder above already covers
+                // combos and bare modifiers; the menu is the sided picker.
+                Menu {
+                    ForEach(KeyNames.holdOptions, id: \.code) { option in
+                        Button(option.label) {
+                            applyHold(kind: .modifierHold(keyCode: option.code))
+                        }
                     }
+                } label: {
+                    Text("Hold key: \(KeyNames.holdMenuLabel(for: holdKind))")
+                        .font(.system(size: 13))
+                        .foregroundStyle(OtoPalette.ink)
                 }
-            } label: {
-                Text("Hold key: \(KeyNames.holdMenuLabel(for: holdKind))")
+                .help("Choose which key to hold")
             }
-            .help("Choose which key to hold")
 
             if let holdMessage {
                 HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle")
+                    OtoIconView(icon: .warning, size: 12)
                         .foregroundStyle(.orange)
                     Text(holdMessage)
-                        .font(.caption)
+                        .font(.system(size: 12))
+                        .foregroundStyle(OtoPalette.muted)
                     if showSwap {
                         Spacer()
                         Button("Swap") {
@@ -266,42 +275,31 @@ struct OnboardingView: View {
                         .buttonStyle(.link)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
 
             // Derived, non-editable double-tap row: always the hold key,
             // whatever it is — the always-on path with zero setup. Bare fn
             // shows the system-owned caption (model policy, same as Settings).
-            HStack(spacing: 4) {
-                Text("Double tap")
-                    .foregroundStyle(.secondary)
-                ForEach(KeyNames.chips(for: holdKind), id: \.self) { chip in
-                    Text(chip)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Text("Double tap")
+                        .font(.system(size: 13))
+                        .foregroundStyle(OtoPalette.muted)
+                    ForEach(KeyNames.chips(for: holdKind), id: \.self) { chip in
+                        OtoKey(text: chip)
+                    }
+                }
+                if case .modifierHold(let code) = holdKind, code == UInt16(kVK_Function) {
+                    Text("Double taps are handled by macOS.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(OtoPalette.muted)
+                } else {
+                    Text("Hands-free toggle lives in Settings — empty until you add one.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(OtoPalette.muted)
                 }
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(.quaternary, lineWidth: 1)
-            )
-            if case .modifierHold(let code) = holdKind, code == UInt16(kVK_Function) {
-                Text("Double taps are handled by macOS.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Hands-free toggle lives in Settings — empty until you add one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
         }
-        .padding(.horizontal, 70)
     }
 
     /// Immediate-apply save: the gate either saves (or no-ops on equality)
@@ -344,71 +342,69 @@ struct OnboardingView: View {
     // MARK: - Page 4: Permissions
 
     private var permissionsPage: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Permissions")
-                .font(.title2)
-                .bold()
-                .padding(.top, 28)
-            Text("Oto asks only when it needs them — right here, right now.")
-                .foregroundStyle(.secondary)
-                .font(.subheadline)
-
-            permissionRow(
-                title: "Microphone",
-                status: micText,
-                actionTitle: micText == "Allowed" ? nil : "Allow microphone access",
-                action: {
-                    Task {
-                        _ = await permissions.ensureMicrophone()
-                        refreshPermissions()
+        VStack(alignment: .leading, spacing: 22) {
+            heading(
+                "Permissions.",
+                "Oto asks only when it needs them — right here, right now."
+            )
+            VStack(alignment: .leading, spacing: 14) {
+                permissionRow(
+                    icon: .mic,
+                    title: "Microphone",
+                    status: micText,
+                    actionTitle: micText == "Allowed" ? nil : "Allow microphone access",
+                    action: {
+                        Task {
+                            _ = await permissions.ensureMicrophone()
+                            refreshPermissions()
+                        }
                     }
-                }
-            )
-            permissionRow(
-                title: "Accessibility",
-                status: axTrusted ? "Allowed" : "Not allowed",
-                actionTitle: axTrusted ? nil : "Open Accessibility settings",
-                action: {
-                    requestAccessibilityPrompt()
-                    Task {
-                        try? await Task.sleep(for: .seconds(2))
-                        refreshPermissions()
+                )
+                permissionRow(
+                    icon: .accessibility,
+                    title: "Accessibility",
+                    status: axTrusted ? "Allowed" : "Not allowed",
+                    actionTitle: axTrusted ? nil : "Open Accessibility settings",
+                    action: {
+                        requestAccessibilityPrompt()
+                        Task {
+                            try? await Task.sleep(for: .seconds(2))
+                            refreshPermissions()
+                        }
                     }
-                }
-            )
-            permissionRow(
-                title: "Speech recognition",
-                status: speechText,
-                actionTitle: nil,
-                action: {}
-            )
-            Text("Global keys and insertion need Accessibility; combos alone work without it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
+                )
+                permissionRow(
+                    icon: .check,
+                    title: "Speech recognition",
+                    status: speechText,
+                    actionTitle: nil,
+                    action: {}
+                )
+            }
         }
-        .padding(.horizontal, 70)
     }
 
-    private func permissionRow(title: String, status: String, actionTitle: String?, action: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+    private func permissionRow(icon: OtoIcon, title: String, status: String, actionTitle: String?, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            OtoIconView(icon: icon, size: 18)
+                .foregroundStyle(OtoPalette.muted)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.headline)
-                Spacer()
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(OtoPalette.ink)
                 Text(status)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(OtoPalette.faint)
             }
+            Spacer()
             if let actionTitle {
-                Button(actionTitle, action: action)
+                OtoPill(actionTitle, action: action)
+            } else if status == "Allowed" {
+                OtoIconView(icon: .check, size: 14)
+                    .foregroundStyle(OtoPalette.ink)
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
     }
 
     private func refreshPermissions() {
@@ -445,37 +441,42 @@ struct OnboardingView: View {
     // MARK: - Page 5: Ready + try it
 
     private var readyPage: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Get set up")
-                .font(.title2)
-                .bold()
-                .padding(.top, 24)
-            HStack(spacing: 8) {
-                Button("Prepare offline speech") {
+        VStack(alignment: .leading, spacing: 22) {
+            heading(
+                "Get set up.",
+                "Prepare offline speech once, then try it right here."
+            )
+            HStack(spacing: 12) {
+                OtoBig(isPreparing ? "Preparing…" : "Prepare offline speech") {
                     Task { await runPrepare() }
                 }
                 .disabled(isPreparing)
-                Text(readinessText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                if isPreparing {
+                    Text(readinessText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(OtoPalette.muted)
+                }
             }
             if let prepareFeedback {
                 Text(prepareFeedback)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(OtoPalette.muted)
             }
-            Text("Try it — hold your key and speak into this field:")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            TextEditor(text: $trialText)
-                .frame(minHeight: 90)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(.quaternary, lineWidth: 1)
-                )
-            Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Try it — hold your key and speak into this field:")
+                    .font(.system(size: 13))
+                    .foregroundStyle(OtoPalette.muted)
+                TextEditor(text: $trialText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(OtoPalette.ink)
+                    .frame(minHeight: 80)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(OtoPalette.hairline, lineWidth: 1)
+                    )
+            }
         }
-        .padding(.horizontal, 70)
     }
 
     private func refreshSpeech() async {

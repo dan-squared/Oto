@@ -149,6 +149,6 @@ struct OtoApp: App {
                 history: historyStore
             )
         }
-        .defaultSize(width: 760, height: 620)
+        .defaultSize(width: 700, height: 540)
     }
 }

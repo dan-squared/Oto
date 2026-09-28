@@ -2,10 +2,10 @@
 //  PrivacyHistoryPane.swift
 //  Oto
 //
-//  Phase 6A: opt-in history + privacy behind one toolbar tab. Subsections
-//  ride an in-content segmented Picker (D3). History is off by default and
+//  Opt-in history + privacy in one page. History is off by default and
 //  stores final text only; recovery is Copy + manual paste (the person picks
-//  target and timing) — no re-post path in this pane.
+//  target and timing) — no re-post path in this pane. Same logic as before —
+//  only the surface changed.
 //
 
 import AppKit
@@ -34,12 +34,15 @@ struct PrivacyHistoryPane: View {
     @State private var speechText = "Checking…"
 
     var body: some View {
-        Form {
-            Picker("Privacy & History", selection: $section) {
-                ForEach(PaneSection.allCases) { Text($0.rawValue).tag($0) }
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Spacer(minLength: 0)
+                OtoSegmented(
+                    options: PaneSection.allCases.map { ($0, $0.rawValue) },
+                    selection: $section
+                )
+                Spacer(minLength: 0)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
 
             if section == .history {
                 historySection
@@ -47,7 +50,6 @@ struct PrivacyHistoryPane: View {
                 privacySection
             }
         }
-        .formStyle(.grouped)
         .onChange(of: historyEnabled) { _, new in
             history.setEnabled(new)
             if !new { historyPage = 1 }
@@ -77,84 +79,97 @@ struct PrivacyHistoryPane: View {
     // MARK: - History
 
     private var historySection: some View {
-        Section("History") {
-            Toggle("Remember transcripts", isOn: $historyEnabled)
-            Text("Kept on this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Turning off stops new saves; nothing is uploaded, ever.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            OtoCaption(text: "History")
+            OtoCard {
+                OtoLine(
+                    "Remember transcripts",
+                    "Kept on this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Turning off stops new saves; nothing is uploaded, ever."
+                ) {
+                    OtoSwitch(on: $historyEnabled)
+                }
+            }
 
             if !historyEnabled {
-                ContentUnavailableView(
-                    "History is off",
-                    systemImage: "clock",
-                    description: Text("Turn it on to recall past dictation.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 240)
+                OtoCard {
+                    OtoNothing(
+                        icon: .clock,
+                        text: "History is off",
+                        detail: "Turn it on to recall past dictation."
+                    )
+                }
             } else if history.entries.isEmpty {
-                ContentUnavailableView(
-                    "No remembered transcripts",
-                    systemImage: "clock",
-                    description: Text("Finished dictation appears here.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 240)
+                OtoCard {
+                    OtoNothing(
+                        icon: .clock,
+                        text: "No remembered transcripts",
+                        detail: "Finished dictation appears here."
+                    )
+                }
             } else {
                 let pageCount = HistoryPage.pageCount(total: history.entries.count)
-                ForEach(HistoryPage.slice(items: history.entries, page: historyPage)) { entry in
-                    VStack(alignment: .leading) {
-                        Text(entry.finalText)
-                            .lineLimit(3)
-                        HStack {
-                            Text(entry.bundleIdentifier ?? "Unknown app")
-                            Text("·")
-                            Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        HStack {
-                            Button("Copy") { copyEntry(entry) }
-                            Spacer()
-                            Button("Delete", role: .destructive) {
-                                Task { await history.remove(id: entry.id) }
+                OtoCard {
+                    ForEach(Array(HistoryPage.slice(items: history.entries, page: historyPage).enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 { OtoRule() }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.finalText)
+                                .font(.system(size: 13))
+                                .foregroundStyle(OtoPalette.ink)
+                                .lineLimit(3)
+                            HStack {
+                                Text(entry.bundleIdentifier ?? "Unknown app")
+                                Text("·")
+                                Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
                             }
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(OtoPalette.muted)
+                            HStack(spacing: 12) {
+                                OtoQuick("Copy") { copyEntry(entry) }
+                                OtoQuick("Delete", tint: .red) {
+                                    Task { await history.remove(id: entry.id) }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.top, 4)
                         }
-                        .font(.caption)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
                     }
                 }
-                HStack {
-                    Button("Clear all…", role: .destructive) { showClearConfirm = true }
-                    Spacer()
+                HStack(spacing: 12) {
+                    OtoPill("Clear all…", tint: .red) { showClearConfirm = true }
+                    Spacer(minLength: 0)
                 }
                 // Footer: newest-first pages, 10 per page. Page count caps at
                 // 10 by construction (100-entry bound), so numbered buttons
                 // never need ellipsis logic.
-                HStack {
-                    Button("Previous") {
+                HStack(spacing: 8) {
+                    OtoPill("Previous") {
                         if historyPage > 1 { historyPage -= 1 }
                     }
                     .disabled(historyPage <= 1)
                     ForEach(1...pageCount, id: \.self) { number in
                         if number == historyPage {
-                            Button("\(number)") { historyPage = number }
-                                .buttonStyle(.borderedProminent)
+                            OtoPill("\(number)", filled: true) { historyPage = number }
                         } else {
-                            Button("\(number)") { historyPage = number }
-                                .buttonStyle(.link)
+                            OtoPill("\(number)") { historyPage = number }
                         }
                     }
-                    Button("Next") {
+                    OtoPill("Next") {
                         if historyPage < pageCount { historyPage += 1 }
                     }
                     .disabled(historyPage >= pageCount)
-                    Spacer()
+                    Spacer(minLength: 0)
                     Text("Page \(historyPage) of \(pageCount)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(OtoPalette.muted)
                 }
             }
             if let feedback {
                 Text(feedback)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(OtoPalette.muted)
+                    .padding(.leading, 2)
             }
         }
     }
@@ -168,30 +183,38 @@ struct PrivacyHistoryPane: View {
     // MARK: - Privacy
 
     private var privacySection: some View {
-        Section("Privacy") {
-            LabeledContent("Microphone", value: micText)
-            if micText != "Allowed" {
-                Button("Allow microphone access") {
-                    Task {
-                        _ = await permissions.ensureMicrophone()
-                        refreshPermissions()
+        VStack(alignment: .leading, spacing: 6) {
+            OtoCaption(text: "Privacy")
+            OtoCard {
+                OtoLine("Microphone", micText) {
+                    if micText != "Allowed" {
+                        OtoPill("Allow microphone access") {
+                            Task {
+                                _ = await permissions.ensureMicrophone()
+                                refreshPermissions()
+                            }
+                        }
                     }
                 }
-            }
-            LabeledContent("Accessibility", value: axTrusted ? "Allowed" : "Not allowed")
-            if !axTrusted {
-                Button("Open Accessibility settings") {
-                    requestAccessibilityPrompt()
-                    Task {
-                        try? await Task.sleep(for: .seconds(2))
-                        refreshPermissions()
+                OtoRule()
+                OtoLine("Accessibility", axTrusted ? "Allowed" : "Not allowed") {
+                    if !axTrusted {
+                        OtoPill("Open Accessibility settings") {
+                            requestAccessibilityPrompt()
+                            Task {
+                                try? await Task.sleep(for: .seconds(2))
+                                refreshPermissions()
+                            }
+                        }
                     }
                 }
+                OtoRule()
+                OtoLine("Speech recognition", speechText) { EmptyView() }
             }
-            LabeledContent("Speech recognition", value: speechText)
             Text("Oto stores what you choose: dictionary rules, snippets, and — only if you turn it on — final transcripts. Never audio, never other apps' contents, never clipboard snapshots. Intelligence features would ask separately; none exist in this build.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11.5))
+                .foregroundStyle(OtoPalette.muted)
+                .padding(.leading, 2)
         }
     }
 

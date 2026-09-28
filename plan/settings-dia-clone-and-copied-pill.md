@@ -238,3 +238,25 @@ used in-tree. No new entitlements; no private API; no dependency.
 
 One: §2 "colors verbatim" — recommended YES (pairs carry both schemes,
 so light mode stays correct). Say `execute` to build as specced.
+
+## 9. Addendum — HugeIcons (added at execute time)
+
+- Official Swift package is account-gated (hugeicons.com/docs); no
+  public SPM URL and no MCP/project tooling to add packages without
+  hand-editing the pbxproj (banned). Per the user's trick: installed
+  `@hugeicons/core-free-icons@4.3.5` (npm, MIT, 6,000+ Stroke Rounded,
+  free for commercial) into `.context/hugeicons-src/`, extracted 15
+  icons, deleted everything else (tarballs + 6,000-file package gone;
+  `selected/*.js` kept as regeneration reference).
+- Free set uses only absolute M/L/H/V/C/Z (+ one circle) — parsed with
+  a Logomark-style parser. Bodies generated into
+  `Oto/UI/Theme/OtoIconData.swift` (header pins source/version/license;
+  regenerate, never hand-edit). `OtoIcon`/`OtoIconView` is the single
+  icon slot: all 16 SF Symbol usages migrated except
+  `MenuBarExtra("Oto", systemImage:)` (API takes an SF string —
+  irreducible) and `ContentUnavailableView(systemImage:)` (replaced
+  with custom `OtoNothing` views).
+- Icon map: xmark Cancel01, trash Delete02, warning Alert02, gear
+  Settings01, waveform AudioWaveform, mic Mic01, book Book01, clock
+  Clock01, quote QuoteDown, tap Tap01, check Tick01, search Search01,
+  accessibility Accessibility, archive Archive01, keyboard Keyboard.

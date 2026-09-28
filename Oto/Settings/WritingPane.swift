@@ -2,10 +2,11 @@
 //  WritingPane.swift
 //  Oto
 //
-//  Phase 6A: dictionary + snippets behind one toolbar tab. Subsections ride
-//  an in-content segmented Picker (D3: never a nested TabView, never six flat
-//  tabs). Every control binds a real store; sheets carry validation +
-//  test/preview; transfer uses fileImporter/fileExporter; deletion confirms.
+//  Dictionary + snippets in one page. Subsections ride an in-content
+//  segmented control (never a nested TabView). Every control binds a real
+//  store; sheets carry validation + test/preview; transfer uses
+//  fileImporter/fileExporter; deletion confirms. Same logic as before —
+//  only the surface changed.
 //
 
 import SwiftUI
@@ -55,12 +56,15 @@ struct WritingPane: View {
     @State private var showClearDictionaryConfirm = false
 
     var body: some View {
-        Form {
-            Picker("Writing", selection: $section) {
-                ForEach(PaneSection.allCases) { Text($0.rawValue).tag($0) }
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Spacer(minLength: 0)
+                OtoSegmented(
+                    options: PaneSection.allCases.map { ($0, $0.rawValue) },
+                    selection: $section
+                )
+                Spacer(minLength: 0)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
 
             if section == .dictionary {
                 dictionarySection
@@ -68,7 +72,6 @@ struct WritingPane: View {
                 snippetSection
             }
         }
-        .formStyle(.grouped)
         .sheet(isPresented: $addingRule) {
             DictionaryRuleEditor(rule: nil, dictionary: dictionary) { saved in
                 addingRule = false
@@ -121,60 +124,73 @@ struct WritingPane: View {
     // MARK: - Dictionary
 
     private var dictionarySection: some View {
-        Section("Dictionary") {
+        VStack(alignment: .leading, spacing: 6) {
+            OtoCaption(text: "Dictionary")
             if dictionary.rules.isEmpty {
-                ContentUnavailableView(
-                    "No dictionary rules",
-                    systemImage: "text.book.closed",
-                    description: Text("Add a spoken form and its replacement. Rules apply to future dictation.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 240)
-            } else {
-                ForEach(dictionary.rules) { rule in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text("“\(rule.spoken)” → “\(rule.replacement)”")
-                            Text(rule.bundleID ?? "Everywhere")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { rule.isEnabled },
-                            set: { newValue in
-                                _ = Task { await toggleRule(rule, enabled: newValue) }
-                            }
-                        ))
-                        .labelsHidden()
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { editingRule = rule }
+                OtoCard {
+                    OtoNothing(
+                        icon: .book,
+                        text: "No dictionary rules",
+                        detail: "Add a spoken form and its replacement. Rules apply to future dictation."
+                    )
                 }
-                .onDelete { offsets in
-                    Task {
-                        for index in offsets {
-                            await dictionary.remove(id: dictionary.rules[index].id)
+            } else {
+                OtoCard {
+                    ForEach(Array(dictionary.rules.enumerated()), id: \.element.id) { index, rule in
+                        if index > 0 { OtoRule() }
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("“\(rule.spoken)” → “\(rule.replacement)”")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(OtoPalette.ink)
+                                Text(rule.bundleID ?? "Everywhere")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(OtoPalette.muted)
+                            }
+                            Spacer(minLength: 8)
+                            OtoSwitch(on: Binding(
+                                get: { rule.isEnabled },
+                                set: { newValue in
+                                    _ = Task { await toggleRule(rule, enabled: newValue) }
+                                }
+                            ))
                         }
-                        pushRules()
+                        .padding(.horizontal, 14)
+                        .padding(.top, 11)
+                        HStack {
+                            OtoQuick("Delete", tint: .red) {
+                                Task {
+                                    await dictionary.remove(id: rule.id)
+                                    pushRules()
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 11)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingRule = rule }
                     }
                 }
             }
-            HStack {
-                Button("Add rule") { addingRule = true }
-                Spacer()
-                Button("Import") { showImporter = true }
-                Button("Export") { runExport() }
-                Button("Clear", role: .destructive) { showClearDictionaryConfirm = true }
+            HStack(spacing: 12) {
+                OtoPill("Add rule") { addingRule = true }
+                Spacer(minLength: 0)
+                OtoPill("Import") { showImporter = true }
+                OtoPill("Export") { runExport() }
+                OtoPill("Clear", tint: .red) { showClearDictionaryConfirm = true }
                     .disabled(dictionary.rules.isEmpty)
             }
             if let importReport {
                 Text(importReport)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(OtoPalette.muted)
+                    .padding(.leading, 2)
             }
             Text("Rules replace whole words only — never inside links, emails, or file paths. App-scoped rules win over global ones in their app.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11.5))
+                .foregroundStyle(OtoPalette.muted)
+                .padding(.leading, 2)
         }
     }
 
@@ -227,52 +243,55 @@ struct WritingPane: View {
     // MARK: - Snippets
 
     private var snippetSection: some View {
-        Section("Snippets") {
+        VStack(alignment: .leading, spacing: 6) {
+            OtoCaption(text: "Snippets")
             if snippets.snippets.isEmpty {
-                ContentUnavailableView(
-                    "No snippets",
-                    systemImage: "text.quote",
-                    description: Text("Save repeated text once, then copy it wherever you need it.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 240)
-            } else {
-                ForEach(snippets.snippets) { snippet in
-                    VStack(alignment: .leading) {
-                        Text(snippet.name)
-                        Text(snippet.preview())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        Text(snippet.bundleID ?? "Everywhere")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                        HStack {
-                            Button("Copy") { copySnippet(snippet) }
-                            Button("Delete", role: .destructive) {
-                                Task { await snippets.remove(id: snippet.id) }
-                            }
-                            Spacer()
-                        }
-                        .font(.caption)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { editingSnippet = snippet }
+                OtoCard {
+                    OtoNothing(
+                        icon: .quote,
+                        text: "No snippets",
+                        detail: "Save repeated text once, then copy it wherever you need it."
+                    )
                 }
-                .onDelete { offsets in
-                    Task {
-                        for index in offsets {
-                            await snippets.remove(id: snippets.snippets[index].id)
+            } else {
+                OtoCard {
+                    ForEach(Array(snippets.snippets.enumerated()), id: \.element.id) { index, snippet in
+                        if index > 0 { OtoRule() }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(snippet.name)
+                                .font(.system(size: 13))
+                                .foregroundStyle(OtoPalette.ink)
+                            Text(snippet.preview())
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(OtoPalette.muted)
+                                .lineLimit(2)
+                            Text(snippet.bundleID ?? "Everywhere")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(OtoPalette.faint)
+                            HStack(spacing: 12) {
+                                OtoQuick("Copy") { copySnippet(snippet) }
+                                OtoQuick("Delete", tint: .red) {
+                                    Task { await snippets.remove(id: snippet.id) }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.top, 4)
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingSnippet = snippet }
                     }
                 }
             }
             HStack {
-                Button("Add snippet") { addingSnippet = true }
-                Spacer()
+                OtoPill("Add snippet") { addingSnippet = true }
+                Spacer(minLength: 0)
             }
             Text("Snippets insert only when you choose — speaking a snippet's name never expands it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11.5))
+                .foregroundStyle(OtoPalette.muted)
+                .padding(.leading, 2)
         }
     }
 

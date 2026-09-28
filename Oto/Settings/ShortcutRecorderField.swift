@@ -204,7 +204,7 @@ enum KeyNames: Sendable {
 /// One slot's kind picker. Bare-modifier and F-key capture are NOT in the
 /// recorder; they arrive via these presets (Hold key / Dictation key),
 /// mirroring the old TriggerChoice — zero new validation rules.
-enum SlotKindChoice: String, CaseIterable, Identifiable {
+enum SlotKindChoice: String, CaseIterable, Identifiable, Hashable {
     case holdKey = "Hold key"
     case dictationKey = "Dictation key"
     case combo = "Custom"

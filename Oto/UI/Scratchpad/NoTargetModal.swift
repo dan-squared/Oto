@@ -41,39 +41,14 @@ enum CatcherText: Sendable {
         wordCount(text) > wordLimit
     }
 
+    /// The over-limit pill latch: exactly this word, centered, padded.
+    /// Long transcripts never reach pill pixels — recovery owns them.
+    nonisolated static let overLimitMessage = "Copied"
+
     nonisolated static func displayWords(_ text: String, limit: Int = wordLimit) -> String {
         let words = text.split(whereSeparator: \.isWhitespace)
         guard words.count > limit else { return text }
         return words.prefix(limit).joined(separator: " ") + "…"
-    }
-
-    /// Pill-sized display for over-limit transcripts: leading words
-    /// greedily filled to fit, suffixed with Copied. Single line that
-    /// never overflows the current pill width — the switch from dictation
-    /// visuals is a re-render, never a resize. Pure + unit-tested.
-    nonisolated static func pillWords(
-        _ text: String,
-        maxWidth: CGFloat = 76,
-        fontSize: CGFloat = 11
-    ) -> String {
-        let font = NSFont.systemFont(ofSize: fontSize)
-        func fits(_ s: String) -> Bool {
-            (s as NSString).boundingRect(
-                with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin],
-                attributes: [.font: font]
-            ).width <= maxWidth
-        }
-        let suffix = "… Copied"
-        guard fits(suffix) else { return "Copied" }
-        var words: [String] = []
-        for word in text.split(whereSeparator: \.isWhitespace) {
-            let candidate = (words + [String(word)]).joined(separator: " ") + suffix
-            guard fits(candidate) else { break }
-            words.append(String(word))
-        }
-        guard !words.isEmpty else { return "Copied" }
-        return words.joined(separator: " ") + suffix
     }
 }
 
@@ -399,40 +374,11 @@ struct CatcherXStyle: ButtonStyle {
     }
 }
 
-/// Copy press/hover response (v7): rest pixels identical to the system
-/// `.bordered` gray button — only motion is custom. Hover squishes to
-/// 0.97 (springs back on leave), click to 0.92 with one rebound.
-/// Disabled ("Copied") passes through with the same look.
-struct CatcherCopyStyle: ButtonStyle {
-    var background: Color
-    var hovering: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.body)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 5)
-            .background(background.opacity(configuration.isPressed ? 1.0 : 0.9), in: RoundedRectangle(cornerRadius: 8))
-            .foregroundStyle(.white)
-            .scaleEffect(configuration.isPressed ? 0.92 : hovering ? 0.97 : 1.0)
-            .animation(
-                .spring(response: 0.28, dampingFraction: 0.55),
-                value: hovering
-            )
-            .animation(
-                .spring(response: 0.28, dampingFraction: 0.55),
-                value: configuration.isPressed
-            )
-    }
-}
-
 struct NoTargetModalView: View {
     let controller: NoTargetModalController
     @Environment(\.colorScheme) private var scheme
     /// ✕ hover state (v7: brighten only — never resize on hover).
     @State private var xHovering = false
-    /// Copy hover state (v7: subtle spring squish, bounces back).
-    @State private var copyHovering = false
 
     var body: some View {
         // v4 minimal surface: three stacked zones — dismiss row, words,
@@ -453,8 +399,7 @@ struct NoTargetModalView: View {
                     HStack {
                         Spacer()
                         Button { controller.hide() } label: {
-                            Image(systemName: "xmark")
-                                .font(.title3)
+                            OtoIconView(icon: .xmark, size: 14)
                         }
                         .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
                         .accessibilityLabel("Dismiss")
@@ -469,16 +414,11 @@ struct NoTargetModalView: View {
                     Spacer(minLength: 0)
                     HStack {
                         Spacer()
-                        Button(controller.copied ? "Copied" : "Copy") {
+                        OtoPill(controller.copied ? "Copied" : "Copy", filled: true) {
                             controller.copy()
                         }
-                        .buttonStyle(CatcherCopyStyle(
-                            background: palette.copyBackground,
-                            hovering: copyHovering && !controller.copied
-                        ))
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
-                        .onHover { copyHovering = $0 }
                         .disabled(controller.copied)
                     }
                     .padding(.top, 18)

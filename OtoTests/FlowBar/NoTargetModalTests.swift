@@ -166,20 +166,18 @@ struct NoTargetModalTests {
         #expect(CatcherLayout.textWidth(cardWidth: 464) == innerWidth)
     }
 
-    @Test func pillWordsFitPillWidth() {
-        // Greedy fill at pill metrics: never overflows, always Copied.
-        let shown = CatcherText.pillWords(
-            Array(repeating: "word", count: 101).joined(separator: " ")
-        )
-        #expect(shown.hasSuffix("Copied"))
+    @Test func overLimitLatchIsShortCenteredLiteral() {
+        // The over-limit pill shows exactly this — centered in the fixed
+        // pill frame, padded by the symmetric label insets. No transcript
+        // words ever reach pill pixels (recovery owns them).
+        #expect(CatcherText.overLimitMessage == "Copied")
         let font = NSFont.systemFont(ofSize: 11)
-        let width = (shown as NSString).boundingRect(
+        let width = (CatcherText.overLimitMessage as NSString).boundingRect(
             with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin],
             attributes: [.font: font]
         ).width
         #expect(width <= 76)
-        #expect(CatcherText.pillWords("hi") == "hi… Copied")
     }
 
     @Test func copyShowsCopiedThenCloses() async {

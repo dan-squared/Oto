@@ -58,6 +58,11 @@ final class OnboardingWindowController {
                 defer: false
             )
             window.title = "Welcome to Oto"
+            // Dressed toward the reference welcome: content flows under a
+            // transparent titlebar (standard live lights stay — house rule).
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.backgroundColor = OtoPalette.NS.ground
             window.center()
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: freshView())

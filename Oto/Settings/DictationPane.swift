@@ -2,15 +2,17 @@
 //  DictationPane.swift
 //  Oto
 //
+//  Everything that makes dictation work: speech assets, shortcut, microphone,
+//  permissions, and a safe field to try it in. Every row binds a real
+//  backend; rows without backends do not exist here. Same logic as before —
+//  only the surface changed (Caption + Card + Line rows).
+//
 
 import ApplicationServices
 import Carbon.HIToolbox
 import Speech
 import SwiftUI
 
-/// Everything that makes dictation work: speech assets, shortcut, microphone,
-/// permissions, and a safe field to try it in. Every row binds to a real
-/// backend; rows without backends do not exist here.
 struct DictationPane: View {
     let dispatch: ShortcutDispatch
     let preparer: SpeechAssetPreparer
@@ -39,35 +41,37 @@ struct DictationPane: View {
     @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
 
     var body: some View {
-        Form {
-            Section("Speech") {
-                LabeledContent("Readiness", value: readinessText)
-                LabeledContent("Language", value: languageText)
-                Button("Prepare offline speech") {
-                    Task { await runPrepare() }
-                }
-                .disabled(isPreparing)
-                if let prepareFeedback {
-                    Text(prepareFeedback)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Speech")
+                OtoCard {
+                    OtoLine("Readiness", readinessText) { EmptyView() }
+                    OtoRule()
+                    OtoLine("Language", languageText) { EmptyView() }
+                    OtoRule()
+                    HStack {
+                        OtoPill("Prepare offline speech") {
+                            Task { await runPrepare() }
+                        }
+                        .disabled(isPreparing)
+                        if let prepareFeedback {
+                            Text(prepareFeedback)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(OtoPalette.muted)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
                 }
             }
 
-            Section("Shortcut") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Shortcuts")
-                            .font(.headline)
-                        Text(shortcutSummary)
-                            .foregroundStyle(.secondary)
-                        Text(shortcutStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Change") {
-                        showShortcutModal = true
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Shortcut")
+                OtoCard {
+                    OtoLine(shortcutSummary, shortcutStatus) {
+                        OtoPill("Change") {
+                            showShortcutModal = true
+                        }
                     }
                 }
                 .sheet(isPresented: $showShortcutModal) {
@@ -75,60 +79,85 @@ struct DictationPane: View {
                 }
             }
 
-            Section("Microphone") {
-                // No enumeration seam exists: Oto follows the system default
-                // input (Yap parity). A picker here would be a dead control.
-                LabeledContent("Input", value: "System default input")
-                LabeledContent("Status", value: micText)
-                if micText != "Allowed" {
-                    Button("Allow microphone access") {
-                        Task {
-                            _ = await permissions.ensureMicrophone()
-                            refreshPermissions()
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Microphone")
+                OtoCard {
+                    // No enumeration seam exists: Oto follows the system default
+                    // input (Yap parity). A picker here would be a dead control.
+                    OtoLine("Input", "System default input") { EmptyView() }
+                    OtoRule()
+                    OtoLine("Status", micText) {
+                        if micText != "Allowed" {
+                            OtoPill("Allow microphone access") {
+                                Task {
+                                    _ = await permissions.ensureMicrophone()
+                                    refreshPermissions()
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            Section("Permissions") {
-                LabeledContent("Accessibility", value: axTrusted ? "Allowed" : "Not allowed")
-                if !axTrusted {
-                    Button("Open Accessibility settings") {
-                        requestAccessibilityPrompt()
-                        Task {
-                            try? await Task.sleep(for: .seconds(2))
-                            refreshPermissions()
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Permissions")
+                OtoCard {
+                    OtoLine("Accessibility", axTrusted ? "Allowed" : "Not allowed") {
+                        if !axTrusted {
+                            OtoPill("Open Accessibility settings") {
+                                requestAccessibilityPrompt()
+                                Task {
+                                    try? await Task.sleep(for: .seconds(2))
+                                    refreshPermissions()
+                                }
+                            }
                         }
                     }
+                    OtoRule()
+                    OtoLine("Speech recognition", speechText) { EmptyView() }
                 }
-                LabeledContent("Speech recognition", value: speechText)
             }
 
-            Section("Catcher") {
-                Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
-                Text("When dictation finishes with no text field to receive it, Oto opens a small window with the transcript and a Copy button. Off: the transcript is copied to the clipboard automatically instead.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Catcher")
+                OtoCard {
+                    OtoLine(
+                        "Show catcher when there's nowhere to paste",
+                        "When dictation finishes with no text field to receive it, Oto opens a small window with the transcript and a Copy button. Off: the transcript is copied to the clipboard automatically instead."
+                    ) {
+                        OtoSwitch(on: $catcherEnabled)
+                    }
+                }
             }
 
-            Section("Media") {
-                Toggle("Mute media while dictating", isOn: $muteMedia)
-                Text("Oto silences speaker output while you dictate so it can't bleed into the transcript, then restores your exact volume. A relaunch restores it even if Oto was killed mid-dictation.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Media")
+                OtoCard {
+                    OtoLine(
+                        "Mute media while dictating",
+                        "Oto silences speaker output while you dictate so it can't bleed into the transcript, then restores your exact volume. A relaunch restores it even if Oto was killed mid-dictation."
+                    ) {
+                        OtoSwitch(on: $muteMedia)
+                    }
+                }
             }
 
-            Section("Try it") {
-                TextEditor(text: $trialText)
-                    .frame(minHeight: 70)
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Try it")
+                OtoCard {
+                    TextEditor(text: $trialText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(OtoPalette.ink)
+                        .frame(minHeight: 70)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                }
                 Text("Dictate anywhere, or into this field — Oto captures whichever app is frontmost, including its own window.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(OtoPalette.muted)
+                    .padding(.leading, 2)
             }
         }
-        .formStyle(.grouped)
-        // No .navigationTitle: sections self-label, and a stacked
-        // sidebar+detail title inflates the toolbar zone (§11).
         .task {
             syncFromDispatch()
             await refreshSpeech()
