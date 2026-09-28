@@ -37,17 +37,24 @@ actor FakeSpeechService: SpeechServing {
     /// When false, `prepare()` suspends until `openPrepareGate()`.
     private var prepareGateOpen: Bool
     private var prepareWaiters: [CheckedContinuation<Void, Never>] = []
+    /// When false, `finish()` suspends until `openFinishGate()` (audit:
+    /// proves cancel-wins over in-flight finalize, the exact window the
+    /// terminal-state reorder protects).
+    private var finishGateOpen: Bool
+    private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         finalText: String = "",
         prepareError: (any Error)? = nil,
         finishError: (any Error)? = nil,
-        prepareGateOpen: Bool = true
+        prepareGateOpen: Bool = true,
+        finishGateOpen: Bool = true
     ) {
         self.finalText = finalText
         self.prepareError = prepareError
         self.finishError = finishError
         self.prepareGateOpen = prepareGateOpen
+        self.finishGateOpen = finishGateOpen
     }
 
     func prepare() async throws {
@@ -64,6 +71,11 @@ actor FakeSpeechService: SpeechServing {
 
     func finish() async throws -> String {
         finishCalls += 1
+        if !finishGateOpen {
+            await withCheckedContinuation { continuation in
+                finishWaiters.append(continuation)
+            }
+        }
         if let finishError {
             throw finishError
         }
@@ -82,6 +94,15 @@ actor FakeSpeechService: SpeechServing {
         prepareGateOpen = true
         let waiters = prepareWaiters
         prepareWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    func openFinishGate() {
+        finishGateOpen = true
+        let waiters = finishWaiters
+        finishWaiters = []
         for waiter in waiters {
             waiter.resume()
         }

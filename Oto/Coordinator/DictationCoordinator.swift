@@ -62,6 +62,11 @@ actor DictationCoordinator {
     /// not the MainActor — default project isolation is); tests inject a
     /// pure override so they never touch TCC (nil = real read).
     private let micDeniedOverride: (@Sendable () -> Bool)?
+    /// Phase 7 media duck (spike-green): muted output while recording.
+    /// Nil in tests and when unwired — every call site is optional, so
+    /// duck-off sessions behave exactly as before. Injected (protocol)
+    /// so coordinator tests never touch the HAL.
+    private let mediaDuck: (any MediaDucking)?
 
     /// Phase 1 observability: state transitions are the only visible trace
     /// of fake sessions (no Flow Bar yet). Watch in Console.app.
@@ -74,7 +79,8 @@ actor DictationCoordinator {
         inserter: any TextInserting,
         pipeline: TranscriptPipeline = TranscriptPipeline(),
         history: HistoryStore?,
-        micDeniedOverride: (@Sendable () -> Bool)? = nil
+        micDeniedOverride: (@Sendable () -> Bool)? = nil,
+        mediaDuck: (any MediaDucking)? = nil
     ) {
         self.audio = audio
         self.speech = speech
@@ -83,6 +89,7 @@ actor DictationCoordinator {
         self.pipeline = pipeline
         self.history = history
         self.micDeniedOverride = micDeniedOverride
+        self.mediaDuck = mediaDuck
     }
 
     /// Live rule refresh from the dictionary store (Writing pane saves).
@@ -159,6 +166,7 @@ actor DictationCoordinator {
         log.info("cancelled \(sessionID.uuidString.prefix(8), privacy: .public)")
         await audio.cancel()
         await speech.cancel()
+        await restoreMedia(sessionID: sessionID)
     }
 
     /// One-line human-readable summary of the current/terminal state, for
@@ -193,6 +201,7 @@ actor DictationCoordinator {
             case .microphoneDenied: reason = "microphone denied"
             case .noAudioCaptured: reason = "no audio captured — check the microphone"
             case .targetGone: reason = "target app closed"
+            case .noTextField: reason = "no text field focused"
             case .insertionFailed(let detail): reason = "insertion failed (\(detail))"
             }
             let kept = recoveryTranscript == nil ? "" : ", transcript kept"
@@ -268,6 +277,9 @@ actor DictationCoordinator {
         } catch {
             guard currentSessionID == sessionID else { return }
             await audio.stop()
+            // Suspension crossed: cancel may have won mid-stop. Re-check
+            // before failing, or cancel gets overwritten (cancel-wins).
+            guard currentSessionID == sessionID else { return }
             currentSessionID = nil
             // Distinct mic recovery (02 table): readiness errors map
             // precisely, everything else keeps the preparation bucket.
@@ -295,6 +307,14 @@ actor DictationCoordinator {
         guard case .starting = state else { return }
         state = .recording(context)
         recordingBeganAt = ContinuousClock().now
+        await mediaDuck?.duck(sessionID: sessionID)
+        // Suspension crossed: a cancel may have won mid-duck. Re-check
+        // identity — a late duck with no owner restores immediately, so
+        // no path can leave the user muted.
+        guard currentSessionID == sessionID else {
+            await restoreMedia(sessionID: sessionID)
+            return
+        }
     }
 
     /// Silent-skip decision: true only for whole-session silence with
@@ -312,6 +332,12 @@ actor DictationCoordinator {
         return await audio.sessionPeakAmplitude() < Self.silencePeakThreshold
     }
 
+    /// Media-duck restore funnel: every terminal path calls this, so no
+    /// session can end muted. Nil-duck and already-restored are no-ops.
+    private func restoreMedia(sessionID: UUID) async {
+        await mediaDuck?.restore(sessionID: sessionID)
+    }
+
     private func finalizeSession(sessionID: UUID, context: SessionContext) async {
         await audio.stop()
 
@@ -323,8 +349,12 @@ actor DictationCoordinator {
         // buffer is captured, never on a timer mid-session.
         if await shouldSkipTranscription(context: context) {
             guard currentSessionID == sessionID else { return }
+            // Terminal FIRST: a cancel landing inside restore must not be
+            // overwritten afterward (cancel-wins). Restore is idempotent
+            // either way, so ordering it last is always safe.
             currentSessionID = nil
             state = .completed(context)
+            await restoreMedia(sessionID: sessionID)
             log.info("completed (silent, loader skipped) \(sessionID.uuidString.prefix(8), privacy: .public)")
             return
         }
@@ -346,6 +376,7 @@ actor DictationCoordinator {
             } else {
                 state = .failed(context, .speechPreparation(error.localizedDescription))
             }
+            await restoreMedia(sessionID: sessionID)
             return
         }
 
@@ -356,8 +387,10 @@ actor DictationCoordinator {
         let clean = pipeline.process(raw, for: context.target)
         guard !clean.isEmpty else {
             // Empty final: complete without insertion (02 timeline).
+            // Terminal first (cancel-wins over in-flight restore).
             currentSessionID = nil
             state = .completed(context)
+            await restoreMedia(sessionID: sessionID)
             log.info("completed (empty, no insertion) \(sessionID.uuidString.prefix(8), privacy: .public)")
             return
         }
@@ -377,9 +410,11 @@ actor DictationCoordinator {
         let alive = await targetService.isAlive(context.target)
         guard currentSessionID == sessionID else { return }
         guard alive else {
+            // Terminal first (cancel-wins over in-flight restore).
             currentSessionID = nil
             recoveryTranscript = Transcript(text: clean)
             state = .failed(context, .targetGone)
+            await restoreMedia(sessionID: sessionID)
             log.info("failed target-gone, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
             return
         }
@@ -388,7 +423,10 @@ actor DictationCoordinator {
         let result = await inserter.insert(clean, into: context.target)
 
         guard currentSessionID == sessionID else { return }
+        // Terminal first (cancel-wins over in-flight restore); the switch
+        // below only sets state, never suspends, so no second guard needed.
         currentSessionID = nil
+        await restoreMedia(sessionID: sessionID)
         switch result {
         case .inserted:
             state = .completed(context)
@@ -398,6 +436,13 @@ actor DictationCoordinator {
             recoveryTranscript = Transcript(text: clean)
             state = .failed(context, .insertionFailed(reason))
             log.info("failed insertion, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public) reason=\(reason, privacy: .public)")
+        case .noEditableField:
+            // Void-paste divert: focus with nowhere to paste. Same
+            // recoverability as insertion failure, distinct case so the
+            // catcher (and only the catcher) fires for it.
+            recoveryTranscript = Transcript(text: clean)
+            state = .failed(context, .noTextField)
+            log.info("failed no-text-field, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
         }
     }
 }

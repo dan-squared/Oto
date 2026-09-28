@@ -45,6 +45,9 @@ final class FlowBarPanel {
     private var bottomGhost: NSPanel?
     private var topGhostView: SnapIndicatorView?
     private var bottomGhostView: SnapIndicatorView?
+    /// Ghost fade generation: a new grab supersedes a pending fade-out
+    /// (same discipline as hide/morph generations).
+    private var ghostGeneration = 0
 
     // MARK: - Shared nonactivating recipe (pill + catcher modal)
 
@@ -71,6 +74,33 @@ final class FlowBarPanel {
         // backdrop (seen 2026-09-22). This kills it at the source.
         contentView.wantsLayer = true
         contentView.layer?.backgroundColor = NSColor.clear.cgColor
+        panel.contentView = contentView
+        return panel
+    }
+
+    /// SwiftUI-hosting variant (v6 stroke kill). Panel chrome identical
+    /// to `makePanel` — EXCEPT it never forces `wantsLayer`: an
+    /// NSHostingView owns its layer policy, and forcing one invites
+    /// SwiftUI to resolve a default opaque root background (the crisp
+    /// window-bounds rect in the v6 screenshots). AppKit stays out of
+    /// hosting layers; transparency comes from the panel flags + the
+    /// SwiftUI root's own `Color.clear`. Used ONLY by the catcher —
+    /// pill + permission modal keep the proven `makePanel` path.
+    static func makeHostingPanel(contentView: NSView, size: NSSize) -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.animationBehavior = .none
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
         panel.contentView = contentView
         return panel
     }
@@ -215,6 +245,14 @@ final class FlowBarPanel {
 
     var isVisible: Bool { panel.isVisible }
 
+    /// Current pill frame for the catcher morph (v4): nil unless the pill
+    /// is visibly up. The controller snapshots this BEFORE the vanish
+    /// path runs (recovery routes before panel sync).
+    var frameForMorph: NSRect? {
+        guard panel.isVisible else { return nil }
+        return panel.frame
+    }
+
     private func setFrame(for width: CGFloat, on screen: NSScreen, position: FlowBarPosition, animated: Bool) {
         let frame = FlowBarPosition.frame(width: width, on: screen.visibleFrame, position: position)
         if animated {
@@ -303,6 +341,7 @@ extension FlowBarPanel: PillDragDelegate {
     func pillDragBegan() {
         guard !isDragging, let screen = pinnedScreen else { return }
         isDragging = true
+        ghostGeneration += 1
         dragStartSlot = FlowBarPosition.current()
         cancelSnapFeedback()
         SnapTickGate.reset(&tickGate)
@@ -340,11 +379,15 @@ extension FlowBarPanel: PillDragDelegate {
     func pillDragEnded(moved: Bool) {
         guard isDragging else { return }
         isDragging = false
+        // Generation-guarded fade: a grab-drop-grab inside 0.12s must not
+        // let the stale completion orderOut a live new drag (audit).
+        let generation = ghostGeneration
         for (ghost, _, _) in ghostPanels() {
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.12
                 ghost.animator().alphaValue = 0
-            }, completionHandler: {
+            }, completionHandler: { [weak self] in
+                guard self?.ghostGeneration == generation else { return }
                 ghost.orderOut(nil)
             })
         }

@@ -17,19 +17,125 @@ enum RecorderOutcome: Equatable, Sendable {
     /// Delete/backspace with empty modifiers: clear to unassigned.
     case cleared
     /// Invalid (modifier-only, plain letter, bare shift): keep old + beep.
-    case invalid
+    /// The reason names the case so the UI can explain instead of beeping.
+    case invalid(reason: RecorderInvalidReason)
     /// Valid combo captured; conflicts listed for the UI to present.
     case captured(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict])
 
     // Explicit: compared in tests from nonisolated contexts (Swift 6).
     nonisolated static func == (lhs: RecorderOutcome, rhs: RecorderOutcome) -> Bool {
         switch (lhs, rhs) {
-        case (.cancelled, .cancelled), (.cleared, .cleared), (.invalid, .invalid):
+        case (.cancelled, .cancelled), (.cleared, .cleared):
             return true
+        case (.invalid(let a), .invalid(let b)):
+            return a == b
         case (.captured(let lm, let lk, let lc), .captured(let rm, let rk, let rc)):
             return lm == rm && lk == rk && lc == rc
         default:
             return false
+        }
+    }
+}
+
+/// Why a capture was refused. One concise UI line per case (§capsule).
+enum RecorderInvalidReason: Equatable, Sendable {
+    /// Bare key with no usable modifier: would fire while typing.
+    case plainKey
+    /// Shift (only) held: unusable as a combination on its own.
+    case modifiersOnly
+    /// Two bare modifiers, no letter: a hold tracks exactly one key.
+    case chordOnly
+
+    // Explicit: compared in tests from nonisolated contexts (Swift 6).
+    nonisolated static func == (lhs: RecorderInvalidReason, rhs: RecorderInvalidReason) -> Bool {
+        switch (lhs, rhs) {
+        case (.plainKey, .plainKey), (.modifiersOnly, .modifiersOnly), (.chordOnly, .chordOnly):
+            return true
+        default:
+            return false
+        }
+    }
+
+    nonisolated var message: String {
+        switch self {
+        case .plainKey:
+            return "Letters need a modifier, or they'd fire while you type."
+        case .modifiersOnly:
+            return "Shift alone never works — add another key, or pick a bare key in presets."
+        case .chordOnly:
+            return "One key at a time — chords need a letter."
+        }
+    }
+}
+
+/// Bare-modifier capture for the recorder: a lone modifier press+release
+/// stages a `modifierHold` (bare modifiers emit `flagsChanged`, never
+/// keyDown — a keyDown-only monitor is deaf to them, which read as
+/// "not accepting"). Pure state machine; the view wires it thinly.
+/// A second distinct modifier while armed refuses immediately (a hold
+/// tracks exactly one key — silently dropping one would lie); any keyDown
+/// disarms (Escape/Delete/combo priority is checked first, as today).
+/// Untrackable codes (CapsLock has no CGEvent flag) fall through to the
+/// normal classify path, which refuses them honestly.
+struct FlagsCaptureState: Equatable, Sendable {
+    private var armed: UInt16?
+
+    enum Outcome: Equatable, Sendable {
+        case none
+        case capture(code: UInt16)
+        case chord
+
+        nonisolated static func == (lhs: Outcome, rhs: Outcome) -> Bool {
+            switch (lhs, rhs) {
+            case (.none, .none), (.chord, .chord):
+                return true
+            case (.capture(let a), .capture(let b)):
+                return a == b
+            default:
+                return false
+            }
+        }
+    }
+
+    nonisolated mutating func stepFlagsDown(code: UInt16) -> Outcome {
+        guard ModifierHoldState.flag(for: code) != nil else { return .none }
+        if let current = armed {
+            guard current != code else { return .none }
+            armed = nil
+            return .chord
+        }
+        armed = code
+        return .none
+    }
+
+    nonisolated mutating func stepFlagsUp(code: UInt16) -> Outcome {
+        guard armed == code else { return .none }
+        armed = nil
+        return .capture(code: code)
+    }
+
+    /// Any keyDown ends a pending arm (the combo path owns the gesture).
+    nonisolated mutating func stepKeyDown() {
+        armed = nil
+    }
+
+    nonisolated mutating func reset() {
+        armed = nil
+    }
+}
+
+extension FlagsCaptureState {
+    /// NSEvent modifier-flag family for a key code: press = flags contain
+    /// it, release = they don't. Pure (the view reads `event.keyCode` +
+    /// `event.modifierFlags` and feeds the state machine above).
+    nonisolated static func nsFlag(for keyCode: UInt16) -> NSEvent.ModifierFlags? {
+        switch Int(keyCode) {
+        case kVK_Shift, kVK_RightShift: return .shift
+        case kVK_Command, kVK_RightCommand: return .command
+        case kVK_Option, kVK_RightOption: return .option
+        case kVK_Control, kVK_RightControl: return .control
+        case kVK_Function: return .function
+        default: return nil
         }
     }
 }
@@ -87,7 +193,7 @@ enum ShortcutRecorderRules: Sendable {
         let isFunction = Self.functionKeyCodes.contains(keyCode)
         let hasRealModifier = !relevant.subtracting([.shift, .function]).isEmpty
         guard hasRealModifier || isFunction else {
-            return .invalid
+            return .invalid(reason: relevant.isEmpty ? .plainKey : .modifiersOnly)
         }
 
         let carbon = relevant.carbonMask
@@ -96,8 +202,8 @@ enum ShortcutRecorderRules: Sendable {
         if systemShortcuts.contains(where: { $0.keyCode == Int(keyCode) && $0.modifiers == carbon }) {
             conflicts.append(.systemShortcut)
         }
-        if isDisallowedInSandbox(modifiers: carbon, keyCode: keyCode) {
-            conflicts.append(.disallowed(reason: "Not available to sandboxed apps on this macOS version."))
+        if isReservedSystemCombo(modifiers: carbon, keyCode: keyCode) {
+            conflicts.append(.disallowed(reason: "Reserved by the system on this macOS version."))
         }
         return .captured(modifiers: UInt32(carbon), keyCode: UInt32(keyCode), conflicts: conflicts)
     }
@@ -113,10 +219,13 @@ enum ShortcutRecorderRules: Sendable {
         ]
     }
 
-    /// Combos the system will not deliver to sandboxed apps. Conservative
-    /// best-effort list (mirrors the reference `isDisallowed` concept);
-    /// device-matrix findings extend it, never shrink validation silently.
-    nonisolated static func isDisallowedInSandbox(modifiers: Int, keyCode: UInt16) -> Bool {
+    /// Combos the system reserves regardless of sandbox state (Spotlight
+    /// ⌘Space, Siri/dictation system keys, lock-screen class combos).
+    /// Conservative best-effort list; device-matrix findings extend it,
+    /// never shrink validation silently. (Was `isDisallowedInSandbox` —
+    /// renamed when the app went unsandboxed; the reservation is a
+    /// system property, not a sandbox one.)
+    nonisolated static func isReservedSystemCombo(modifiers: Int, keyCode: UInt16) -> Bool {
         // Spotlight (⌘Space), Siri/dictation system keys, and lock-screen
         // class combos never reach a sandboxed app.
         if modifiers == CarbonModifiers.command, keyCode == UInt16(kVK_Space) {

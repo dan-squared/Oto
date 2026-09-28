@@ -121,6 +121,34 @@ actor LocalPersistence {
         let dir = try url(for: "probe").deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
+
+    /// One-shot sandbox→unsandboxed migration (audit F7): Container-scoped
+    /// stores stay behind otherwise (dictionary/history silently restart
+    /// empty). Copies `*.json` from the dead Container dir ONLY when the
+    /// new home has none — never merges, never overwrites, never runs
+    /// twice (second run sees a non-empty home). Best-effort: any failure
+    /// returns silently with a log line; the stores load empty as before.
+    nonisolated static func migrateSandboxedStoreIfNeeded(
+        fileManager: FileManager = .default,
+        home: URL? = nil,
+        containerHome: URL? = nil
+    ) {
+        let fm = fileManager
+        let homeDir = home
+            ?? (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
+            .map { $0.appendingPathComponent(appDirectoryName, isDirectory: true) }
+        let oldDir = containerHome ?? fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers/app.Oto/Data/Library/Application Support/\(appDirectoryName)", isDirectory: true)
+        guard let homeDir, let old = try? fm.contentsOfDirectory(
+            at: oldDir, includingPropertiesForKeys: nil
+        ).filter({ $0.pathExtension == "json" }), !old.isEmpty else { return }
+        let current = (try? fm.contentsOfDirectory(at: homeDir, includingPropertiesForKeys: nil)) ?? []
+        guard current.isEmpty else { return }
+        try? fm.createDirectory(at: homeDir, withIntermediateDirectories: true)
+        for file in old {
+            try? fm.copyItem(at: file, to: homeDir.appendingPathComponent(file.lastPathComponent))
+        }
+    }
 }
 
 /// Codable side of persistence. @MainActor by design (see file header):

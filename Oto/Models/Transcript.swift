@@ -33,4 +33,8 @@ struct Transcript: Equatable, Sendable {
 enum InsertionResult: Equatable, Sendable {
     case inserted
     case recoverableFailure(reason: String)
+    /// Focus without an editable field (Finder, desktop, viewer): nowhere
+    /// to paste. Diverts to recovery pre-clipboard — nothing posted,
+    /// clipboard untouched. The coordinator maps this to `.noTextField`.
+    case noEditableField
 }

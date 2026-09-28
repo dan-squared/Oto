@@ -22,13 +22,34 @@ actor FakeTextInsertion: TextInserting {
 
     private(set) var calls: [(text: String, target: TargetApplication)] = []
 
-    init(result: InsertionResult = .inserted) {
+    /// When false, `insert()` suspends until `openInsertGate()` (audit:
+    /// proves cancel-wins over in-flight insertion, the post-insert
+    /// terminal window).
+    private var insertGateOpen: Bool
+    private var insertWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(result: InsertionResult = .inserted, insertGateOpen: Bool = true) {
         self.result = result
+        self.insertGateOpen = insertGateOpen
     }
 
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult {
         calls.append((text: text, target: target))
+        if !insertGateOpen {
+            await withCheckedContinuation { continuation in
+                insertWaiters.append(continuation)
+            }
+        }
         return result
+    }
+
+    func openInsertGate() {
+        insertGateOpen = true
+        let waiters = insertWaiters
+        insertWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     /// Test-only visibility into what would have been inserted. Never logged.

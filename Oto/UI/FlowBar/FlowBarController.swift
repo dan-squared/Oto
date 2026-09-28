@@ -20,17 +20,21 @@
 
 import AppKit
 import Foundation
+import os
 
 @MainActor
 final class FlowBarController {
     nonisolated static let pollInterval: UInt64 = 150_000_000
-    nonisolated static let noticeDuration: Double = 2.0
+    /// Adoption window: a parked hide waits this long for a new session
+    /// before melting (double-tap converts land inside it).
+    nonisolated static let adoptionWindowNanoseconds: UInt64 = 400_000_000
     /// Vanish grace (v6): the first hidden poll after a visible state melts
     /// the loader out immediately — no hold, no end-state. Total exit ≈
     /// one 0.12s fade + this margin.
     nonisolated static let vanishDelay: Double = 0.14
 
     let model: FlowBarModel
+    private let log = Logger(subsystem: "app.Oto", category: "flowbar")
     private let coordinator: DictationCoordinator
     private let analyzer: AudioSpectrumAnalyzer
     private let box: SpectrumFeedBox
@@ -48,13 +52,21 @@ final class FlowBarController {
     private var pollTask: Task<Void, Never>?
     private var lastRouteKey: String?
     private var lastPermissionKey: String?
-    private var noticeDeadline: Date?
     private var analyzerRecording = false
     /// Fade-hide generation: any state change invalidates a pending hide
     /// so a new session never inherits a stale fade (v4 finishing).
     private var hideGeneration: UInt64 = 0
     private var lastStateKey: String?
     private var hideTask: Task<Void, Never>?
+    /// True while a parked hide (adoption window) is pending. A new
+    /// visible session then adopts the live panel instead of hide→show.
+    private var parkedForAdoption = false
+    /// Over-limit Copied pill latch: text + deadline. Set once per
+    /// failure route; cleared by any live session or on expiry. Keeps
+    /// the pixels capped at pill size without touching the coordinator.
+    private var overLimitText: String?
+    private var overLimitUntil: Date?
+    nonisolated static let overLimitDuration: TimeInterval = 2.5
 
     /// `pasteboard` is injectable so tests never touch the user's clipboard.
     init(
@@ -94,11 +106,17 @@ final class FlowBarController {
         pollTask = nil
         hideTask?.cancel()
         hideTask = nil
+        parkedForAdoption = false
         await analyzer.stop()
         analyzerRecording = false
         panel?.cancelSnapFeedback()
         panel?.hide()
         permission.hide()
+        // Route keys are per-poll-run dedup state: a stop/start inside
+        // one failure window must re-fire, not inherit silence (audit).
+        lastRouteKey = nil
+        lastPermissionKey = nil
+        lastStateKey = nil
     }
 
     // MARK: - Poll
@@ -119,19 +137,32 @@ final class FlowBarController {
     func pollOnce() async {
         let state = await coordinator.state
         let recovery = await coordinator.recoveryText()
-        let projection = FlowBarProjection.project(state, recoveryAvailable: recovery != nil)
-
+        let baseProjection = FlowBarProjection.project(state, recoveryAvailable: recovery != nil)
+        if baseProjection.state != .hidden {
+            // Any live session supersedes a latched message outright.
+            overLimitText = nil
+            overLimitUntil = nil
+        }
+        // latch override lives post-routing (below): a route may arm it
+        // this very poll, and pixels must reflect it immediately.
         model.motionFrozen = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        model.update(projection: projection)
+        model.update(projection: baseProjection)
 
         // State change invalidates any pending fade-hide first — but ONLY
         // when the new target needs the panel. Hidden→hidden moves
         // (completed→idle) let the scheduled melt ride; cancelling there
         // would hide→reshow flicker on the very next poll (v6).
-        let stateKey = "\(state)-\(projection.sessionID?.uuidString ?? "nil")"
+        let stateKey = "\(state)-\(baseProjection.sessionID?.uuidString ?? "nil")"
         if stateKey != lastStateKey {
             lastStateKey = stateKey
-            if projection.state != .hidden || model.notice != nil {
+            if baseProjection.state != .hidden {
+                if hideTask != nil, parkedForAdoption {
+                    // Adoption: a new session landed inside the parked
+                    // window (double-tap converts) — keep the live panel,
+                    // switch sessions, never hide→show.
+                    log.info("adopted hide for new session")
+                }
+                parkedForAdoption = false
                 hideGeneration += 1
                 hideTask?.cancel()
                 hideTask = nil
@@ -142,10 +173,27 @@ final class FlowBarController {
         // Recovery routing BEFORE analyzer sync (v4 F3c): the modal must
         // not wait behind an awaited stop (~35ms) on the same poll.
         syncRecovery(state: state, recovery: recovery)
+        // Over-limit latch applies HERE (post-routing, same poll): the
+        // route above may have just armed it. Model keeps base truth
+        // (failed/hidden); only pixels take the override - same panel,
+        // same size, a re-render that never hide-shows.
+        let projection: FlowBarProjection
+        if baseProjection.state == .hidden,
+           overLimitText != nil,
+           let until = overLimitUntil,
+           Date() < until
+        {
+            projection = FlowBarProjection(
+                state: .message, sessionID: nil,
+                handsFreeCaption: false,
+                recoveryAvailable: baseProjection.recoveryAvailable
+            )
+        } else {
+            projection = baseProjection
+        }
         syncPermissionModal(state: state)
         await syncAnalyzer(state: state)
         syncPanel(state: state, projection: projection)
-        syncDeadlines(projection: projection)
     }
 
     // MARK: - Analyzer arm/disarm (recording only)
@@ -166,16 +214,16 @@ final class FlowBarController {
     // MARK: - Panel show/resize/hide
 
     private func syncPanel(state: DictationState, projection: FlowBarProjection) {
-        let hasNotice = model.notice != nil
         // v6 vanish path: no end-state pixels. The first hidden poll after a
         // visible state melts the loader straight out (generation-guarded);
-        // later hidden polls are no-ops. Notices render below, never here.
-        if !hasNotice, projection.state == .hidden {
+        // later hidden polls are no-ops.
+        if projection.state == .hidden {
             // Drag owns the frame: cancel a pending melt instead of
             // scheduling one — the drop's next poll resumes normal logic.
             if panel?.isDragging == true {
                 hideTask?.cancel()
                 hideTask = nil
+                parkedForAdoption = false
                 return
             }
             guard hideTask == nil else { return }
@@ -183,41 +231,33 @@ final class FlowBarController {
                 panel?.hide()
                 return
             }
-            let generation = hideGeneration
-            panel?.fadeContentOut()
-            hideTask = Task {
-                try? await Task.sleep(
-                    nanoseconds: UInt64(Self.vanishDelay * 1_000_000_000)
+            switch state {
+            case .cancelled, .completed:
+                // Adoption park: fade now (as always) but hold hideNow for
+                // the window — a new session inside adopts the live panel
+                // instead of hide→show flicker. Double-tap converts (micro
+                // cancelled, hands-free starting ~150 ms later) land here.
+                // Pixel-silent terminals only: failed keeps the prompt melt
+                // below (the catcher/modal owns those pixels).
+                scheduleHide(after: Self.adoptionWindowNanoseconds, parked: true)
+            default:
+                scheduleHide(
+                    after: UInt64(Self.vanishDelay * 1_000_000_000),
+                    parked: false
                 )
-                guard !Task.isCancelled, generation == self.hideGeneration else { return }
-                // A grab landed inside the melt window: skip this cycle and
-                // clear the task so the next poll reschedules — never stuck.
-                if self.panel?.isDragging == true {
-                    self.hideTask = nil
-                    return
-                }
-                self.panel?.hideNow()
             }
             return
         }
         // Mic gate: denied owns the card, never the pill — not even during
         // starting (the flash this kills: preparing bars showed for the
         // whole audio.start + speech.prepare window before the failure
-        // existed). Card lifecycle stays in syncPermissionModal; transient
-        // notices still render (they confirm a finished session, not a live one).
-        if !hasNotice, isMicDenied() {
+        // existed). Card lifecycle stays in syncPermissionModal.
+        if isMicDenied() {
             panel?.hide()
             return
         }
-        let width: CGFloat
-        if hasNotice {
-            // v7: the ONLY wide pill — auto-copy confirmation. Failure
-            // panels are gone (concise menu status owns errors).
-            width = VisualizerMath.noticeWidth
-        } else {
-            width = VisualizerMath.panelWidth(for: projection.state)
-        }
-        guard hasNotice || (projection.state != .hidden && width > 0) else {
+        let width: CGFloat = VisualizerMath.panelWidth(for: projection.state)
+        guard projection.state != .hidden && width > 0 else {
             panel?.hide()
             return
         }
@@ -245,43 +285,40 @@ final class FlowBarController {
             panel?.render(
                 visual: visual,
                 values: model.sample.values,
-                text: model.notice,
-                centerText: model.notice != nil,
+                text: projection.state == .message ? overLimitText : nil,
+                centerText: false,
                 reduceMotion: model.motionFrozen,
                 animated: !shrink,
                 liveValues: live
             )
-        } else if let notice = model.notice {
-            panel?.setLiveValues(nil)
-            panel?.render(
-                visual: .message,
-                values: model.sample.values,
-                text: notice, centerText: true,
-                reduceMotion: model.motionFrozen,
-                animated: !shrink
-            )
-        }
-    }
-
-    private func syncDeadlines(projection: FlowBarProjection) {
-        // v6: no terminal-flash holds (completion renders nothing — the
-        // vanish path in syncPanel owns the exit). Only transient notices
-        // have deadlines now. `projection` stays in the signature so the
-        // poll reads as one snapshot in, everything driven out.
-        let now = Date()
-        if model.notice != nil {
-            if noticeDeadline == nil {
-                noticeDeadline = now.addingTimeInterval(Self.noticeDuration)
-            } else if let deadline = noticeDeadline, now >= deadline {
-                noticeDeadline = nil
-                model.clearNotice()
-            }
-        } else {
-            noticeDeadline = nil
         }
     }
 
     // MARK: - Recovery routing (6C1: modal or auto-copy, once per key)
+
+    /// Schedules content fade now + `hideNow` after the delay
+    /// (generation-guarded; drag inside skips and reschedules). A parked
+    /// hide is adoption bait for the next visible session; a melt is
+    /// today's prompt path.
+    private func scheduleHide(after delay: UInt64, parked: Bool) {
+        let generation = hideGeneration
+        parkedForAdoption = parked
+        panel?.fadeContentOut()
+        hideTask = Task {
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, generation == self.hideGeneration else { return }
+            // A grab landed inside the window: skip this cycle and
+            // clear the task so the next poll reschedules — never stuck.
+            if self.panel?.isDragging == true {
+                self.hideTask = nil
+                self.parkedForAdoption = false
+                return
+            }
+            self.hideTask = nil
+            self.parkedForAdoption = false
+            self.panel?.hideNow()
+        }
+    }
 
     private func syncRecovery(state: DictationState, recovery: String?) {
         let route = RecoveryRouter.route(
@@ -290,17 +327,46 @@ final class FlowBarController {
         )
         guard let route else {
             lastRouteKey = nil
+            overLimitText = nil
+            overLimitUntil = nil
             return
         }
         guard route.sessionKey != lastRouteKey else { return }
         lastRouteKey = route.sessionKey
         switch route {
         case .catcher(_, let text):
-            modal.show(text: text, displayID: Self.targetScreen(of: state))
+            // Over-limit transcripts skip the modal: auto-copy + transient
+            // message pill (latched below), pixels capped at pill size.
+            if CatcherText.isOverLimit(text) {
+                pasteboard.clearContents()
+                pasteboard.setString(text, forType: .string)
+                overLimitText = CatcherText.pillWords(text)
+                overLimitUntil = Date().addingTimeInterval(Self.overLimitDuration)
+                log.info("over-limit auto-copy words=\(CatcherText.wordCount(text))")
+                return
+            }
+            overLimitText = nil
+            overLimitUntil = nil
+            // v6 morph: grow out of the live pill frame at its own slot
+            // (top grows down, bottom grows up — zero travel). Pill hidden
+            // or Reduce Motion → today's centered fade, byte-identical.
+            if let pillFrame = panel?.frameForMorph {
+                modal.showFromPill(
+                    pillFrame: pillFrame, text: text,
+                    displayID: Self.targetScreen(of: state),
+                    position: FlowBarPosition.current(),
+                    reduceMotion: model.motionFrozen
+                )
+            } else {
+                modal.show(text: text, displayID: Self.targetScreen(of: state))
+            }
         case .autoCopy(_, let text):
+            // Silent auto-copy: the catcher-off toggle promises the
+            // transcript lands on the clipboard — no pill, no pixels.
+            // Menu status + Copy/Retry own recovery (audit: status owns
+            // errors, the pill never confirms finished sessions).
             pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
-            model.showNotice("Copied — paste with ⌘V.")
         }
     }
 
@@ -326,6 +392,7 @@ final class FlowBarController {
         // Kill the pill flash first: the card replaces it, never joins it.
         hideTask?.cancel()
         hideTask = nil
+        parkedForAdoption = false
         panel?.hide()
         permission.show(
             displayID: Self.targetScreen(of: state),

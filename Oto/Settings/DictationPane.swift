@@ -21,12 +21,9 @@ struct DictationPane: View {
     @State private var prepareFeedback: String?
     @State private var isPreparing = false
 
-    @State private var triggerChoice = TriggerChoice.rightOptionHold
-    @State private var interaction: InteractionMode = .holdToTalk
-    @State private var calibrationText = "Untested"
-    @State private var isRecordingCombo = false
-    @State private var comboLabel = "Click to record…"
-    @State private var conflictMessage: String?
+    @State private var shortcutSummary = "Hold ⌥ and speak."
+    @State private var shortcutStatus = "Untested"
+    @State private var showShortcutModal = false
 
     @State private var micText = "Checking…"
     @State private var axTrusted = false
@@ -36,14 +33,10 @@ struct DictationPane: View {
     // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
     // pinned equal to it by NoTargetModalTests.
     @AppStorage("app.Oto.noTargetModal") private var catcherEnabled = true
-
-    enum TriggerChoice: String, CaseIterable, Identifiable {
-        case rightOptionHold = "Right Option (hold)"
-        case dictationKey = "Dictation key"
-        case combo = "Custom combo"
-
-        var id: String { rawValue }
-    }
+    // Media-duck kill-switch (Phase 7, spike-green): default ON — bleed
+    // ruins transcripts, resume is automatic. Key owned by
+    // MediaDuckSettings; the literal is pinned equal to it by MediaDuckTests.
+    @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
 
     var body: some View {
         Form {
@@ -62,69 +55,24 @@ struct DictationPane: View {
             }
 
             Section("Shortcut") {
-                Picker("Trigger", selection: $triggerChoice) {
-                    ForEach(TriggerChoice.allCases) { choice in
-                        Text(choice.rawValue).tag(choice)
-                    }
-                }
-                .onChange(of: triggerChoice) { applyTriggerChoice() }
-
-                if triggerChoice == .combo {
-                    Button(comboLabel) {
-                        isRecordingCombo = true
-                        dispatch.setSuspended(true)
-                    }
-                    .shortcutRecorder(
-                        isListening: $isRecordingCombo,
-                        onCapture: { modifiers, keyCode, conflicts in
-                            dispatch.setSuspended(false)
-                            isRecordingCombo = false
-                            if ShortcutRecorderConflicts.blocksSaving(conflicts) {
-                                conflictMessage = ShortcutRecorderConflicts.describe(conflicts)
-                                comboLabel = "Click to record…"
-                                return
-                            }
-                            conflictMessage = conflicts.isEmpty ? nil : ShortcutRecorderConflicts.describe(conflicts)
-                            comboLabel = ShortcutRecorderConflicts.describeCombo(modifiers: modifiers, keyCode: keyCode)
-                            dispatch.updateTrigger(ShortcutTrigger(
-                                kind: .combo(modifiers: modifiers, keyCode: keyCode),
-                                interaction: interaction
-                            ))
-                        },
-                        onClear: {
-                            dispatch.setSuspended(false)
-                            isRecordingCombo = false
-                            comboLabel = "Click to record…"
-                            conflictMessage = nil
-                            dispatch.setEnabled(false)
-                        },
-                        onCancel: {
-                            dispatch.setSuspended(false)
-                            isRecordingCombo = false
-                        },
-                        onInvalid: {
-                            NSSound.beep()
-                        }
-                    )
-                    if let conflictMessage {
-                        Text(conflictMessage)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Shortcuts")
+                            .font(.headline)
+                        Text(shortcutSummary)
+                            .foregroundStyle(.secondary)
+                        Text(shortcutStatus)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    Button("Change") {
+                        showShortcutModal = true
+                    }
                 }
-
-                Picker("Mode", selection: $interaction) {
-                    Text("Hold to talk").tag(InteractionMode.holdToTalk)
-                    Text("Hands-free").tag(InteractionMode.handsFree)
+                .sheet(isPresented: $showShortcutModal) {
+                    ShortcutModal(dispatch: dispatch)
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: interaction) { _, new in
-                    dispatch.updateInteraction(new)
-                }
-
-                LabeledContent("Test shortcut", value: calibrationText)
-                Text("Press and release your shortcut anywhere. Ready appears only after a real global sequence.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section("Microphone") {
@@ -163,6 +111,13 @@ struct DictationPane: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Media") {
+                Toggle("Mute media while dictating", isOn: $muteMedia)
+                Text("Oto silences speaker output while you dictate so it can't bleed into the transcript, then restores your exact volume. A relaunch restores it even if Oto was killed mid-dictation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Try it") {
                 TextEditor(text: $trialText)
                     .frame(minHeight: 70)
@@ -179,9 +134,10 @@ struct DictationPane: View {
             await refreshSpeech()
             refreshPermissions()
             // Calibration reflects live backend state; the poll serves the
-            // test-shortcut row only (product behavior, not diagnostics scaffolding).
+            // summary row only (per-slot status lives in the modal).
             while !Task.isCancelled {
-                calibrationText = dispatch.calibrationText
+                shortcutSummary = "Hold \(KeyNames.shortLabel(for: dispatch.configuration.hold.kind)) and speak."
+                shortcutStatus = dispatch.calibrationText
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
@@ -213,33 +169,8 @@ struct DictationPane: View {
     // MARK: - Shortcut
 
     private func syncFromDispatch() {
-        interaction = dispatch.configuration.trigger.interaction
-        switch dispatch.configuration.trigger.kind {
-        case .modifierHold:
-            triggerChoice = .rightOptionHold
-        case .functionKey:
-            triggerChoice = .dictationKey
-        case .combo:
-            triggerChoice = .combo
-        }
-        calibrationText = dispatch.calibrationText
-    }
-
-    private func applyTriggerChoice() {
-        switch triggerChoice {
-        case .rightOptionHold:
-            dispatch.updateTrigger(ShortcutTrigger(
-                kind: .modifierHold(keyCode: UInt16(kVK_RightOption)),
-                interaction: interaction
-            ))
-        case .dictationKey:
-            dispatch.updateTrigger(ShortcutTrigger(
-                kind: .functionKey(codes: [Int64(kVK_F5), 176]),
-                interaction: interaction
-            ))
-        case .combo:
-            break
-        }
+        shortcutSummary = "Hold \(KeyNames.shortLabel(for: dispatch.configuration.hold.kind)) and speak."
+        shortcutStatus = dispatch.calibrationText
     }
 
     // MARK: - Permissions

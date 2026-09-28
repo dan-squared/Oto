@@ -87,4 +87,23 @@ struct PersistenceTests {
         let loaded: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
         #expect(loaded.count == 1)
     }
+
+    @Test func sandboxedStoreMigratesOnce() throws {
+        // Audit F7: Container-scoped JSON moves over only into an empty
+        // home (never merge/overwrite); second run and non-empty homes
+        // are no-ops.
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let oldDir = tmp.appendingPathComponent("old", isDirectory: true)
+        let newDir = tmp.appendingPathComponent("new", isDirectory: true)
+        try fm.createDirectory(at: oldDir, withIntermediateDirectories: true)
+        try "rules".write(to: oldDir.appendingPathComponent("dictionary.v1.json"), atomically: true, encoding: .utf8)
+        LocalPersistence.migrateSandboxedStoreIfNeeded(home: newDir, containerHome: oldDir)
+        #expect(fm.fileExists(atPath: newDir.appendingPathComponent("dictionary.v1.json").path))
+        try "changed".write(to: oldDir.appendingPathComponent("dictionary.v1.json"), atomically: true, encoding: .utf8)
+        LocalPersistence.migrateSandboxedStoreIfNeeded(home: newDir, containerHome: oldDir)
+        let kept = try String(contentsOf: newDir.appendingPathComponent("dictionary.v1.json"), encoding: .utf8)
+        #expect(kept == "rules")
+        try fm.removeItem(at: tmp)
+    }
 }

@@ -93,6 +93,7 @@ enum DictationFailure: Equatable, Sendable {
             return a == b
         case (.microphoneDenied, .microphoneDenied),
              (.targetGone, .targetGone),
+             (.noTextField, .noTextField),
              (.noAudioCaptured, .noAudioCaptured):
             return true
         case (.insertionFailed(let a), .insertionFailed(let b)):
@@ -107,6 +108,9 @@ enum DictationFailure: Equatable, Sendable {
     case microphoneDenied
     case targetGone
     case insertionFailed(String)
+    /// Focus without an editable field at finalize time (Finder, desktop,
+    /// viewer): nowhere to paste. Kept transcript + catcher, never void.
+    case noTextField
     /// Zero buffers reached the feeder all session (dead/zombie mic).
     /// Fails loud instead of completing empty (bt-sco-flap.md).
     case noAudioCaptured

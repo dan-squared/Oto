@@ -28,15 +28,17 @@ enum PillVisual: Equatable {
     case message
 
     /// Pill case → layer group. Nil renders nothing (hidden).
-    /// v7: failures never reach the pill (concise menu status owns them) —
-    /// `.message` survives only for the transient auto-copy notice, which
-    /// the controller renders directly.
+    /// v7: failures never reach the pill (concise menu status owns them).
+    /// `.message` renders only the controller-latched over-limit Copied
+    /// pill — same size as recording, so the switch is a re-render, never
+    /// a resize.
     nonisolated static func forState(_ state: FlowBarState) -> PillVisual? {
         switch state {
         case .hidden: nil
         case .preparing: .bars
         case .recording: .bars
         case .finalizing, .inserting: .dotsSpinner
+        case .message: .message
         }
     }
 }
