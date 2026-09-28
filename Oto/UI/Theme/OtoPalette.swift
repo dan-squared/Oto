@@ -19,6 +19,8 @@ enum OtoPalette {
     static let hairline = Color(nsColor: NS.hairline)
     static let wash = Color(nsColor: NS.wash)
     static let hover = Color(nsColor: NS.hover)
+    static let safe = Color(nsColor: NS.safe)
+    static let unsafe = Color(nsColor: NS.unsafe)
 
     /// Test accessor: the white component of a pair token under an
     /// explicit appearance (all tokens are monochrome by construction).
@@ -40,6 +42,15 @@ enum OtoPalette {
         nonisolated static let hairline = pair(0.91, 0.20)
         nonisolated static let wash = pair(0.937, 0.175)
         nonisolated static let hover = pair(0.965, 0.15)
+        nonisolated static let safe = tint(light: (0.08, 0.50, 0.24), dark: (0.29, 0.87, 0.50))
+        nonisolated static let unsafe = tint(light: (0.71, 0.33, 0.04), dark: (0.98, 0.75, 0.14))
+
+        nonisolated private static func tint(light: (CGFloat, CGFloat, CGFloat), dark: (CGFloat, CGFloat, CGFloat)) -> NSColor {
+            NSColor(name: nil) { appearance in
+                let c = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+                return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1)
+            }
+        }
 
         nonisolated private static func pair(_ light: CGFloat, _ dark: CGFloat) -> NSColor {
             NSColor(name: nil) { appearance in

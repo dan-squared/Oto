@@ -231,3 +231,38 @@ struct OtoQuick: View {
         .buttonStyle(.plain)
     }
 }
+
+/// A status readout: colored dot + short label. Dots, never banners —
+/// green means go, amber means act, gray means waiting.
+struct OtoStatus: View {
+    enum Tone {
+        case ok
+        case warn
+        case idle
+
+        var color: Color {
+            switch self {
+            case .ok: OtoPalette.safe
+            case .warn: OtoPalette.unsafe
+            case .idle: OtoPalette.faint
+            }
+        }
+    }
+
+    let text: String
+    let tone: Tone
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(tone.color)
+                .frame(width: 6, height: 6)
+            Text(text)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(OtoPalette.ink)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(OtoPalette.wash, in: Capsule())
+    }
+}

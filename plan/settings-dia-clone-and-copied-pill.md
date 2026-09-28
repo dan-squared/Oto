@@ -274,3 +274,26 @@ so light mode stays correct). Say `execute` to build as specced.
   sizeToFits + centers in the pill (NSTextField draws from the top of
   a tall frame — the horizontal-only centering was the whole bug).
   Width unchanged: `.message == 92.4 == .recording` (test-pinned).
+
+## 11. Addendum — alignment solidify + mic selector (user round 2)
+
+- Rail/modal/onboarding icons now carry explicit square frames
+  (16×16 rail, 18×18 trash, bounded message glyphs) — no unbounded
+  symbol can overflow its row again.
+- Modal ✕ is now `OtoDoor` (fixed 26×26, aligned to the title block).
+- Recorder fields toggle on second click (modal + onboarding), so an
+  armed recording always has a way out besides Escape.
+- Dictionary/snippet rows have explicit Edit + Delete quicks; the row
+  tap-to-edit moved off the Delete row (tapping Delete no longer opens
+  the editor). Global-scope "Everywhere" lines removed — scoped rules
+  show their bundle ID, global ones show nothing.
+- Permission statuses are `OtoStatus` dots (green/amber/gray) with the
+  long guidance moved to row details; grant actions are filled `OtoBig`
+  (white in dark mode). Speech card folded to one Readiness row.
+- Microphone card has a device dropdown (`MicrophoneSelector`,
+  CoreAudio HAL — enumerate inputs, read/set the system default).
+  The engine follows the system default untouched, so the realtime
+  graph is unchanged; the row states that every app follows the pick.
+  Symbols verified in `MacOSX27.0.sdk` CoreAudio headers.
+- Onboarding Ready page lost the Prepare button (status line only);
+  copy tightened across onboarding + all four panes.

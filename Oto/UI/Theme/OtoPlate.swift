@@ -90,6 +90,7 @@ struct OtoNothing: View {
             Image(systemName: systemName)
                 .font(.system(size: 22))
                 .foregroundStyle(OtoPalette.faint)
+                .frame(width: 26, height: 26)
             Text(text)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(OtoPalette.ink)

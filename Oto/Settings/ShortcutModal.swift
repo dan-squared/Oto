@@ -75,6 +75,7 @@ struct KeycapField: View {
                 Image(systemName: "trash")
                     .font(.system(size: 13))
                     .foregroundStyle(OtoPalette.muted)
+                    .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)
             .disabled(disabled)
@@ -101,7 +102,7 @@ struct ShortcutModal: View {
     @State private var showSwapHandsFree = false
 
     private static let recorderHint =
-        "Combinations like ⌘⇧D record here — bare keys live in presets below. Delete clears, Escape cancels."
+        "⌘⇧D-style combos record here — bare keys are in presets. Delete clears, Escape cancels."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -115,15 +116,9 @@ struct ShortcutModal: View {
                         .foregroundStyle(OtoPalette.muted)
                 }
                 Spacer()
-                Button {
+                OtoDoor(systemName: "xmark", help: "Discard changes") {
                     dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11))
-                        .foregroundStyle(OtoPalette.muted)
                 }
-                .buttonStyle(.plain)
-                .help("Discard changes")
             }
 
             slotCard(
@@ -220,8 +215,17 @@ struct ShortcutModal: View {
                 emptyPlaceholder: slot == .handsFree ? "Click to add a shortcut…" : "Click to record…",
                 trashHelp: isEmpty ? "Nothing assigned" : "Clear (shortcuts turn off when you press Done)",
                 onArm: {
-                    dispatch.setSuspended(true)
-                    setRecording(true, slot: slot)
+                    // Toggle: clicking an armed field disarms it, so a
+                    // recording can never get stuck with no way out
+                    // (Escape cancels too, via the recorder).
+                    let armed = slot == .hold ? isRecordingHold : isRecordingHandsFree
+                    if armed {
+                        dispatch.setSuspended(false)
+                        setRecording(false, slot: slot)
+                    } else {
+                        dispatch.setSuspended(true)
+                        setRecording(true, slot: slot)
+                    }
                 },
                 onTrash: { stageClear(slot: slot) },
                 recorder: ShortcutRecorderModifier(
@@ -281,6 +285,7 @@ struct ShortcutModal: View {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 12))
                         .foregroundStyle(.orange)
+                        .frame(width: 16, height: 16)
                     Text(message)
                         .font(.system(size: 11.5))
                         .foregroundStyle(OtoPalette.muted)

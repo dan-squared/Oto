@@ -40,8 +40,6 @@ struct OnboardingView: View {
     // Ready page state.
     @State private var readinessText = "Checking…"
     @State private var languageText = "—"
-    @State private var prepareFeedback: String?
-    @State private var isPreparing = false
     @State private var trialText = ""
 
     var body: some View {
@@ -130,7 +128,7 @@ struct OnboardingView: View {
                 Text("Welcome to Oto")
                     .font(.system(size: 34, weight: .medium))
                     .foregroundStyle(OtoPalette.ink)
-                Text("Hold a key, speak in any app, release — your words appear where you were typing. Private by design: on-device Apple Speech. No account, no cloud, no recordings kept.")
+                Text("Hold a key, speak anywhere, release — your words land where you type. Private: on-device speech, no account, no cloud.")
                     .font(.system(size: 14.5))
                     .foregroundStyle(OtoPalette.muted)
                     .multilineTextAlignment(.center)
@@ -161,7 +159,7 @@ struct OnboardingView: View {
             featureRow(
                 icon: "tray.full",
                 title: "Never lose words",
-                subtitle: "No text field? The catcher keeps your transcript — one click to copy."
+                subtitle: "No text field? The catcher keeps it — one click to copy."
             )
         }
     }
@@ -171,7 +169,7 @@ struct OnboardingView: View {
             Image(systemName: icon)
                 .font(.system(size: 18))
                 .foregroundStyle(OtoPalette.muted)
-                .frame(width: 28)
+                .frame(width: 28, height: 28, alignment: .top)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13.5))
@@ -202,7 +200,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 22) {
             heading(
                 "Your hold key.",
-                "This is the key you'll hold while you talk. Keep it, or click the field and press a new one."
+                "Hold this key while you talk — or click the field and press a new one."
             )
             VStack(alignment: .leading, spacing: 14) {
                 KeycapField(
@@ -212,11 +210,18 @@ struct OnboardingView: View {
                     emptyPlaceholder: "Click to record…",
                     trashHelp: "Oto always needs a hold key",
                     onArm: {
-                        dispatch.setSuspended(true)
-                        isRecording = true
+                        // Toggle: clicking an armed field disarms it, so a
+                        // recording can never get stuck with no way out.
+                        if isRecording {
+                            dispatch.setSuspended(false)
+                            isRecording = false
+                        } else {
+                            dispatch.setSuspended(true)
+                            isRecording = true
+                        }
                     },
                     onTrash: {
-                        holdMessage = "Oto needs a hold key to listen — pick one instead."
+                        holdMessage = "Oto needs a hold key — pick one."
                         showSwap = false
                     },
                     recorder: ShortcutRecorderModifier(
@@ -264,6 +269,7 @@ struct OnboardingView: View {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 12))
                         .foregroundStyle(.orange)
+                        .frame(width: 16, height: 16)
                     Text(holdMessage)
                         .font(.system(size: 12))
                         .foregroundStyle(OtoPalette.muted)
@@ -297,7 +303,7 @@ struct OnboardingView: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(OtoPalette.muted)
                 } else {
-                    Text("Hands-free toggle lives in Settings — empty until you add one.")
+                    Text("An extra hands-free key lives in Settings.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(OtoPalette.muted)
                 }
@@ -314,7 +320,7 @@ struct OnboardingView: View {
         )
         holdKind = dispatch.configuration.hold.kind
         if result == .blocked {
-            holdMessage = "Same as your Hands-free shortcut — pick a different one or swap."
+            holdMessage = "Same as Hands-free — pick another or swap."
             showSwap = true
         } else {
             holdMessage = nil
@@ -348,7 +354,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 22) {
             heading(
                 "Permissions.",
-                "Oto asks only when it needs them — right here, right now."
+                "Oto asks only when needed — here and now."
             )
             VStack(alignment: .leading, spacing: 14) {
                 permissionRow(
@@ -392,7 +398,7 @@ struct OnboardingView: View {
             Image(systemName: icon)
                 .font(.system(size: 18))
                 .foregroundStyle(OtoPalette.muted)
-                .frame(width: 28)
+                .frame(width: 28, height: 28, alignment: .top)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13.5))
@@ -403,11 +409,12 @@ struct OnboardingView: View {
             }
             Spacer()
             if let actionTitle {
-                OtoPill(actionTitle, action: action)
+                OtoBig(actionTitle, act: action)
             } else if status == "Allowed" {
                 Image(systemName: "checkmark")
                     .font(.system(size: 14))
                     .foregroundStyle(OtoPalette.ink)
+                    .frame(width: 18, height: 18)
             }
         }
     }
@@ -417,7 +424,7 @@ struct OnboardingView: View {
         case .granted:
             micText = "Allowed"
         case .denied:
-            micText = "Denied — allow in System Settings → Privacy & Security → Microphone."
+            micText = "Denied — allow it in System Settings."
         case .notDetermined:
             micText = "Not asked yet"
         }
@@ -449,26 +456,25 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 22) {
             heading(
                 "Get set up.",
-                "Prepare offline speech once, then try it right here."
+                "Try it below, then press Finish."
             )
-            HStack(spacing: 12) {
-                OtoBig(isPreparing ? "Preparing…" : "Prepare offline speech") {
-                    Task { await runPrepare() }
-                }
-                .disabled(isPreparing)
-                if isPreparing {
-                    Text(readinessText)
+            HStack(spacing: 8) {
+                if readinessText == "Checking…" {
+                    OtoStatus(text: "Checking…", tone: .idle)
+                } else if speechReady {
+                    OtoStatus(text: "Ready", tone: .ok)
+                    Text(languageText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(OtoPalette.muted)
+                } else {
+                    OtoStatus(text: "Not prepared yet", tone: .idle)
+                    Text("Prepare it any time in Settings › Dictation.")
                         .font(.system(size: 13))
                         .foregroundStyle(OtoPalette.muted)
                 }
             }
-            if let prepareFeedback {
-                Text(prepareFeedback)
-                    .font(.system(size: 13))
-                    .foregroundStyle(OtoPalette.muted)
-            }
             VStack(alignment: .leading, spacing: 8) {
-                Text("Try it — hold your key and speak into this field:")
+                Text("Hold your key and speak into this field:")
                     .font(.system(size: 13))
                     .foregroundStyle(OtoPalette.muted)
                 TextEditor(text: $trialText)
@@ -497,11 +503,5 @@ struct OnboardingView: View {
         readinessText = report.readiness.errorDescription ?? "Ready (\(languageText))"
     }
 
-    private func runPrepare() async {
-        isPreparing = true
-        prepareFeedback = "Preparing…"
-        prepareFeedback = await preparer.prepareDefault()
-        isPreparing = false
-        await refreshSpeech()
-    }
+    private var speechReady: Bool { readinessText.hasPrefix("Ready") }
 }

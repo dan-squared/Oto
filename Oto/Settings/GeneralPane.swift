@@ -64,7 +64,7 @@ struct GeneralPane: View {
                             .padding(.vertical, 11)
                     }
                     OtoRule()
-                    OtoLine("Show Oto in Dock", "Applies immediately. When off, Oto lives in the menu bar only — no Dock icon, no ⌘Tab. Closing Settings never quits the app.") {
+                    OtoLine("Show Oto in Dock", "Applies now. Off: menu bar only — no Dock, no ⌘Tab.") {
                         OtoSwitch(on: Binding(
                             get: { showInDock },
                             set: { newValue in setDockVisibility(shown: newValue) }
@@ -97,7 +97,7 @@ struct GeneralPane: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 11)
                 }
-                Text("Top sits below the notch. You can also drag the pill anytime — it snaps with a tick.")
+                Text("Top sits below the notch. Drag the pill anytime — it snaps.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(OtoPalette.muted)
                     .padding(.leading, 2)

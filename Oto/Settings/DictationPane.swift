@@ -31,6 +31,8 @@ struct DictationPane: View {
     @State private var axTrusted = false
     @State private var speechText = "Checking…"
     @State private var trialText = ""
+    @State private var inputDevices: [AudioInputDevice] = []
+    @State private var defaultInputUID: String?
     // Catcher kill-switch (6C1): default ON — the modal teaches the
     // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
     // pinned equal to it by NoTargetModalTests.
@@ -45,16 +47,18 @@ struct DictationPane: View {
             VStack(alignment: .leading, spacing: 6) {
                 OtoCaption(text: "Speech")
                 OtoCard {
-                    OtoLine("Readiness", readinessText) { EmptyView() }
-                    OtoRule()
-                    OtoLine("Language", languageText) { EmptyView() }
+                    OtoLine("Readiness", speechReady ? languageText : readinessText) {
+                        if speechReady {
+                            OtoStatus(text: "Ready", tone: .ok)
+                        }
+                    }
                     OtoRule()
                     HStack {
-                        OtoPill("Prepare offline speech") {
+                        OtoBig(isPreparing ? "Preparing…" : "Prepare offline speech") {
                             Task { await runPrepare() }
                         }
                         .disabled(isPreparing)
-                        if let prepareFeedback {
+                        if let prepareFeedback, !isPreparing {
                             Text(prepareFeedback)
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(OtoPalette.muted)
@@ -82,16 +86,35 @@ struct DictationPane: View {
             VStack(alignment: .leading, spacing: 6) {
                 OtoCaption(text: "Microphone")
                 OtoCard {
-                    // No enumeration seam exists: Oto follows the system default
-                    // input (Yap parity). A picker here would be a dead control.
-                    OtoLine("Input", "System default input") { EmptyView() }
+                    OtoLine("Input", "Sets the Mac's input — every app follows it.") {
+                        Menu {
+                            ForEach(inputDevices) { device in
+                                Button(device.name) {
+                                    MicrophoneSelector.setDefaultInput(device)
+                                    refreshMicrophones()
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(currentInputName)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(OtoPalette.ink)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(OtoPalette.muted)
+                            }
+                        }
+                    }
                     OtoRule()
-                    OtoLine("Status", micText) {
-                        if micText != "Allowed" {
-                            OtoPill("Allow microphone access") {
-                                Task {
-                                    _ = await permissions.ensureMicrophone()
-                                    refreshPermissions()
+                    OtoLine("Status", micDeniedGuidance) {
+                        VStack(alignment: .trailing, spacing: 8) {
+                            OtoStatus(text: micText, tone: micTone)
+                            if !micAllowed {
+                                OtoBig("Allow microphone access") {
+                                    Task {
+                                        _ = await permissions.ensureMicrophone()
+                                        refreshPermissions()
+                                    }
                                 }
                             }
                         }
@@ -102,19 +125,24 @@ struct DictationPane: View {
             VStack(alignment: .leading, spacing: 6) {
                 OtoCaption(text: "Permissions")
                 OtoCard {
-                    OtoLine("Accessibility", axTrusted ? "Allowed" : "Not allowed") {
-                        if !axTrusted {
-                            OtoPill("Open Accessibility settings") {
-                                requestAccessibilityPrompt()
-                                Task {
-                                    try? await Task.sleep(for: .seconds(2))
-                                    refreshPermissions()
+                    OtoLine("Accessibility", axTrusted ? nil : "Global keys and insertion need it.") {
+                        VStack(alignment: .trailing, spacing: 8) {
+                            OtoStatus(text: axTrusted ? "Allowed" : "Not allowed", tone: axTrusted ? .ok : .warn)
+                            if !axTrusted {
+                                OtoBig("Open Accessibility settings") {
+                                    requestAccessibilityPrompt()
+                                    Task {
+                                        try? await Task.sleep(for: .seconds(2))
+                                        refreshPermissions()
+                                    }
                                 }
                             }
                         }
                     }
                     OtoRule()
-                    OtoLine("Speech recognition", speechText) { EmptyView() }
+                    OtoLine("Speech recognition", nil) {
+                        OtoStatus(text: speechText, tone: speechTone)
+                    }
                 }
             }
 
@@ -123,7 +151,7 @@ struct DictationPane: View {
                 OtoCard {
                     OtoLine(
                         "Show catcher when there's nowhere to paste",
-                        "When dictation finishes with no text field to receive it, Oto opens a small window with the transcript and a Copy button. Off: the transcript is copied to the clipboard automatically instead."
+                        "No text field? Oto opens a small window with your transcript and a Copy button. Off: auto-copies instead."
                     ) {
                         OtoSwitch(on: $catcherEnabled)
                     }
@@ -135,7 +163,7 @@ struct DictationPane: View {
                 OtoCard {
                     OtoLine(
                         "Mute media while dictating",
-                        "Oto silences speaker output while you dictate so it can't bleed into the transcript, then restores your exact volume. A relaunch restores it even if Oto was killed mid-dictation."
+                        "Silences speakers while you dictate, then restores the volume — even after a crash."
                     ) {
                         OtoSwitch(on: $muteMedia)
                     }
@@ -152,7 +180,7 @@ struct DictationPane: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 11)
                 }
-                Text("Dictate anywhere, or into this field — Oto captures whichever app is frontmost, including its own window.")
+                Text("Dictate anywhere, or here — Oto captures the frontmost app.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(OtoPalette.muted)
                     .padding(.leading, 2)
@@ -160,6 +188,7 @@ struct DictationPane: View {
         }
         .task {
             syncFromDispatch()
+            refreshMicrophones()
             await refreshSpeech()
             refreshPermissions()
             // Calibration reflects live backend state; the poll serves the
@@ -202,6 +231,39 @@ struct DictationPane: View {
         shortcutStatus = dispatch.calibrationText
     }
 
+    // MARK: - Microphone devices
+
+    private var micAllowed: Bool { micText == "Allowed" }
+
+    private var micTone: OtoStatus.Tone {
+        micAllowed ? .ok : (micText == "Not asked yet" ? .idle : .warn)
+    }
+
+    private var micDeniedGuidance: String? {
+        micAllowed || micText == "Not asked yet"
+            ? nil
+            : "Allow it in System Settings → Privacy & Security → Microphone."
+    }
+
+    private var speechTone: OtoStatus.Tone {
+        switch speechText {
+        case "Allowed": .ok
+        case "Not asked yet", "Checking…", "Unknown": .idle
+        default: .warn
+        }
+    }
+
+    private var speechReady: Bool { readinessText == "Ready" }
+
+    private var currentInputName: String {
+        inputDevices.first(where: { $0.uid == defaultInputUID })?.name ?? "System default"
+    }
+
+    private func refreshMicrophones() {
+        inputDevices = MicrophoneSelector.inputDevices()
+        defaultInputUID = MicrophoneSelector.defaultInputUID()
+    }
+
     // MARK: - Permissions
 
     private func refreshPermissions() {
@@ -209,7 +271,7 @@ struct DictationPane: View {
         case .granted:
             micText = "Allowed"
         case .denied:
-            micText = "Denied — allow in System Settings → Privacy & Security → Microphone."
+            micText = "Denied"
         case .notDetermined:
             micText = "Not asked yet"
         }

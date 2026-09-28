@@ -100,7 +100,7 @@ struct SettingsRoot: View {
                 HStack(spacing: 9) {
                     Image(systemName: item.symbol)
                         .font(.system(size: 12, weight: .medium))
-                        .frame(width: 16)
+                        .frame(width: 16, height: 16)
                     Text(item.title)
                         .font(.system(size: 13, weight: on ? .medium : .regular))
                     Spacer(minLength: 0)

@@ -84,7 +84,7 @@ struct PrivacyHistoryPane: View {
             OtoCard {
                 OtoLine(
                     "Remember transcripts",
-                    "Kept on this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Turning off stops new saves; nothing is uploaded, ever."
+                    "On this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Off stops new saves; nothing is ever uploaded."
                 ) {
                     OtoSwitch(on: $historyEnabled)
                 }
@@ -186,35 +186,63 @@ struct PrivacyHistoryPane: View {
         VStack(alignment: .leading, spacing: 6) {
             OtoCaption(text: "Privacy")
             OtoCard {
-                OtoLine("Microphone", micText) {
-                    if micText != "Allowed" {
-                        OtoPill("Allow microphone access") {
-                            Task {
-                                _ = await permissions.ensureMicrophone()
-                                refreshPermissions()
+                OtoLine("Microphone", micDeniedGuidance) {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        OtoStatus(text: micText, tone: micTone)
+                        if !micAllowed {
+                            OtoBig("Allow microphone access") {
+                                Task {
+                                    _ = await permissions.ensureMicrophone()
+                                    refreshPermissions()
+                                }
                             }
                         }
                     }
                 }
                 OtoRule()
-                OtoLine("Accessibility", axTrusted ? "Allowed" : "Not allowed") {
-                    if !axTrusted {
-                        OtoPill("Open Accessibility settings") {
-                            requestAccessibilityPrompt()
-                            Task {
-                                try? await Task.sleep(for: .seconds(2))
-                                refreshPermissions()
+                OtoLine("Accessibility", axTrusted ? nil : "Global keys and insertion need it.") {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        OtoStatus(text: axTrusted ? "Allowed" : "Not allowed", tone: axTrusted ? .ok : .warn)
+                        if !axTrusted {
+                            OtoBig("Open Accessibility settings") {
+                                requestAccessibilityPrompt()
+                                Task {
+                                    try? await Task.sleep(for: .seconds(2))
+                                    refreshPermissions()
+                                }
                             }
                         }
                     }
                 }
                 OtoRule()
-                OtoLine("Speech recognition", speechText) { EmptyView() }
+                OtoLine("Speech recognition", nil) {
+                    OtoStatus(text: speechText, tone: speechTone)
+                }
             }
-            Text("Oto stores what you choose: dictionary rules, snippets, and — only if you turn it on — final transcripts. Never audio, never other apps' contents, never clipboard snapshots. Intelligence features would ask separately; none exist in this build.")
+            Text("Oto stores what you choose: rules, snippets, and transcripts only if you enable history. Never audio or other apps' content.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(OtoPalette.muted)
                 .padding(.leading, 2)
+        }
+    }
+
+    private var micAllowed: Bool { micText == "Allowed" }
+
+    private var micTone: OtoStatus.Tone {
+        micAllowed ? .ok : (micText == "Not asked yet" ? .idle : .warn)
+    }
+
+    private var micDeniedGuidance: String? {
+        micAllowed || micText == "Not asked yet"
+            ? nil
+            : "Allow it in System Settings → Privacy & Security → Microphone."
+    }
+
+    private var speechTone: OtoStatus.Tone {
+        switch speechText {
+        case "Allowed": .ok
+        case "Not asked yet", "Checking…", "Unknown": .idle
+        default: .warn
         }
     }
 
@@ -223,7 +251,7 @@ struct PrivacyHistoryPane: View {
         case .granted:
             micText = "Allowed"
         case .denied:
-            micText = "Denied — allow in System Settings → Privacy & Security → Microphone."
+            micText = "Denied"
         case .notDetermined:
             micText = "Not asked yet"
         }

@@ -143,9 +143,11 @@ struct WritingPane: View {
                                 Text("“\(rule.spoken)” → “\(rule.replacement)”")
                                     .font(.system(size: 13))
                                     .foregroundStyle(OtoPalette.ink)
-                                Text(rule.bundleID ?? "Everywhere")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(OtoPalette.muted)
+                                if let scope = rule.bundleID {
+                                    Text(scope)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(OtoPalette.muted)
+                                }
                             }
                             Spacer(minLength: 8)
                             OtoSwitch(on: Binding(
@@ -157,7 +159,10 @@ struct WritingPane: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.top, 11)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingRule = rule }
                         HStack {
+                            OtoQuick("Edit") { editingRule = rule }
                             OtoQuick("Delete", tint: .red) {
                                 Task {
                                     await dictionary.remove(id: rule.id)
@@ -168,8 +173,6 @@ struct WritingPane: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.bottom, 11)
-                        .contentShape(Rectangle())
-                        .onTapGesture { editingRule = rule }
                     }
                 }
             }
@@ -187,7 +190,7 @@ struct WritingPane: View {
                     .foregroundStyle(OtoPalette.muted)
                     .padding(.leading, 2)
             }
-            Text("Rules replace whole words only — never inside links, emails, or file paths. App-scoped rules win over global ones in their app.")
+            Text("Whole words only — never inside links or paths. App rules win in their app.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(OtoPalette.muted)
                 .padding(.leading, 2)
@@ -265,10 +268,13 @@ struct WritingPane: View {
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(OtoPalette.muted)
                                 .lineLimit(2)
-                            Text(snippet.bundleID ?? "Everywhere")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(OtoPalette.faint)
+                            if let scope = snippet.bundleID {
+                                Text(scope)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(OtoPalette.faint)
+                            }
                             HStack(spacing: 12) {
+                                OtoQuick("Edit") { editingSnippet = snippet }
                                 OtoQuick("Copy") { copySnippet(snippet) }
                                 OtoQuick("Delete", tint: .red) {
                                     Task { await snippets.remove(id: snippet.id) }
@@ -288,7 +294,7 @@ struct WritingPane: View {
                 OtoPill("Add snippet") { addingSnippet = true }
                 Spacer(minLength: 0)
             }
-            Text("Snippets insert only when you choose — speaking a snippet's name never expands it.")
+            Text("Snippets only insert when you choose — saying the name never expands it.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(OtoPalette.muted)
                 .padding(.leading, 2)
