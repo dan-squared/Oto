@@ -14,14 +14,17 @@ import Testing
 @MainActor
 struct SpectrumEngineTests {
     @Test func sineLandsInItsBand() {
-        // 440 Hz @ 16 kHz analysis, 8 bands: band 2 (253–450 Hz). Hann +
-        // demean keep leakage small; the peak must still own the spectrum.
+        // 440 Hz @ 16 kHz analysis: the peak must own the spectrum. The
+        // expected band derives from the edges (count-parameterized —
+        // never hardcoded), Hann + demean keep leakage small.
         let engine = SpectrumEngine()
         let converted = convertedToAnalysis(sineBuffer())
         let levels = engine.process(converted)
-        #expect(levels.count == 8)
-        #expect(argmax(levels) == 2)
-        #expect(levels[2] > 0.5)
+        #expect(levels.count == VisualizerMath.barCount)
+        let edges = VisualizerMath.bandEdges(count: VisualizerMath.barCount)
+        let expected = edges.indices.dropLast().first { i in 440 >= edges[i] && 440 < edges[i + 1] }!
+        #expect(argmax(levels) == expected)
+        #expect(levels[expected] > 0.5)
     }
 
     @Test func silenceStaysSilent() {
@@ -47,7 +50,7 @@ struct SpectrumEngineTests {
         let engine = SpectrumEngine()
         let tiny = sineBuffer(frames: 64)
         let levels = engine.process(tiny)
-        #expect(levels.count == 8)
+        #expect(levels.count == VisualizerMath.barCount)
         #expect(levels.allSatisfy { !$0.isNaN })
     }
 

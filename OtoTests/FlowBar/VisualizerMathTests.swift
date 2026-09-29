@@ -14,11 +14,12 @@ import Testing
 @MainActor
 struct VisualizerMathTests {
     @Test func attackSnapsFasterThanRelease() {
-        // Rising: 55% of the gap in one ~16 ms step (≈13 ms snap —
-        // tracks the ~12 Hz tap target updates without inventing jitter).
-        #expect(abs(VisualizerMath.smoothStep(current: 0, target: 1) - 0.55) < 0.001)
-        // Falling: 10% of the gap — vowels visibly decay, grace kept.
-        #expect(abs(VisualizerMath.smoothStep(current: 1, target: 0) - 0.90) < 0.001)
+        // Rising: 70% of the gap in one ~16 ms step (≈10 ms snap —
+        // tracks hard without overshooting: single-pole, always < 1.0.
+        // If the matrix hears jitter, this is the single knob.)
+        #expect(abs(VisualizerMath.smoothStep(current: 0, target: 1) - 0.70) < 0.001)
+        // Falling: 8% of the gap — vowels visibly decay, grace kept.
+        #expect(abs(VisualizerMath.smoothStep(current: 1, target: 0) - 0.92) < 0.001)
     }
 
     @Test func couplingMovesBarsAsOneWave() {
@@ -140,8 +141,8 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.panelWidth(for: .recording) <= 95.7)
         #expect(VisualizerMath.pillHeight == 26.4)
         // Elements shrink, count stays.
-        #expect(VisualizerMath.barCount == 8)
-        #expect(VisualizerMath.barWidth == 2.8875)
+        #expect(VisualizerMath.barCount == 10)
+        #expect(VisualizerMath.barWidth == 2.5)
         #expect(VisualizerMath.recordDot == 6.6)
     }
 

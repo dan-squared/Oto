@@ -55,13 +55,13 @@ enum CatcherText: Sendable {
 /// Card geometry: fixed 464pt width, computed height. Pure + unit-tested;
 /// the controller supplies the screen-clamped max.
 enum CatcherLayout: Sendable {
-    /// Horizontal chrome: card padding both sides. The X owns its own
-    /// layout row above the text, so no trailing reserve is needed and
-    /// all three right edges align.
+    /// Horizontal chrome: card padding both sides. No dismiss row exists
+    /// (v6: Cancel lives in the footer), so no trailing reserve is needed
+    /// and all three right edges align.
     nonisolated static let cardPadding: CGFloat = 20
-    /// Vertical chrome: top pad + text top + text→button gap + button
-    /// row + bottom pad. Matches the view below by construction.
-    nonisolated static let chromeHeight: CGFloat = 20 + 44 + 8 + 18 + 44 + 20
+    /// Vertical chrome: top pad + text→button gap + button row + bottom
+    /// pad. Matches the view below by construction.
+    nonisolated static let chromeHeight: CGFloat = 20 + 18 + 44 + 20
     /// The Dynamic Type title3 SwiftUI renders — same system, no guessing.
     /// (A hardcoded size here caused the gap bug: measured tall, rendered
     /// short, Spacer ate the difference.)
@@ -354,38 +354,16 @@ final class NoTargetModalController {
     }
 }
 
-/// ✕ press/hover response (v7: bouncy on click ONLY, never resize on
-/// hover). Hover brightens dim→ink (0.12s easeOut); click squishes to
-/// 0.88 on a quick spring with one visible rebound, then back.
-struct CatcherXStyle: ButtonStyle {
-    var base: Color
-    var hover: Color
-    var hovering: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(hovering ? hover : base)
-            .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
-            .animation(.easeOut(duration: 0.12), value: hovering)
-            .animation(
-                .spring(response: 0.22, dampingFraction: 0.5),
-                value: configuration.isPressed
-            )
-    }
-}
-
 struct NoTargetModalView: View {
     let controller: NoTargetModalController
     @Environment(\.colorScheme) private var scheme
-    /// ✕ hover state (v7: brighten only — never resize on hover).
-    @State private var xHovering = false
 
     var body: some View {
-        // v4 minimal surface: three stacked zones — dismiss row, words,
-        // Copy row. The X owns its own layout row (never overlaid, so no
-        // first line can ever run under it); all three right edges align
-        // at the card padding. Dictated words, Copy. Everything renders
-        // through the adaptive palette.
+        // v6 surface: two stacked zones — words, then a bottom-pinned
+        // Cancel + Copy footer. No ✕ row: dismissal is the ghost Cancel
+        // pill. The Spacer between text and actions is load-bearing: it
+        // pins the footer to the card bottom on short/empty cards.
+        // Trailing edges (text, buttons) share the 20pt card inset.
         let palette = CatcherPalette.current(scheme)
         ZStack {
             ZStack {
@@ -396,32 +374,29 @@ struct NoTargetModalView: View {
                     .fill(palette.card)
                     .shadow(color: .black.opacity(palette.shadowOpacity), radius: 22, y: 6)
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Spacer()
-                        Button { controller.hide() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 14))
+                    VStack(alignment: .leading, spacing: 0) {
+                        if controller.text.isEmpty {
+                            Text("Nothing to paste into.")
+                                .font(.title3)
+                                .foregroundStyle(palette.dim)
+                        } else {
+                            Text(controller.text)
+                                .font(.title3)
+                                .foregroundStyle(palette.transcript)
                         }
-                        .buttonStyle(CatcherXStyle(base: palette.dim, hover: palette.ink, hovering: xHovering))
-                        .accessibilityLabel("Dismiss")
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Circle().inset(by: -10))
-                        .onHover { xHovering = $0 }
                     }
-                    .padding(.bottom, 8)
-                    Text(controller.text)
-                        .font(.title3)
-                        .foregroundStyle(palette.transcript)
                     Spacer(minLength: 0)
-                    HStack {
+                    HStack(alignment: .center, spacing: 8) {
                         Spacer()
+                        OtoPill("Cancel", filled: false) {
+                            controller.hide()
+                        }
                         OtoPill(controller.copied ? "Copied" : "Copy", filled: true) {
                             controller.copy()
                         }
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
                         .disabled(controller.copied)
                     }
+                    .frame(minHeight: 44)
                     .padding(.top, 18)
                 }
                 .padding(20)

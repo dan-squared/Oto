@@ -42,12 +42,13 @@ order (§8 — two orders are bad as proposed, with replacements).
   `OtoApp.swift:152`), rail 218 (`:58`), PageRow 30pt/13pt/12px icon
   (`SettingsRoot.swift:101-111`).
 
-## 1. Settings 15% (30% was a mistake — exact numbers)
+## 1. Settings +15% over ORIGINAL (revert the +30% landing)
 
-`SettingsRoot.width/height` 910×702 → **805×621** (700×1.15,
-540×1.15); `rail` 218 → **193** (168×1.15); page section spacing
-22 → **20** (18×1.15); `defaultSize` matched. Panes flow — no other
-geometry changes. Modal (560) + onboarding (620×480) untouched.
+The +30% (910×702) ships reverted. Target is +15% over the original
+700×540: **805×621** (700×1.15, 540×1.15); rail 218 → **193**
+(168×1.15); page section spacing 22 → **20** (18×1.15);
+`defaultSize` matched. Panes flow — no other geometry changes.
+Modal (560) + onboarding (620×480) untouched.
 
 ## 2. Title bar (recommendation: dress, DON'T re-register)
 

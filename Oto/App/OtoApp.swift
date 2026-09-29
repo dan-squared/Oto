@@ -59,6 +59,9 @@ struct OtoApp: App {
     // OnboardingWindowController for why no SwiftUI scene). Shared with
     // the menu bar re-run entry; single instance, audit S2 rule.
     private let onboarding: OnboardingWindowController
+    // Native Settings chrome dressing (hidden title, transparent bar —
+    // see SettingsWindowDresser). Retained: the observer lives here.
+    private let settingsDresser = SettingsWindowDresser()
 
     init() {
         // Crash backstop first: a kill mid-dictation leaves the duck flag
@@ -149,6 +152,6 @@ struct OtoApp: App {
                 history: historyStore
             )
         }
-        .defaultSize(width: 910, height: 702)
+        .defaultSize(width: 805, height: 621)
     }
 }

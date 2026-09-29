@@ -50,12 +50,12 @@ struct SettingsRoot: View {
     let snippets: SnippetStore
     let history: HistoryStore
 
-    /// Fixed panel size (+30% over the reference 660×500: room for Oto's
+    /// Fixed panel size (+15% over the reference 660×500: room for Oto's
     /// recorder rows with air to spare); per-page ScrollViews absorb
     /// small-screen overflow.
-    nonisolated static let width: CGFloat = 910
-    nonisolated static let height: CGFloat = 702
-    nonisolated static let rail: CGFloat = 218
+    nonisolated static let width: CGFloat = 805
+    nonisolated static let height: CGFloat = 621
+    nonisolated static let rail: CGFloat = 193
 
     @State private var selection: SettingsPane = .dictation
 
@@ -103,12 +103,12 @@ struct SettingsRoot: View {
                         .font(.system(size: 12, weight: .medium))
                         .frame(width: 16, height: 16)
                     Text(item.title)
-                        .font(.system(size: 13, weight: on ? .medium : .regular))
+                        .font(.system(size: 14, weight: on ? .medium : .regular))
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(on ? OtoPalette.ink : (hovering ? OtoPalette.ink.opacity(0.75) : OtoPalette.muted))
                 .padding(.horizontal, 10)
-                .frame(height: 30)
+                .frame(height: 36)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(on ? OtoPalette.ground : (hovering ? OtoPalette.hover : .clear))
@@ -132,7 +132,7 @@ struct SettingsRoot: View {
                 .padding(.bottom, 16)
 
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 20) {
                     switch selection {
                     case .general:
                         GeneralPane(login: login)
