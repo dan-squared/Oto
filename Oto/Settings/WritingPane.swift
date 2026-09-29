@@ -56,7 +56,7 @@ struct WritingPane: View {
     @State private var showClearDictionaryConfirm = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack {
                 Spacer(minLength: 0)
                 OtoSegmented(
@@ -138,7 +138,7 @@ struct WritingPane: View {
                 OtoCard {
                     ForEach(Array(dictionary.rules.enumerated()), id: \.element.id) { index, rule in
                         if index > 0 { OtoRule() }
-                        HStack {
+                        HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("“\(rule.spoken)” → “\(rule.replacement)”")
                                     .font(.system(size: 13))
@@ -149,19 +149,8 @@ struct WritingPane: View {
                                         .foregroundStyle(OtoPalette.muted)
                                 }
                             }
+                            .opacity(rule.isEnabled ? 1 : 0.45)
                             Spacer(minLength: 8)
-                            OtoSwitch(on: Binding(
-                                get: { rule.isEnabled },
-                                set: { newValue in
-                                    _ = Task { await toggleRule(rule, enabled: newValue) }
-                                }
-                            ))
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.top, 11)
-                        .contentShape(Rectangle())
-                        .onTapGesture { editingRule = rule }
-                        HStack(spacing: 16) {
                             OtoQuick("Edit") { editingRule = rule }
                             OtoQuick("Delete", tint: .red) {
                                 Task {
@@ -169,11 +158,11 @@ struct WritingPane: View {
                                     pushRules()
                                 }
                             }
-                            Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 14)
-                        .padding(.top, 4)
-                        .padding(.bottom, 11)
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingRule = rule }
                     }
                 }
             }
@@ -196,11 +185,6 @@ struct WritingPane: View {
                 .foregroundStyle(OtoPalette.muted)
                 .padding(.leading, 2)
         }
-    }
-
-    private func toggleRule(_ rule: DictionaryRule, enabled: Bool) async {
-        await dictionary.setEnabled(id: rule.id, enabled: enabled)
-        pushRules()
     }
 
     private func pushRules() {
