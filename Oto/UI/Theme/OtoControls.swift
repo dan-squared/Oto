@@ -31,8 +31,8 @@ struct OtoBig: View {
                 .foregroundStyle(filled ? OtoPalette.ground : OtoPalette.ink)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
-                .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.wash), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.wash), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -61,9 +61,9 @@ struct OtoPill: View {
                 .foregroundStyle(filled ? OtoPalette.ground : tint)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.ground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(filled ? .clear : OtoPalette.hairline, lineWidth: 1))
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.ground), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(filled ? .clear : OtoPalette.hairline, lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }

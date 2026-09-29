@@ -135,8 +135,15 @@ struct OtoApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Oto", systemImage: "waveform") {
+        // Icon-only label (not title+image): the combined form can render
+        // its slot with an opaque background on some configurations; a
+        // bare template image always blends with the menu bar. The "Oto"
+        // name survives as the accessibility label.
+        MenuBarExtra {
             OtoMenuBarView(coordinator: coordinator, inserter: inserter, dispatch: dispatch, onboarding: onboarding)
+        } label: {
+            Image(systemName: "waveform")
+                .accessibilityLabel("Oto")
         }
         .menuBarExtraStyle(.menu)
 
