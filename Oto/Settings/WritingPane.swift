@@ -56,7 +56,7 @@ struct WritingPane: View {
     @State private var showClearDictionaryConfirm = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 22) {
             HStack {
                 Spacer(minLength: 0)
                 OtoSegmented(
@@ -139,7 +139,7 @@ struct WritingPane: View {
                     ForEach(Array(dictionary.rules.enumerated()), id: \.element.id) { index, rule in
                         if index > 0 { OtoRule() }
                         HStack {
-                            VStack(alignment: .leading, spacing: 3) {
+                            VStack(alignment: .leading, spacing: 6) {
                                 Text("“\(rule.spoken)” → “\(rule.replacement)”")
                                     .font(.system(size: 13))
                                     .foregroundStyle(OtoPalette.ink)
@@ -161,7 +161,7 @@ struct WritingPane: View {
                         .padding(.top, 11)
                         .contentShape(Rectangle())
                         .onTapGesture { editingRule = rule }
-                        HStack {
+                        HStack(spacing: 16) {
                             OtoQuick("Edit") { editingRule = rule }
                             OtoQuick("Delete", tint: .red) {
                                 Task {
@@ -172,6 +172,7 @@ struct WritingPane: View {
                             Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 14)
+                        .padding(.top, 4)
                         .padding(.bottom, 11)
                     }
                 }
@@ -260,7 +261,7 @@ struct WritingPane: View {
                 OtoCard {
                     ForEach(Array(snippets.snippets.enumerated()), id: \.element.id) { index, snippet in
                         if index > 0 { OtoRule() }
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text(snippet.name)
                                 .font(.system(size: 13))
                                 .foregroundStyle(OtoPalette.ink)
@@ -273,7 +274,7 @@ struct WritingPane: View {
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(OtoPalette.faint)
                             }
-                            HStack(spacing: 12) {
+                            HStack(spacing: 16) {
                                 OtoQuick("Edit") { editingSnippet = snippet }
                                 OtoQuick("Copy") { copySnippet(snippet) }
                                 OtoQuick("Delete", tint: .red) {

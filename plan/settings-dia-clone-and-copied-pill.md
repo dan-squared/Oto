@@ -297,3 +297,21 @@ so light mode stays correct). Say `execute` to build as specced.
   Symbols verified in `MacOSX27.0.sdk` CoreAudio headers.
 - Onboarding Ready page lost the Prepare button (status line only);
   copy tightened across onboarding + all four panes.
+
+## 12. Addendum — button radius, Prepare-in-place, dictionary air, 30% Settings
+
+- Buttons stop being capsules: `OtoBig` + `OtoPill` become
+  rounded-10 continuous rects, `OtoQuick` rounded-8 (reference:
+  medium-radius buttons, not pills). Switch/Segmented/Door/Keycap
+  shapes untouched. No test pins shapes (no snapshot tests) — suite
+  is the gate.
+- Speech card: single Readiness row. Ready → status pill + language
+  detail (as today). Not ready → the Prepare button sits IN the row
+  as the control (no separate row); detail shows status/feedback.
+  `isPreparing`/`prepareFeedback`/`runPrepare` unchanged.
+- Dictionary/snippet rows: Edit/Delete HStack spacing 12→16 with top
+  padding; rule/snippet text stacks spacing 3→6.
+- Settings scene 700×540 → 910×702 (+30%), rail 168→218, page
+  section spacing 18→22, `defaultSize` updated to match. Per-page
+  ScrollViews already absorb small screens. Modal (560) and
+  onboarding (620×480) unchanged — user scoped this to Settings.

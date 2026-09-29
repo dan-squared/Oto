@@ -50,11 +50,12 @@ struct SettingsRoot: View {
     let snippets: SnippetStore
     let history: HistoryStore
 
-    /// Fixed panel size (reference 660×500, grown for Oto's recorder
-    /// rows); per-page ScrollViews absorb small-screen overflow.
-    nonisolated static let width: CGFloat = 700
-    nonisolated static let height: CGFloat = 540
-    nonisolated static let rail: CGFloat = 168
+    /// Fixed panel size (+30% over the reference 660×500: room for Oto's
+    /// recorder rows with air to spare); per-page ScrollViews absorb
+    /// small-screen overflow.
+    nonisolated static let width: CGFloat = 910
+    nonisolated static let height: CGFloat = 702
+    nonisolated static let rail: CGFloat = 218
 
     @State private var selection: SettingsPane = .dictation
 
@@ -131,7 +132,7 @@ struct SettingsRoot: View {
                 .padding(.bottom, 16)
 
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 22) {
                     switch selection {
                     case .general:
                         GeneralPane(login: login)

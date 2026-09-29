@@ -34,7 +34,7 @@ struct PrivacyHistoryPane: View {
     @State private var speechText = "Checking…"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 22) {
             HStack {
                 Spacer(minLength: 0)
                 OtoSegmented(

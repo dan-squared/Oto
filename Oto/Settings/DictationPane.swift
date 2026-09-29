@@ -43,29 +43,20 @@ struct DictationPane: View {
     @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
                 OtoCaption(text: "Speech")
                 OtoCard {
-                    OtoLine("Readiness", speechReady ? languageText : readinessText) {
+                    OtoLine("Readiness", speechReady ? languageText : (prepareFeedback ?? readinessText)) {
                         if speechReady {
                             OtoStatus(text: "Ready", tone: .ok)
+                        } else {
+                            OtoBig(isPreparing ? "Preparing…" : "Prepare offline speech") {
+                                Task { await runPrepare() }
+                            }
+                            .disabled(isPreparing)
                         }
                     }
-                    OtoRule()
-                    HStack {
-                        OtoBig(isPreparing ? "Preparing…" : "Prepare offline speech") {
-                            Task { await runPrepare() }
-                        }
-                        .disabled(isPreparing)
-                        if let prepareFeedback, !isPreparing {
-                            Text(prepareFeedback)
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(OtoPalette.muted)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
                 }
             }
 
