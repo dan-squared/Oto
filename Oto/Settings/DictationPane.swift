@@ -2,32 +2,22 @@
 //  DictationPane.swift
 //  Oto
 //
+//  Everything that makes dictation work: speech assets, shortcut, microphone,
+//  permissions, and a safe field to try it in. Every row binds a real
+//  backend; rows without backends do not exist here. Same logic as before —
+//  only the surface changed (Caption + Card + Line rows).
+//
 
-import ApplicationServices
-import Carbon.HIToolbox
-import Speech
 import SwiftUI
 
-/// Everything that makes dictation work: speech assets, shortcut, microphone,
-/// permissions, and a safe field to try it in. Every row binds to a real
-/// backend; rows without backends do not exist here.
 struct DictationPane: View {
     let dispatch: ShortcutDispatch
-    let preparer: SpeechAssetPreparer
-    let permissions: PermissionsManager
-
-    @State private var readinessText = "Checking…"
-    @State private var languageText = "—"
-    @State private var prepareFeedback: String?
-    @State private var isPreparing = false
+    let uiState: SettingsUIState
 
     @State private var shortcutSummary = "Hold ⌥ and speak."
     @State private var shortcutStatus = "Untested"
     @State private var showShortcutModal = false
 
-    @State private var micText = "Checking…"
-    @State private var axTrusted = false
-    @State private var speechText = "Checking…"
     @State private var trialText = ""
     // Catcher kill-switch (6C1): default ON — the modal teaches the
     // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
@@ -39,35 +29,30 @@ struct DictationPane: View {
     @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
 
     var body: some View {
-        Form {
-            Section("Speech") {
-                LabeledContent("Readiness", value: readinessText)
-                LabeledContent("Language", value: languageText)
-                Button("Prepare offline speech") {
-                    Task { await runPrepare() }
-                }
-                .disabled(isPreparing)
-                if let prepareFeedback {
-                    Text(prepareFeedback)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Speech")
+                OtoCard {
+                    OtoLine("Readiness", uiState.speechReady ? uiState.languageText : (uiState.prepareFeedback ?? uiState.readinessText)) {
+                        if uiState.speechReady {
+                            OtoStatus(text: "Ready", tone: .ok)
+                        } else {
+                            OtoBig(uiState.isPreparing ? "Preparing…" : "Prepare offline speech") {
+                                Task { await uiState.runPrepare() }
+                            }
+                            .disabled(uiState.isPreparing)
+                        }
+                    }
                 }
             }
 
-            Section("Shortcut") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Shortcuts")
-                            .font(.headline)
-                        Text(shortcutSummary)
-                            .foregroundStyle(.secondary)
-                        Text(shortcutStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Change") {
-                        showShortcutModal = true
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Shortcut")
+                OtoCard {
+                    OtoLine(shortcutSummary, shortcutStatus) {
+                        OtoPill("Change") {
+                            showShortcutModal = true
+                        }
                     }
                 }
                 .sheet(isPresented: $showShortcutModal) {
@@ -75,95 +60,124 @@ struct DictationPane: View {
                 }
             }
 
-            Section("Microphone") {
-                // No enumeration seam exists: Oto follows the system default
-                // input (Yap parity). A picker here would be a dead control.
-                LabeledContent("Input", value: "System default input")
-                LabeledContent("Status", value: micText)
-                if micText != "Allowed" {
-                    Button("Allow microphone access") {
-                        Task {
-                            _ = await permissions.ensureMicrophone()
-                            refreshPermissions()
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Microphone")
+                OtoCard {
+                    OtoLine("Input", "Sets the Mac's input — every app follows it.") {
+                        Menu {
+                            ForEach(uiState.inputDevices) { device in
+                                Button(device.name) {
+                                    MicrophoneSelector.setDefaultInput(device)
+                                    uiState.refreshMicrophones()
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(uiState.currentInputName)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(OtoPalette.ink)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(OtoPalette.muted)
+                            }
+                        }
+                    }
+                    OtoRule()
+                    OtoLine("Status", uiState.micDeniedGuidance) {
+                        VStack(alignment: .trailing, spacing: 8) {
+                            OtoStatus(text: uiState.micText, tone: uiState.micTone)
+                            if !uiState.micAllowed {
+                                OtoBig("Allow microphone access") {
+                                    Task {
+                                        _ = await uiState.ensureMicrophoneGrant()
+                                        uiState.refreshPermissions()
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            Section("Permissions") {
-                LabeledContent("Accessibility", value: axTrusted ? "Allowed" : "Not allowed")
-                if !axTrusted {
-                    Button("Open Accessibility settings") {
-                        requestAccessibilityPrompt()
-                        Task {
-                            try? await Task.sleep(for: .seconds(2))
-                            refreshPermissions()
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Permissions")
+                OtoCard {
+                    OtoLine("Accessibility", uiState.axTrusted ? nil : "Global keys and insertion need it.") {
+                        VStack(alignment: .trailing, spacing: 8) {
+                            OtoStatus(text: uiState.axTrusted ? "Allowed" : "Not allowed", tone: uiState.axTrusted ? .ok : .warn)
+                            if !uiState.axTrusted {
+                                OtoBig("Open Accessibility settings") {
+                                    uiState.requestAccessibilityPrompt()
+                                    Task {
+                                        try? await Task.sleep(for: .seconds(2))
+                                        uiState.refreshPermissions()
+                                    }
+                                }
+                            }
                         }
                     }
+                    OtoRule()
+                    OtoLine("Speech recognition", nil) {
+                        OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
+                    }
                 }
-                LabeledContent("Speech recognition", value: speechText)
             }
 
-            Section("Catcher") {
-                Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
-                Text("When dictation finishes with no text field to receive it, Oto opens a small window with the transcript and a Copy button. Off: the transcript is copied to the clipboard automatically instead.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Catcher")
+                OtoCard {
+                    OtoLine(
+                        "Show catcher when there's nowhere to paste",
+                        "No text field? Oto opens a small window with your transcript and a Copy button. Off: auto-copies instead."
+                    ) {
+                        OtoSwitch(on: $catcherEnabled)
+                    }
+                }
             }
 
-            Section("Media") {
-                Toggle("Mute media while dictating", isOn: $muteMedia)
-                Text("Oto silences speaker output while you dictate so it can't bleed into the transcript, then restores your exact volume. A relaunch restores it even if Oto was killed mid-dictation.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Media")
+                OtoCard {
+                    OtoLine(
+                        "Mute media while dictating",
+                        "Silences speakers while you dictate, then restores the volume — even after a crash."
+                    ) {
+                        OtoSwitch(on: $muteMedia)
+                    }
+                }
             }
 
-            Section("Try it") {
-                TextEditor(text: $trialText)
-                    .frame(minHeight: 70)
-                Text("Dictate anywhere, or into this field — Oto captures whichever app is frontmost, including its own window.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Try it")
+                OtoCard {
+                    TextEditor(text: $trialText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(OtoPalette.ink)
+                        .frame(minHeight: 70)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                }
+                Text("Dictate anywhere, or here — Oto captures the frontmost app.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(OtoPalette.muted)
+                    .padding(.leading, 2)
             }
         }
-        .formStyle(.grouped)
-        // No .navigationTitle: sections self-label, and a stacked
-        // sidebar+detail title inflates the toolbar zone (§11).
         .task {
             syncFromDispatch()
-            await refreshSpeech()
-            refreshPermissions()
-            // Calibration reflects live backend state; the poll serves the
-            // summary row only (per-slot status lives in the modal).
+            // Slow state lives in the hoisted model (loaded once per
+            // window open) — this task only restarts the cheap live poll.
             while !Task.isCancelled {
                 shortcutSummary = "Hold \(KeyNames.shortLabel(for: dispatch.configuration.hold.kind)) and speak."
                 shortcutStatus = dispatch.calibrationText
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
-    }
-
-    // MARK: - Speech
-
-    private func refreshSpeech() async {
-        let report = await preparer.status()
-        if let tag = report.resolved?.identifier(.bcp47) {
-            let systemTag = Locale.current.identifier(.bcp47)
-            languageText = tag == systemTag
-                ? tag
-                : "\(systemTag) → engine uses \(tag)"
-        } else {
-            languageText = Locale.current.identifier(.bcp47)
+        .onAppear {
+            // Fast only: keeps grant-in-System-Settings flows live with
+            // no flash (never re-probes speech or devices here).
+            uiState.refreshPermissions()
         }
-        readinessText = report.readiness.errorDescription ?? "Ready"
-    }
-
-    private func runPrepare() async {
-        isPreparing = true
-        prepareFeedback = "Preparing…"
-        prepareFeedback = await preparer.prepareDefault()
-        isPreparing = false
-        await refreshSpeech()
     }
 
     // MARK: - Shortcut
@@ -171,38 +185,5 @@ struct DictationPane: View {
     private func syncFromDispatch() {
         shortcutSummary = "Hold \(KeyNames.shortLabel(for: dispatch.configuration.hold.kind)) and speak."
         shortcutStatus = dispatch.calibrationText
-    }
-
-    // MARK: - Permissions
-
-    private func refreshPermissions() {
-        switch permissions.microphoneStatus() {
-        case .granted:
-            micText = "Allowed"
-        case .denied:
-            micText = "Denied — allow in System Settings → Privacy & Security → Microphone."
-        case .notDetermined:
-            micText = "Not asked yet"
-        }
-        axTrusted = AXIsProcessTrusted()
-        switch permissions.speechStatus() {
-        case .authorized:
-            speechText = "Allowed"
-        case .denied, .restricted:
-            speechText = "Not allowed"
-        case .notDetermined:
-            speechText = "Not asked yet"
-        @unknown default:
-            speechText = "Unknown"
-        }
-    }
-
-    /// Apple's blessed prompt: opens System Settings at the Accessibility
-    /// page itself when untrusted, no-ops when trusted. Verified in the
-    /// macOS 27 headers (10.9+); no raw Settings URLs.
-    private func requestAccessibilityPrompt() {
-        _ = AXIsProcessTrustedWithOptions([
-            PermissionsManager.axPromptKey: true,
-        ] as CFDictionary)
     }
 }

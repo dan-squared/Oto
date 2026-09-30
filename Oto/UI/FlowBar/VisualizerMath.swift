@@ -36,25 +36,28 @@ struct BarSample: Equatable, Sendable {
 enum VisualizerMath {
     // MARK: - Constants (the whole look, in one place)
 
-    /// Reference pill (8 thin capsule bars + small red dot).
-    nonisolated static let barCount = 8
+    /// Reference pill (10 thin capsule bars + small red dot). Ten bars in
+    /// the 92.4 width: pitch 5.61 keeps the record block identical to the
+    /// 8-bar era (67.65), so nothing overflows and nothing resizes.
+    nonisolated static let barCount = 10
     /// Consonants snap (per ~16 ms analyzer step — drain runs ~60 Hz;
-    /// ≈13 ms snap time-constant: fast enough to track the ~12 Hz tap
-    /// target updates, too data-starved to invent jitter).
-    nonisolated static let attack: Float = 0.55
+    /// ≈10 ms snap time-constant: tracks hard without overshooting —
+    /// single-pole, always < 1.0. If the matrix hears jitter, this is
+    /// the single knob (0.70 → 0.62), never a redesign.
+    nonisolated static let attack: Float = 0.70
     /// Vowels decay — the asymmetry that reads as "real" (graceful,
     /// never laggy at the 16 ms step).
-    nonisolated static let release: Float = 0.10
-    /// Bars never vanish (v7: floor 0.30 — silence reads as waves, never
-    /// dots; "start from active waves" holds from frame one).
-    nonisolated static let floor: Float = 0.30
+    nonisolated static let release: Float = 0.08
+    /// Silence floor: bars read short when soundless (explicit product
+    /// call — overrides the old "silence reads as waves" rule).
+    nonisolated static let floor: Float = 0.16
     /// Pill geometry (pt). Relaxed compact: 0.825× the v3 mini in every
-    /// linear dimension (112×32=3584 → 92.4×26.4=2439). Count stays 8 —
+    /// linear dimension (112×32=3584 → 92.4×26.4=2439). Count stays 10 —
     /// elements shrink, never vanish (v3 precedent).
     nonisolated static let pillHeight: CGFloat = 26.4
-    /// Thin-bar system (elements shrink, count stays 8).
-    nonisolated static let barWidth: CGFloat = 2.8875
-    nonisolated static let barPitch: CGFloat = 7.0125
+    /// Thin-bar system (elements shrink, count stays 10).
+    nonisolated static let barWidth: CGFloat = 2.5
+    nonisolated static let barPitch: CGFloat = 5.61
     /// Small red dot, no ring.
     nonisolated static let recordDot: CGFloat = 6.6
     /// Chase dots (reference-proportioned).
@@ -86,9 +89,9 @@ enum VisualizerMath {
 
     /// Voice-silence gate: display levels below this mean no voice, so the
     /// render-server sway owns the bars. First voice poll removes it.
-    /// (Silence sits at `floor` = 0.30; live voice clears 0.40 in 1–2
+    /// (Silence sits at `floor` = 0.16; live voice clears 0.35 in 1–2
     /// polls via attack.)
-    nonisolated static let swayThreshold: Float = 0.40
+    nonisolated static let swayThreshold: Float = 0.35
     /// Sway keyframe loop (scaleY), derived from the floor: gentle drift
     /// just above silence — alive, never shouty. Peaks at floor + 0.18.
     nonisolated static var swayValues: [Double] {

@@ -143,7 +143,7 @@ final class PillContentView: NSView {
         addSubview(spinner)
 
         label.textColor = .white
-        label.font = .systemFont(ofSize: 11)
+        label.font = .systemFont(ofSize: 12)
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         addSubview(label)
@@ -373,6 +373,17 @@ final class PillContentView: NSView {
         if currentVisual == .message {
             if let text { label.stringValue = text }
             label.alignment = centerText ? .center : .left
+            // Vertically center: an NSTextField draws from the top of a
+            // tall frame, so fit the label to its text and center it in
+            // the pill (same 92.4 width as dictation — re-render, no resize).
+            label.sizeToFit()
+            let h = VisualizerMath.pillHeight
+            var f = label.frame
+            f.size.width = min(f.size.width, max(0, currentWidth - Self.padding * 2))
+            f.size.height = min(f.size.height, h)
+            f.origin.x = centerText ? (currentWidth - f.size.width) / 2 : Self.padding
+            f.origin.y = max(0, (h - f.size.height) / 2)
+            label.frame = f
         }
         if reduceMotion {
             // Frozen: statics only, no animations (Reduce Motion contract).

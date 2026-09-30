@@ -146,10 +146,10 @@ struct NoTargetModalTests {
     @Test func layoutHeightGrowsAtFixedWidth() {
         let minH = NoTargetModalController.height
         let small = CatcherLayout.height(for: "hi", cardWidth: 464, minHeight: minH, maxHeight: 900)
-        // The X row lifted the chrome floor: one line now measures above
-        // the legacy minimum, which stands as a floor only.
-        #expect(small >= minH)
-        #expect(small == CatcherLayout.chromeHeight + CatcherLayout.textHeight(for: "hi", cardWidth: 464))
+        // v6 shrank the chrome (no dismiss row): one line no longer
+        // clears the minimum — the floor holds, by construction.
+        #expect(small == minH)
+        #expect(small == max(minH, CatcherLayout.chromeHeight + CatcherLayout.textHeight(for: "hi", cardWidth: 464)))
         let tall = CatcherLayout.height(
             for: Array(repeating: "word", count: 50).joined(separator: " "),
             cardWidth: 464, minHeight: minH, maxHeight: 900
@@ -159,27 +159,26 @@ struct NoTargetModalTests {
         let huge = String(repeating: "word ", count: 500)
         let clamped = CatcherLayout.height(for: huge, cardWidth: 464, minHeight: minH, maxHeight: 200)
         #expect(clamped == 200)
-        // Chrome math is explicit: card padding, text inset, gap, button.
-        let chrome: CGFloat = 20 + 44 + 8 + 18 + 44 + 20
+        // Chrome math is explicit: top pad, text→actions gap, actions
+        // row (52pt large footer), bottom pad (v6: no dismiss row).
+        let chrome: CGFloat = 20 + 18 + 52 + 20
         #expect(CatcherLayout.chromeHeight == chrome)
         let innerWidth: CGFloat = 464 - 40
         #expect(CatcherLayout.textWidth(cardWidth: 464) == innerWidth)
     }
 
-    @Test func pillWordsFitPillWidth() {
-        // Greedy fill at pill metrics: never overflows, always Copied.
-        let shown = CatcherText.pillWords(
-            Array(repeating: "word", count: 101).joined(separator: " ")
-        )
-        #expect(shown.hasSuffix("Copied"))
-        let font = NSFont.systemFont(ofSize: 11)
-        let width = (shown as NSString).boundingRect(
+    @Test func overLimitLatchIsShortCenteredLiteral() {
+        // The over-limit pill shows exactly this — centered in the fixed
+        // pill frame, padded by the symmetric label insets. No transcript
+        // words ever reach pill pixels (recovery owns them).
+        #expect(CatcherText.overLimitMessage == "Copied")
+        let font = NSFont.systemFont(ofSize: 12)
+        let width = (CatcherText.overLimitMessage as NSString).boundingRect(
             with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin],
             attributes: [.font: font]
         ).width
         #expect(width <= 76)
-        #expect(CatcherText.pillWords("hi") == "hi… Copied")
     }
 
     @Test func copyShowsCopiedThenCloses() async {

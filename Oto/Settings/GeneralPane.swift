@@ -2,15 +2,15 @@
 //  GeneralPane.swift
 //  Oto
 //
+//  Low-frequency app behavior only. No duplication of microphone, speech, or
+//  shortcut controls (those live in Dictation). Same logic as before — only
+//  the surface changed.
+//
 
 import AppKit
 import ServiceManagement
 import SwiftUI
 
-/// Low-frequency app behavior only. No duplication of microphone, speech, or
-/// shortcut controls (those live in Dictation). Thin by design: toggles
-/// without engines behind them are dead controls, and dead controls are
-/// worse than a short pane.
 /// Dock visibility preference. One documented call
 /// (`setActivationPolicy`), persisted as a scalar — not a model store, so
 /// the 12:46 one-store rule is untouched. Default shown: preserves current
@@ -46,67 +46,85 @@ struct GeneralPane: View {
     @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .bottom
 
     var body: some View {
-        Form {
-            Section("General") {
-                Toggle("Launch at login", isOn: Binding(
-                    get: { loginStatus == .enabled },
-                    set: { newValue in setLogin(enabled: newValue) }
-                ))
-                .toggleStyle(.switch)
-                // Four states, never two: revoked consent and lookup failure
-                // both read as guidance, not as a broken toggle.
-                if loginStatus == .requiresApproval {
-                    Text("Approved in System Settings, then revoked. Re-enable it under System Settings → General → Login Items.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if loginStatus == .notFound {
-                    Text("Login item status is unavailable right now.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let loginError {
-                    Text(loginError)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Toggle("Show Oto in Dock", isOn: Binding(
-                    get: { showInDock },
-                    set: { newValue in setDockVisibility(shown: newValue) }
-                ))
-                .toggleStyle(.switch)
-                .accessibilityIdentifier("ShowInDockToggle")
-                Text("Applies immediately. When off, Oto lives in the menu bar only — no Dock icon, no ⌘Tab. Closing Settings never quits the app.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let dockError {
-                    Text(dockError)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "General")
+                OtoCard {
+                    OtoLine("Launch at login", loginCaption) {
+                        OtoSwitch(on: Binding(
+                            get: { loginStatus == .enabled },
+                            set: { newValue in setLogin(enabled: newValue) }
+                        ))
+                    }
+                    if let loginError {
+                        Text(loginError)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(OtoPalette.muted)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                    }
+                    OtoRule()
+                    OtoLine("Show Oto in Dock", "Applies now. Off: menu bar only — no Dock, no ⌘Tab.") {
+                        OtoSwitch(on: Binding(
+                            get: { showInDock },
+                            set: { newValue in setDockVisibility(shown: newValue) }
+                        ))
+                        .accessibilityIdentifier("ShowInDockToggle")
+                    }
+                    if let dockError {
+                        Text(dockError)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(OtoPalette.muted)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                    }
                 }
             }
 
-            Section("Flow Bar") {
-                Picker("Position", selection: $flowPosition) {
-                    Text("Top").tag(FlowBarPosition.top)
-                    Text("Bottom").tag(FlowBarPosition.bottom)
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "Flow Bar")
+                OtoCard {
+                    HStack {
+                        Text("Position")
+                            .font(.system(size: 13))
+                            .foregroundStyle(OtoPalette.ink)
+                        Spacer(minLength: 8)
+                        OtoSegmented(
+                            options: [(FlowBarPosition.top, "Top"), (FlowBarPosition.bottom, "Bottom")],
+                            selection: $flowPosition
+                        )
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
                 }
-                .pickerStyle(.segmented)
-                Text("Top sits below the notch. You can also drag the pill anytime — it snaps with a tick.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text("Top sits below the notch. Drag the pill anytime — it snaps.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(OtoPalette.muted)
+                    .padding(.leading, 2)
             }
 
-            Section("About") {
-                LabeledContent("Version", value: appVersion)
-                LabeledContent("Bundle identifier", value: Bundle.main.bundleIdentifier ?? "—")
+            VStack(alignment: .leading, spacing: 6) {
+                OtoCaption(text: "About")
+                OtoCard {
+                    OtoLine("Version", appVersion) { EmptyView() }
+                    OtoRule()
+                    OtoLine("Bundle identifier", Bundle.main.bundleIdentifier ?? "—") { EmptyView() }
+                }
             }
         }
-        .formStyle(.grouped)
-        // No .navigationTitle: sections self-label, and a stacked
-        // sidebar+detail title inflates the toolbar zone (§11).
         .task { refreshLogin() }
+    }
+
+    /// Four states, never two: revoked consent and lookup failure both
+    /// read as guidance, not as a broken toggle.
+    private var loginCaption: String? {
+        if loginStatus == .requiresApproval {
+            return "Approved in System Settings, then revoked. Re-enable it under System Settings → General → Login Items."
+        }
+        if loginStatus == .notFound {
+            return "Login item status is unavailable right now."
+        }
+        return nil
     }
 
     private var appVersion: String {

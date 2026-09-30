@@ -16,6 +16,9 @@ struct OtoMenuBarView: View {
     let coordinator: DictationCoordinator
     let inserter: RealTextInsertion
     let dispatch: ShortcutDispatch
+    let onboarding: OnboardingWindowController
+
+    @Environment(\.openWindow) private var openWindow
 
     @State private var status = "idle — no session yet"
     @State private var recoveryAvailable = false
@@ -79,7 +82,17 @@ struct OtoMenuBarView: View {
             Divider()
         }
 
-        SettingsLink()
+        Button("Show onboarding…") {
+            onboarding.show()
+        }
+        Button("Settings…") {
+            if let existing = NSApp.windows.first(where: { $0.title == "Settings" }) {
+                existing.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            } else {
+                openWindow(id: SettingsWindowID.id)
+            }
+        }
         Divider()
         Button("Quit Oto") {
             NSApplication.shared.terminate(nil)

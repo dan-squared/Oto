@@ -13,7 +13,7 @@ import CoreGraphics
 import Foundation
 
 /// Pill slot. Raw values are the persisted strings — never rename them.
-enum FlowBarPosition: String, Sendable {
+enum FlowBarPosition: String, Sendable, Hashable {
     case top
     case bottom
 

@@ -286,7 +286,7 @@ final class FlowBarController {
                 visual: visual,
                 values: model.sample.values,
                 text: projection.state == .message ? overLimitText : nil,
-                centerText: false,
+                centerText: projection.state == .message,
                 reduceMotion: model.motionFrozen,
                 animated: !shrink,
                 liveValues: live
@@ -340,7 +340,7 @@ final class FlowBarController {
             if CatcherText.isOverLimit(text) {
                 pasteboard.clearContents()
                 pasteboard.setString(text, forType: .string)
-                overLimitText = CatcherText.pillWords(text)
+                overLimitText = CatcherText.overLimitMessage
                 overLimitUntil = Date().addingTimeInterval(Self.overLimitDuration)
                 log.info("over-limit auto-copy words=\(CatcherText.wordCount(text))")
                 return
