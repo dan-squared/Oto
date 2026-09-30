@@ -24,4 +24,11 @@ struct OtoThemeTests {
             #expect(abs(light - dark) > 0.01, "pair does not resolve per scheme")
         }
     }
+
+    @Test func selectedFillOpacityIsUsable() {
+        // The selected sidebar pill is one alpha used by both schemes with
+        // opposite polarity; 0 keeps the row invisible, >1 is not a fill.
+        #expect(OtoPalette.selectedFillOpacity > 0)
+        #expect(OtoPalette.selectedFillOpacity <= 1)
+    }
 }

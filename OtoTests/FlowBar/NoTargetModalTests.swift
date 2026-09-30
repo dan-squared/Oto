@@ -160,8 +160,8 @@ struct NoTargetModalTests {
         let clamped = CatcherLayout.height(for: huge, cardWidth: 464, minHeight: minH, maxHeight: 200)
         #expect(clamped == 200)
         // Chrome math is explicit: top pad, text→actions gap, actions
-        // row, bottom pad (v6: no dismiss row).
-        let chrome: CGFloat = 20 + 18 + 44 + 20
+        // row (52pt large footer), bottom pad (v6: no dismiss row).
+        let chrome: CGFloat = 20 + 18 + 52 + 20
         #expect(CatcherLayout.chromeHeight == chrome)
         let innerWidth: CGFloat = 464 - 40
         #expect(CatcherLayout.textWidth(cardWidth: 464) == innerWidth)

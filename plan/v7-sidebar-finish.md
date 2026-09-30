@@ -1,8 +1,10 @@
 # V7: sidebar + settings-window finish (SDK-verified)
 
-Status: **PLAN ONLY — nothing implemented.** Awaiting `execute`.
-Supersedes `plan/v6b-sidebar-split-polish.md` (implemented, uncommitted) and
-`plan/v6c-sidebar-refine.md` (half-implemented, uncommitted).
+Status: **EXECUTED.** Built, verified, committed. Corrections found during
+execution are recorded in §7 — three of the plan's own recommendations were
+wrong and were replaced on evidence.
+Supersedes `plan/v6b-sidebar-split-polish.md` and
+`plan/v6c-sidebar-refine.md` (both partly implemented, uncommitted).
 
 Verification sources: Xcode 27.0 workspace open via Xcode ACP
 (`workspace-jBQm4csyP3` → `Oto.xcodeproj`, scheme `Oto`, test plan `Oto`,
@@ -385,3 +387,84 @@ and the menubar: **untouched**.
 | Q3 | Make the Settings window user-resizable (`.contentMinSize`) as part of the snap fix? | **Yes** — it is the documented mechanism and every pane already scrolls |
 | Q4 | Toolbar reopen control vs. the current floating overlay? | **Toolbar item** — the overlay overlaps the page title when the sidebar is hidden, which is a visible bug today |
 | Q5 | Rows as native `Button`s (needed for press physics + correct VoiceOver role) — any objection? | **No objection expected** — the pixels are unchanged; only the press and AX layers change |
+
+---
+
+## 7. Execution log — what the evidence changed
+
+Four of this plan's recommendations did not survive contact with a running
+build. All four were replaced on measurement, and the reasoning is here so the
+next round does not re-propose them.
+
+1. **`PrimitiveButtonStyle` cannot see `isPressed` — the build proved it.**
+   §2.3 specified a `PrimitiveButtonStyle`, citing `ButtonStyleConfiguration.
+   isPressed` (`:13555`). Those are two different types:
+   `PrimitiveButtonStyleConfiguration` carries `role`, `label` and
+   `trigger()` and **no** `isPressed`. `OtoBounce` is therefore a plain
+   `ButtonStyle` (whose `Configuration` *is* `ButtonStyleConfiguration`).
+   A `ButtonStyle` still owns the whole appearance — returning the label
+   untouched is what `.plain` does — so nothing was lost.
+2. **`.contentMinSize` opened the window full screen — reverted.**
+   §2.4 recommended `contentMinSize` + a min-only frame as the snap fix. With
+   a min-only frame the content's ideal size is unbounded, so the window
+   opened at screen size (caught immediately, reported as "why is it full
+   screen"). The mechanism was also wrong: with a *fixed* content frame the
+   ideal size is constant, so a `contentSize` window cannot re-fit and
+   therefore cannot snap in the first place. Reverted to `.contentSize` +
+   `.frame(width:height:)`. The snap work that remains is the animated
+   toggle (`setSidebar` wraps the mutation in `withAnimation`) plus the
+   locked column width — both kept.
+3. **The bounce does not belong on sidebar rows — it ate clicks.**
+   §2.3/Q5 assumed the press style was free everywhere. Inside a `List` the
+   spring animates the row's own layout mid-press, which both looks wrong
+   and can lose the mouse-up ("sometimes it rejects click"). Rows are
+   `.buttonStyle(.plain)` now; the bounce lives on the standalone buttons
+   (Copy, Cancel, Continue, Edit, Delete) where it is safe. Selection
+   switching instantly is the row feedback.
+   A second, independent click bug was mine: converting the row to a
+   `Button` dropped the old `.contentShape(Rectangle())`, so the hit area
+   hugged the label text and clicking anywhere else in the row did nothing.
+   Fixed with `.frame(maxWidth: .infinity, alignment: .leading)` +
+   `.contentShape(Rectangle())` — the row is now fully clickable.
+4. **The toolbar reopen button drew an oval — it was the system's plate.**
+   `ToolbarItem(placement: .navigation)` looked correct in the API but
+   AppKit draws its own hover/press plate around toolbar items, and that
+   plate is not ours to shape; the screenshot showed a tall rounded rect
+   around the glyph. A toolbar item's background is simply not a styling
+   surface. The control moved into the page header beside the title
+   (square `OtoDoor`, `showsPlate: true`, `.fixedSize()`), where it cannot
+   overlap the title either — which fixes the original overlay bug and this
+   one at once.
+
+Two more verified facts worth keeping:
+
+- **`.toolbar(removing:)` is a `View` modifier, not a `Scene` modifier** —
+  it fails to compile on the scene. It is applied to the window's content
+  closure. It works: the screenshot shows the title text gone while the
+  window keeps its title, so `SettingsWindowLocator` still matches on
+  `title == "Settings"` (no empty-title fallback needed).
+- **AppKit drops `.utilityWindow` from a plain `NSWindow`'s style mask**
+  (measured: `titled|closable` survives as raw value 3; an `NSPanel` keeps
+  the utility bit at 19). So the locator's utility check is only reachable
+  for panels, which the `is NSPanel` check already rejects. The test now
+  pins the measured behaviour instead of asserting an `NSWindow` that
+  AppKit will not build.
+
+### Verification as run
+
+- Build green.
+- **397/397 tests green, twice.** New pins: sidebar column state
+  (`.all` default, `setSidebar` round trip + idempotence), the row metrics
+  that were reported broken (36pt rows, 6pt side insets, 8pt pill gap,
+  210pt locked column), the window-locator predicate against synthetic
+  windows and panels, and the selected-fill alpha.
+- `SettingsUITests` passes unchanged against the six-pane sidebar (it walks
+  ⌘-comma, asserts one window, and clicks through to General).
+- Probe screenshots: the title is gone, the toolbar item was the oval (fixed
+  by moving it), the collapse round trip works via ⇧⌘S / ⌃⌘S.
+- Probe file deleted; no dead code (`OtoPressable`, `ProbeTests` gone).
+
+### Still yours (human matrix — motion cannot be screenshotted)
+
+Bounce feel on Copy/Cancel/Continue, collapse→reopen smoothness, hover with
+no text shift, and the light-scheme look of the selected pill.

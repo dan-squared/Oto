@@ -22,6 +22,12 @@ enum OtoPalette {
     static let safe = Color(nsColor: NS.safe)
     static let unsafe = Color(nsColor: NS.unsafe)
 
+    /// Opacity of the selected sidebar row's monochrome fill. Both schemes
+    /// share this alpha with opposite polarity (white on dark, black on
+    /// light), so the two looks stay mirrored by construction and the
+    /// "tinted translucent" strength is one number, not a hunt.
+    nonisolated static let selectedFillOpacity: CGFloat = 0.85
+
     /// Test accessor: the white component of a pair token under an
     /// explicit appearance (all tokens are monochrome by construction).
     nonisolated static func white(_ color: NSColor, for name: NSAppearance.Name) -> CGFloat {

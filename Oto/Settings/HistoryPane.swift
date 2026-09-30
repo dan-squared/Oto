@@ -1,80 +1,23 @@
 //
-//  PrivacyHistoryPane.swift
+//  HistoryPane.swift
 //  Oto
 //
-//  Opt-in history + privacy in one page. History is off by default and
-//  stores final text only; recovery is Copy + manual paste (the person picks
-//  target and timing) — no re-post path in this pane. Same logic as before —
-//  only the surface changed.
+//  Opt-in history, final text only. Recovery is Copy + manual paste (the
+//  person picks target and timing) — no re-post path in this pane.
 //
 
 import AppKit
 import SwiftUI
 
-struct PrivacyHistoryPane: View {
+struct HistoryPane: View {
     let history: HistoryStore
-    let uiState: SettingsUIState
 
-    enum PaneSection: String, CaseIterable, Identifiable {
-        case history = "History"
-        case privacy = "Privacy"
-        var id: String { rawValue }
-    }
-
-    @State private var section: PaneSection = .history
     @AppStorage("app.Oto.historyEnabled") private var historyEnabled = false
     @State private var showClearConfirm = false
     @State private var feedback: String?
     @State private var historyPage = 1
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Spacer(minLength: 0)
-                OtoSegmented(
-                    options: PaneSection.allCases.map { ($0, $0.rawValue) },
-                    selection: $section
-                )
-                Spacer(minLength: 0)
-            }
-
-            if section == .history {
-                historySection
-            } else {
-                privacySection
-            }
-        }
-        .onChange(of: historyEnabled) { _, new in
-            history.setEnabled(new)
-            if !new { historyPage = 1 }
-        }
-        .onChange(of: history.entries.count) { _, _ in
-            historyPage = HistoryPage.clampedPage(historyPage, total: history.entries.count)
-        }
-        .confirmationDialog(
-            "Delete all history on this Mac?",
-            isPresented: $showClearConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete \(history.entries.count) entries", role: .destructive) {
-                Task {
-                    await history.clearAll()
-                    historyPage = 1
-                }
-            }
-        } message: {
-            Text("This removes every remembered transcript on this Mac. Cannot be undone.")
-        }
-        .task {
-            // Slow state is hoisted (loaded once per window open) — keep
-            // only the fast grant-flow refresh on appear.
-            uiState.refreshPermissions()
-        }
-    }
-
-    // MARK: - History
-
-    private var historySection: some View {
         VStack(alignment: .leading, spacing: 6) {
             OtoCaption(text: "History")
             OtoCard {
@@ -168,57 +111,32 @@ struct PrivacyHistoryPane: View {
                     .padding(.leading, 2)
             }
         }
+        .onChange(of: historyEnabled) { _, new in
+            history.setEnabled(new)
+            if !new { historyPage = 1 }
+        }
+        .onChange(of: history.entries.count) { _, _ in
+            historyPage = HistoryPage.clampedPage(historyPage, total: history.entries.count)
+        }
+        .confirmationDialog(
+            "Delete all history on this Mac?",
+            isPresented: $showClearConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete \(history.entries.count) entries", role: .destructive) {
+                Task {
+                    await history.clearAll()
+                    historyPage = 1
+                }
+            }
+        } message: {
+            Text("This removes every remembered transcript on this Mac. Cannot be undone.")
+        }
     }
 
     private func copyEntry(_ entry: HistoryEntry) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.finalText, forType: .string)
         feedback = "Copied — paste with ⌘V."
-    }
-
-    // MARK: - Privacy
-
-    private var privacySection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            OtoCaption(text: "Privacy")
-            OtoCard {
-                OtoLine("Microphone", uiState.micDeniedGuidance) {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        OtoStatus(text: uiState.micText, tone: uiState.micTone)
-                        if !uiState.micAllowed {
-                            OtoBig("Allow microphone access") {
-                                Task {
-                                    _ = await uiState.ensureMicrophoneGrant()
-                                    uiState.refreshPermissions()
-                                }
-                            }
-                        }
-                    }
-                }
-                OtoRule()
-                OtoLine("Accessibility", uiState.axTrusted ? nil : "Global keys and insertion need it.") {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        OtoStatus(text: uiState.axTrusted ? "Allowed" : "Not allowed", tone: uiState.axTrusted ? .ok : .warn)
-                        if !uiState.axTrusted {
-                            OtoBig("Open Accessibility settings") {
-                                uiState.requestAccessibilityPrompt()
-                                Task {
-                                    try? await Task.sleep(for: .seconds(2))
-                                    uiState.refreshPermissions()
-                                }
-                            }
-                        }
-                    }
-                }
-                OtoRule()
-                OtoLine("Speech recognition", nil) {
-                    OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
-                }
-            }
-            Text("Oto stores what you choose: rules, snippets, and transcripts only if you enable history. Never audio or other apps' content.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(OtoPalette.muted)
-                .padding(.leading, 2)
-        }
     }
 }

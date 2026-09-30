@@ -34,38 +34,41 @@ struct OtoBig: View {
                 .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.wash), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OtoBounce())
         .onHover { hovering = $0 }
     }
 }
 
 /// A small capsule that does one thing. Outlined; filled ink when primary.
+/// `large` is the catcher footer size only — everything else stays compact.
 struct OtoPill: View {
     let title: String
     var filled = false
     var tint: Color = OtoPalette.ink
+    var large = false
     let action: () -> Void
     @State private var hovering = false
 
-    init(_ title: String, filled: Bool = false, tint: Color = OtoPalette.ink, action: @escaping () -> Void) {
+    init(_ title: String, filled: Bool = false, tint: Color = OtoPalette.ink, large: Bool = false, action: @escaping () -> Void) {
         self.title = title
         self.filled = filled
         self.tint = tint
+        self.large = large
         self.action = action
     }
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11.5))
+                .font(.system(size: large ? 13 : 11.5))
                 .foregroundStyle(filled ? OtoPalette.ground : tint)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, large ? 14 : 10)
+                .padding(.vertical, large ? 8 : 5)
                 .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.ground), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(filled ? .clear : OtoPalette.hairline, lineWidth: 1))
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OtoBounce())
         .onHover { hovering = $0 }
         .animation(OtoMotion.quick, value: hovering)
     }
@@ -132,27 +135,44 @@ struct OtoSegmented<Option: Hashable>: View {
 struct OtoDoor: View {
     let systemName: String
     var on = false
+    /// Keeps a wash plate under the icon at rest. Off for the panel cross
+    /// (it floats on the card); on for a toolbar control, where a bare
+    /// transparent glyph reads as a smudge rather than a button.
+    var showsPlate = false
     var help = ""
     let act: () -> Void
     @State private var hovering = false
 
+    /// Square edge. The toolbar compresses anything that does not declare
+    /// one, which is what made this control render thin.
+    nonisolated static let side: CGFloat = 28
+
     var body: some View {
         Button(action: act) {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(on ? OtoPalette.ink : (hovering ? OtoPalette.ink.opacity(0.7) : OtoPalette.muted))
-                .frame(width: 26, height: 26)
+                .frame(width: Self.side, height: Self.side)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(on ? OtoPalette.wash : (hovering ? OtoPalette.hover : .clear))
+                        .fill(plateFill)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OtoBounce())
+        // Belt and braces with the inner frame: the toolbar gets the
+        // button's ideal size, not whatever space it thinks it has.
+        .frame(width: Self.side, height: Self.side)
         .onHover { hovering = $0 }
         .help(help)
         .animation(OtoMotion.quick, value: hovering)
         .animation(OtoMotion.quick, value: on)
+    }
+
+    private var plateFill: Color {
+        if on { return OtoPalette.wash }
+        if hovering { return OtoPalette.hover }
+        return showsPlate ? OtoPalette.wash.opacity(0.7) : .clear
     }
 }
 
@@ -198,12 +218,36 @@ struct OtoHunt: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(OtoPalette.faint)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(OtoBounce())
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// Press physics for every plain button: a small spring squish on click
+/// that reads as bounce, never a resize on hover. A `ButtonStyle` — not a
+/// DragGesture modifier — so `configuration.isPressed` is the documented
+/// press signal and it also fires for keyboard activation, which a drag
+/// gesture misses. Deliberately NOT a `PrimitiveButtonStyle`: that
+/// configuration type has `role`/`label`/`trigger()` and no `isPressed`
+/// (SDK: PrimitiveButtonStyleConfiguration vs ButtonStyleConfiguration),
+/// and a `ButtonStyle` still owns the whole appearance — returning the
+/// label untouched is what `.plain` does. Reduce Motion drops the scale.
+struct OtoBounce: ButtonStyle {
+    /// Squish depth. Below ~0.94 the label reads as broken, above ~0.98 it
+    /// reads as nothing; 0.96 is the band that reads as bounce.
+    var scale: CGFloat = 0.96
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1)
+            .animation(
+                OtoMotion.reduced ? nil : .spring(response: 0.25, dampingFraction: 0.55),
+                value: configuration.isPressed
+            )
     }
 }
 
@@ -228,7 +272,7 @@ struct OtoQuick: View {
                 .padding(.vertical, 4)
                 .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OtoBounce())
     }
 }
 

@@ -61,7 +61,7 @@ enum CatcherLayout: Sendable {
     nonisolated static let cardPadding: CGFloat = 20
     /// Vertical chrome: top pad + text→button gap + button row + bottom
     /// pad. Matches the view below by construction.
-    nonisolated static let chromeHeight: CGFloat = 20 + 18 + 44 + 20
+    nonisolated static let chromeHeight: CGFloat = 20 + 18 + 52 + 20
     /// The Dynamic Type title3 SwiftUI renders — same system, no guessing.
     /// (A hardcoded size here caused the gap bug: measured tall, rendered
     /// short, Spacer ate the difference.)
@@ -386,17 +386,17 @@ struct NoTargetModalView: View {
                         }
                     }
                     Spacer(minLength: 0)
-                    HStack(alignment: .center, spacing: 8) {
+                    HStack(alignment: .center, spacing: 10) {
                         Spacer()
-                        OtoPill("Cancel", filled: false) {
+                        OtoPill("Cancel", filled: false, large: true) {
                             controller.hide()
                         }
-                        OtoPill(controller.copied ? "Copied" : "Copy", filled: true) {
+                        OtoPill(controller.copied ? "Copied" : "Copy", filled: true, large: true) {
                             controller.copy()
                         }
                         .disabled(controller.copied)
                     }
-                    .frame(minHeight: 44)
+                    .frame(minHeight: 52)
                     .padding(.top, 18)
                 }
                 .padding(20)

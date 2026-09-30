@@ -96,7 +96,7 @@ struct OnboardingView: View {
             Spacer()
             if page > 0 {
                 Button("Back") { forward = false; page -= 1 }
-                    .buttonStyle(.plain)
+                    .buttonStyle(OtoBounce())
                     .font(.system(size: 13))
                     .foregroundStyle(OtoPalette.muted)
             }

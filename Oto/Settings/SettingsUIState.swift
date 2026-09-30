@@ -30,6 +30,13 @@ final class SettingsUIState {
     // Mic devices (moved verbatim from DictationPane).
     var inputDevices: [AudioInputDevice] = []
     var defaultInputUID: String?
+    // Sidebar column visibility (owned here so the split view, the
+    // View-menu commands and the reopen control share one source; default
+    // all-visible every launch). The type is NavigationSplitViewVisibility —
+    // there is no NavigationSplitViewColumnVisibility in MacOSX27.0.sdk
+    // (swiftinterface:27541) — and it is NOT an OptionSet, so membership is
+    // derived in `sidebarVisible` below, never with `contains`.
+    var columnVisibility: NavigationSplitViewVisibility = .all
 
     private let preparer: SpeechAssetPreparer
     private let permissions: PermissionsManager
@@ -114,9 +121,23 @@ final class SettingsUIState {
         ] as CFDictionary)
     }
 
+    /// Show/hide the sidebar column, animated in one place so the column
+    /// and the detail reflow move together (an unanimated mutation reads as
+    /// a snap). Idempotent: a repeat call does not re-animate.
+    func setSidebar(_ visible: Bool) {
+        let next: NavigationSplitViewVisibility = visible ? .all : .detailOnly
+        guard next != columnVisibility else { return }
+        withAnimation(OtoMotion.settle) { columnVisibility = next }
+    }
+
     // MARK: - Derived (pure over stored strings — unit-tested)
 
     var micAllowed: Bool { micText == "Allowed" }
+
+    /// True while the sidebar column is on screen. Pure over the stored
+    /// visibility, so it is unit-tested; membership is equality because
+    /// NavigationSplitViewVisibility is not an OptionSet.
+    var sidebarVisible: Bool { columnVisibility != .detailOnly }
 
     var micTone: OtoStatus.Tone {
         micAllowed ? .ok : (micText == "Not asked yet" ? .idle : .warn)

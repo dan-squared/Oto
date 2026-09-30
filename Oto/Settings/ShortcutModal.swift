@@ -66,7 +66,7 @@ struct KeycapField: View {
                         .stroke(OtoPalette.hairline, lineWidth: 1)
                 )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(OtoBounce())
             .disabled(disabled)
 
             Button {
@@ -77,7 +77,7 @@ struct KeycapField: View {
                     .foregroundStyle(OtoPalette.muted)
                     .frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(OtoBounce())
             .disabled(disabled)
             .help("Clear (shortcuts turn off when you press Done)")
         }
