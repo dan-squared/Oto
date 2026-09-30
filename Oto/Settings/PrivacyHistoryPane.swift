@@ -9,13 +9,11 @@
 //
 
 import AppKit
-import ApplicationServices
-import Speech
 import SwiftUI
 
 struct PrivacyHistoryPane: View {
     let history: HistoryStore
-    let permissions: PermissionsManager
+    let uiState: SettingsUIState
 
     enum PaneSection: String, CaseIterable, Identifiable {
         case history = "History"
@@ -29,12 +27,8 @@ struct PrivacyHistoryPane: View {
     @State private var feedback: String?
     @State private var historyPage = 1
 
-    @State private var micText = "Checking…"
-    @State private var axTrusted = false
-    @State private var speechText = "Checking…"
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack {
                 Spacer(minLength: 0)
                 OtoSegmented(
@@ -72,7 +66,9 @@ struct PrivacyHistoryPane: View {
             Text("This removes every remembered transcript on this Mac. Cannot be undone.")
         }
         .task {
-            refreshPermissions()
+            // Slow state is hoisted (loaded once per window open) — keep
+            // only the fast grant-flow refresh on appear.
+            uiState.refreshPermissions()
         }
     }
 
@@ -186,29 +182,29 @@ struct PrivacyHistoryPane: View {
         VStack(alignment: .leading, spacing: 6) {
             OtoCaption(text: "Privacy")
             OtoCard {
-                OtoLine("Microphone", micDeniedGuidance) {
+                OtoLine("Microphone", uiState.micDeniedGuidance) {
                     VStack(alignment: .trailing, spacing: 8) {
-                        OtoStatus(text: micText, tone: micTone)
-                        if !micAllowed {
+                        OtoStatus(text: uiState.micText, tone: uiState.micTone)
+                        if !uiState.micAllowed {
                             OtoBig("Allow microphone access") {
                                 Task {
-                                    _ = await permissions.ensureMicrophone()
-                                    refreshPermissions()
+                                    _ = await uiState.ensureMicrophoneGrant()
+                                    uiState.refreshPermissions()
                                 }
                             }
                         }
                     }
                 }
                 OtoRule()
-                OtoLine("Accessibility", axTrusted ? nil : "Global keys and insertion need it.") {
+                OtoLine("Accessibility", uiState.axTrusted ? nil : "Global keys and insertion need it.") {
                     VStack(alignment: .trailing, spacing: 8) {
-                        OtoStatus(text: axTrusted ? "Allowed" : "Not allowed", tone: axTrusted ? .ok : .warn)
-                        if !axTrusted {
+                        OtoStatus(text: uiState.axTrusted ? "Allowed" : "Not allowed", tone: uiState.axTrusted ? .ok : .warn)
+                        if !uiState.axTrusted {
                             OtoBig("Open Accessibility settings") {
-                                requestAccessibilityPrompt()
+                                uiState.requestAccessibilityPrompt()
                                 Task {
                                     try? await Task.sleep(for: .seconds(2))
-                                    refreshPermissions()
+                                    uiState.refreshPermissions()
                                 }
                             }
                         }
@@ -216,7 +212,7 @@ struct PrivacyHistoryPane: View {
                 }
                 OtoRule()
                 OtoLine("Speech recognition", nil) {
-                    OtoStatus(text: speechText, tone: speechTone)
+                    OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
                 }
             }
             Text("Oto stores what you choose: rules, snippets, and transcripts only if you enable history. Never audio or other apps' content.")
@@ -224,53 +220,5 @@ struct PrivacyHistoryPane: View {
                 .foregroundStyle(OtoPalette.muted)
                 .padding(.leading, 2)
         }
-    }
-
-    private var micAllowed: Bool { micText == "Allowed" }
-
-    private var micTone: OtoStatus.Tone {
-        micAllowed ? .ok : (micText == "Not asked yet" ? .idle : .warn)
-    }
-
-    private var micDeniedGuidance: String? {
-        micAllowed || micText == "Not asked yet"
-            ? nil
-            : "Allow it in System Settings → Privacy & Security → Microphone."
-    }
-
-    private var speechTone: OtoStatus.Tone {
-        switch speechText {
-        case "Allowed": .ok
-        case "Not asked yet", "Checking…", "Unknown": .idle
-        default: .warn
-        }
-    }
-
-    private func refreshPermissions() {
-        switch permissions.microphoneStatus() {
-        case .granted:
-            micText = "Allowed"
-        case .denied:
-            micText = "Denied"
-        case .notDetermined:
-            micText = "Not asked yet"
-        }
-        axTrusted = AXIsProcessTrusted()
-        switch permissions.speechStatus() {
-        case .authorized:
-            speechText = "Allowed"
-        case .denied, .restricted:
-            speechText = "Not allowed"
-        case .notDetermined:
-            speechText = "Not asked yet"
-        @unknown default:
-            speechText = "Unknown"
-        }
-    }
-
-    private func requestAccessibilityPrompt() {
-        _ = AXIsProcessTrustedWithOptions([
-            PermissionsManager.axPromptKey: true,
-        ] as CFDictionary)
     }
 }

@@ -46,7 +46,7 @@ struct GeneralPane: View {
     @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .bottom
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
                 OtoCaption(text: "General")
                 OtoCard {

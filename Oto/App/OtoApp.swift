@@ -59,9 +59,10 @@ struct OtoApp: App {
     // OnboardingWindowController for why no SwiftUI scene). Shared with
     // the menu bar re-run entry; single instance, audit S2 rule.
     private let onboarding: OnboardingWindowController
-    // Native Settings chrome dressing (hidden title, transparent bar —
-    // see SettingsWindowDresser). Retained: the observer lives here.
-    private let settingsDresser = SettingsWindowDresser()
+    // Settings UI state (hoisted pane state — mic/speech/permissions load
+    // once per app life, never reset by rail navigation; see
+    // SettingsUIState). Single instance, audit S2 rule.
+    private let settingsUIState: SettingsUIState
 
     init() {
         // Crash backstop first: a kill mid-dictation leaves the duck flag
@@ -124,6 +125,7 @@ struct OtoApp: App {
         )
         self.onboarding = onboarding
         DockRestoreDelegate.onboarding = onboarding
+        self.settingsUIState = SettingsUIState(preparer: preparer, permissions: permissions)
         // Stores load off the launch path; rules push when ready. Dictation
         // before this lands uses trim-only (today's behavior), never blocks.
         Task {
@@ -135,10 +137,6 @@ struct OtoApp: App {
     }
 
     var body: some Scene {
-        // Icon-only label (not title+image): the combined form can render
-        // its slot with an opaque background on some configurations; a
-        // bare template image always blends with the menu bar. The "Oto"
-        // name survives as the accessibility label.
         MenuBarExtra {
             OtoMenuBarView(coordinator: coordinator, inserter: inserter, dispatch: dispatch, onboarding: onboarding)
         } label: {
@@ -147,11 +145,13 @@ struct OtoApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Settings {
+        // Native window, not a Settings scene (experiment): identical
+        // content, standard window chrome. Cmd-comma is re-wired below
+        // since the system only binds it to a Settings scene.
+        WindowGroup("Settings", id: SettingsWindowID.id) {
             SettingsRoot(
                 dispatch: dispatch,
-                preparer: preparer,
-                permissions: permissions,
+                uiState: settingsUIState,
                 login: login,
                 coordinator: coordinator,
                 dictionary: dictionaryStore,
@@ -160,5 +160,37 @@ struct OtoApp: App {
             )
         }
         .defaultSize(width: 805, height: 621)
+        .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                SettingsCommands()
+            }
+        }
+    }
+}
+
+/// Settings window identity + its Cmd-comma entry. The system binds ⌘,
+/// only to a Settings scene, so the native-window experiment re-wires
+/// it here (same shortcut, same destination).
+enum SettingsWindowID {
+    nonisolated static let id = "settings"
+}
+
+private struct SettingsCommands: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") {
+            // Single-open guard: repeated invocations (double-fired key
+            // equivalents, rapid menu clicks) focus the live window
+            // instead of stacking duplicates.
+            if let existing = NSApp.windows.first(where: { $0.title == "Settings" }) {
+                existing.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            } else {
+                openWindow(id: SettingsWindowID.id)
+            }
+        }
+        .keyboardShortcut(",", modifiers: .command)
     }
 }

@@ -4,34 +4,10 @@
 //
 //  Dictionary + snippets in one page. Subsections ride an in-content
 //  segmented control (never a nested TabView). Every control binds a real
-//  store; sheets carry validation + test/preview; transfer uses
-//  fileImporter/fileExporter; deletion confirms. Same logic as before —
-//  only the surface changed.
+//  store; sheets carry validation + test/preview; deletion confirms.
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
-
-/// Export wrapper: FileDocument (the fileExporter overload demands it —
-/// a plain String does not satisfy the document-based exporter).
-struct DictionaryExportDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
-
-    let json: String
-
-    init(json: String) {
-        self.json = json
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        // Reading back is unsupported (import uses fileImporter + decoder).
-        throw CocoaError(.fileReadUnsupportedScheme)
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: Data(json.utf8))
-    }
-}
 
 struct WritingPane: View {
     let coordinator: DictationCoordinator
@@ -49,10 +25,6 @@ struct WritingPane: View {
     @State private var addingRule = false
     @State private var editingSnippet: Snippet?
     @State private var addingSnippet = false
-    @State private var showImporter = false
-    @State private var showExporter = false
-    @State private var exportDocument: DictionaryExportDocument?
-    @State private var importReport: String?
     @State private var showClearDictionaryConfirm = false
 
     var body: some View {
@@ -94,15 +66,6 @@ struct WritingPane: View {
                 editingSnippet = nil
             }
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
-            runImport(result)
-        }
-        .fileExporter(
-            isPresented: $showExporter,
-            document: exportDocument,
-            contentType: .json,
-            defaultFilename: "oto-dictionary.json"
-        ) { _ in }
         .confirmationDialog(
             "Delete all dictionary rules?",
             isPresented: $showClearDictionaryConfirm,
@@ -169,16 +132,8 @@ struct WritingPane: View {
             HStack(spacing: 12) {
                 OtoPill("Add rule") { addingRule = true }
                 Spacer(minLength: 0)
-                OtoPill("Import") { showImporter = true }
-                OtoPill("Export") { runExport() }
                 OtoPill("Clear", tint: .red) { showClearDictionaryConfirm = true }
                     .disabled(dictionary.rules.isEmpty)
-            }
-            if let importReport {
-                Text(importReport)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OtoPalette.muted)
-                    .padding(.leading, 2)
             }
             Text("Whole words only — never inside links or paths. App rules win in their app.")
                 .font(.system(size: 11.5))
@@ -189,43 +144,6 @@ struct WritingPane: View {
 
     private func pushRules() {
         Task { await coordinator.setDictionaryRules(dictionary.rules) }
-    }
-
-    private func runExport() {
-        do {
-            let data = try dictionary.exportData(snapshot: dictionary.rules)
-            exportDocument = DictionaryExportDocument(json: String(decoding: data, as: UTF8.self))
-            showExporter = true
-        } catch {
-            importReport = "Export failed."
-        }
-    }
-
-    private func runImport(_ result: Result<URL, any Error>) {
-        switch result {
-        case .failure:
-            importReport = "Import cancelled."
-        case .success(let url):
-            let didAccess = url.startAccessingSecurityScopedResource()
-            defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: url)
-                Task {
-                    let report = await dictionary.importData(data)
-                    var lines = ["Imported \(report.imported)."]
-                    if report.skippedDuplicates > 0 {
-                        lines.append("Skipped \(report.skippedDuplicates) duplicates.")
-                    }
-                    for rejected in report.rejected.prefix(3) {
-                        lines.append("Row \(rejected.row): \(rejected.reason)")
-                    }
-                    importReport = lines.joined(separator: " ")
-                    pushRules()
-                }
-            } catch {
-                importReport = "Could not read that file."
-            }
-        }
     }
 
     // MARK: - Snippets

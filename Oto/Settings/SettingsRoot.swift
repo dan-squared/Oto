@@ -42,8 +42,7 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
 
 struct SettingsRoot: View {
     let dispatch: ShortcutDispatch
-    let preparer: SpeechAssetPreparer
-    let permissions: PermissionsManager
+    let uiState: SettingsUIState
     let login: any LoginItemManaging
     let coordinator: DictationCoordinator
     let dictionary: DictionaryStore
@@ -55,70 +54,28 @@ struct SettingsRoot: View {
     /// small-screen overflow.
     nonisolated static let width: CGFloat = 805
     nonisolated static let height: CGFloat = 621
-    nonisolated static let rail: CGFloat = 193
 
     @State private var selection: SettingsPane = .dictation
 
     var body: some View {
-        HStack(spacing: 0) {
-            rail
-            Rectangle().fill(OtoPalette.hairline).frame(width: 1)
+        NavigationSplitView {
+            List(SettingsPane.allCases, selection: $selection) { item in
+                Label(item.title, systemImage: item.symbol)
+                    .font(.system(size: 14))
+                    .fontWeight(.regular)
+            }
+            .listStyle(.sidebar)
+            // Monochrome selection (not blue): primary reads black in
+            // light, white in dark. Matrix screenshot decides; fallback
+            // is a custom listRowBackground (plan §3).
+            .tint(.primary)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 210)
+        } detail: {
             content
         }
         .frame(width: Self.width, height: Self.height)
-        .background(OtoPalette.ground)
-    }
-
-    // MARK: - the rail
-
-    private var rail: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Settings")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(OtoPalette.ink)
-                .padding(.horizontal, 10)
-                .padding(.top, 14)
-                .padding(.bottom, 12)
-            ForEach(SettingsPane.allCases) { item in
-                PageRow(item: item, on: selection == item) { selection = item }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(8)
-        .frame(width: Self.rail, alignment: .leading)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(OtoPalette.wash.opacity(0.45))
-    }
-
-    private struct PageRow: View {
-        let item: SettingsPane
-        let on: Bool
-        let act: () -> Void
-        @State private var hovering = false
-
-        var body: some View {
-            Button(action: act) {
-                HStack(spacing: 9) {
-                    Image(systemName: item.symbol)
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 16, height: 16)
-                    Text(item.title)
-                        .font(.system(size: 14, weight: on ? .medium : .regular))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(on ? OtoPalette.ink : (hovering ? OtoPalette.ink.opacity(0.75) : OtoPalette.muted))
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(on ? OtoPalette.ground : (hovering ? OtoPalette.hover : .clear))
-                        .shadow(color: .black.opacity(on ? 0.06 : 0), radius: 3, y: 1)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .onHover { hovering = $0 }
-            .animation(OtoMotion.quick, value: hovering)
+        .task {
+            uiState.ensureLoaded()
         }
     }
 
@@ -137,7 +94,7 @@ struct SettingsRoot: View {
                     case .general:
                         GeneralPane(login: login)
                     case .dictation:
-                        DictationPane(dispatch: dispatch, preparer: preparer, permissions: permissions)
+                        DictationPane(dispatch: dispatch, uiState: uiState)
                     case .writing:
                         WritingPane(
                             coordinator: coordinator,
@@ -147,7 +104,7 @@ struct SettingsRoot: View {
                     case .privacyHistory:
                         PrivacyHistoryPane(
                             history: history,
-                            permissions: permissions
+                            uiState: uiState
                         )
                     }
                 }

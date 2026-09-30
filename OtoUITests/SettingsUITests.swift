@@ -43,19 +43,21 @@ final class SettingsUITests: XCTestCase {
         )
         XCTAssertEqual(app.windows.count, 1, "Only one Settings window may exist")
 
-        // Native chrome proof: the standard traffic lights exist (the deleted
-        // custom titlebar would fail exactly here), and all four toolbar tabs
-        // prove the top-bar root (§phase-5-topbar: no sidebar exists at all).
+        // Native chrome proof: the standard traffic lights exist, and the
+        // native sidebar lists all four destinations (labels, not custom
+        // buttons — rows are native List cells).
         XCTAssertTrue(settingsWindow.buttons["_XCUI:CloseWindow"].exists)
-        XCTAssertTrue(settingsWindow.buttons["General"].exists)
-        XCTAssertTrue(settingsWindow.buttons["Dictation"].exists)
-        XCTAssertTrue(settingsWindow.buttons["Writing"].exists)
-        XCTAssertTrue(settingsWindow.buttons["Privacy & History"].exists)
+        for name in ["General", "Dictation", "Writing", "Privacy & History"] {
+            XCTAssertTrue(
+                settingsWindow.descendants(matching: .any)[name].exists,
+                "Sidebar must list \(name)"
+            )
+        }
 
         // Dock setting (phase-5-dock-visibility): single source of truth in
         // Settings General. Existence only — never flipped here (flipping
         // would hide the runner's Dock via setActivationPolicy).
-        settingsWindow.buttons["General"].click()
+        settingsWindow.descendants(matching: .any)["General"].click()
         XCTAssertTrue(
             settingsWindow.descendants(matching: .any)["ShowInDockToggle"]
                 .waitForExistence(timeout: 10),
