@@ -136,6 +136,9 @@ final class FlowBarController {
     /// Test hooks: pill surface state without exposing the panel.
     var isPillVisible: Bool { panel?.isVisible ?? false }
     var isLiveValues: Bool { panel?.isLiveValues ?? false }
+    /// True while content is fully opaque (a visible window with faded
+    /// content reads as missing — this catches what isPillVisible can't).
+    var isContentFull: Bool { (panel?.contentAlpha ?? 1) >= 1 }
 
     private func pollLoop() async {
         while !Task.isCancelled {
@@ -252,6 +255,10 @@ final class FlowBarController {
                     panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .inserting))
                 }
                 panel?.setLiveValues(nil)
+                // Full alpha, no fade: the tail holds readable pixels, so
+                // the scheduled close must not melt them (a faded tail is
+                // why the loader read as missing).
+                panel?.restoreContentAlpha()
                 panel?.show(
                     sessionID: nil,
                     displayID: Self.targetScreen(of: state),
@@ -267,7 +274,7 @@ final class FlowBarController {
                     animated: true,
                     liveValues: false
                 )
-                scheduleHide(after: UInt64(Self.loaderMinDwell * 1_000_000_000), parked: true)
+                scheduleHide(after: UInt64(Self.loaderMinDwell * 1_000_000_000), parked: true, fade: false)
                 return
             }
             guard panel?.isVisible == true else {
@@ -342,11 +349,14 @@ final class FlowBarController {
     /// Schedules content fade now + `hideNow` after the delay
     /// (generation-guarded; drag inside skips and reschedules). A parked
     /// hide is adoption bait for the next visible session; a melt is
-    /// today's prompt path.
-    private func scheduleHide(after delay: UInt64, parked: Bool) {
+    /// today's prompt path. `fade: false` skips the fade for holds that
+    /// must stay fully visible until close (loader tail).
+    private func scheduleHide(after delay: UInt64, parked: Bool, fade: Bool = true) {
         let generation = hideGeneration
         parkedForAdoption = parked
-        panel?.fadeContentOut()
+        if fade {
+            panel?.fadeContentOut()
+        }
         hideTask = Task {
             try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled, generation == self.hideGeneration else { return }

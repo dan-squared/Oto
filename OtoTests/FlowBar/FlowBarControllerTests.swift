@@ -171,10 +171,13 @@ struct FlowBarControllerTests {
         await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
         await sut.controller.pollOnce()
         #expect(sut.controller.isPillVisible)
-        // Past the 0.14s melt, inside the 0.6s dwell: still showing.
+        // Past the 0.14s melt, inside the 0.6s dwell: still showing AND
+        // fully opaque (a lingering window with faded content is the
+        // exact missing-loader shape this tail fixes).
         try? await Task.sleep(for: .milliseconds(350))
         await sut.controller.pollOnce()
         #expect(sut.controller.isPillVisible)
+        #expect(sut.controller.isContentFull)
         // Past the dwell: gone and stays gone (single-shot per session).
         try? await Task.sleep(for: .milliseconds(500))
         await sut.controller.pollOnce()
