@@ -94,6 +94,9 @@ struct ShortcutModal: View {
     private let log = Logger(subsystem: "app.Oto", category: "shortcut")
 
     @State private var staging = ShortcutStaging(live: .default())
+    /// System fn usage, read on appear for the derived-row caption only
+    /// (copy adapts; behavior never changes).
+    @State private var fnUsage = SystemFnUsage.unknown
     @State private var isRecordingHold = false
     @State private var isRecordingHandsFree = false
     @State private var holdMessage: String?
@@ -148,6 +151,7 @@ struct ShortcutModal: View {
         .frame(minWidth: 560)
         .task {
             staging = ShortcutStaging(live: dispatch.configuration)
+            fnUsage = SystemFnUsage.read()
         }
         .onDisappear {
             // Safety: an armed recording suspends global shortcuts — never
@@ -202,7 +206,7 @@ struct ShortcutModal: View {
                 if case .modifierHold(let code) = staging.effectiveKind(for: .hold),
                    code == UInt16(kVK_Function)
                 {
-                    Text("Double taps are handled by macOS.")
+                    Text(SystemFnUsage.caption(for: fnUsage))
                         .font(.system(size: 11.5))
                         .foregroundStyle(OtoPalette.muted)
                 }

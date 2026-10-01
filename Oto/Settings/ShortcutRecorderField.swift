@@ -268,6 +268,10 @@ struct ShortcutRecorderModifier: ViewModifier {
                 onInvalid(reason)
             case .captured(let modifiers, let keyCode, let conflicts):
                 onCapture(modifiers, keyCode, conflicts)
+            case .captureModifier(let code):
+                // Bare fn as keyDown (code 63): same staging as a flags
+                // capture — both call sites already suspend, stop, log.
+                onCaptureModifier(code)
             }
             return nil
         }

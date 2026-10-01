@@ -21,6 +21,10 @@ enum RecorderOutcome: Equatable, Sendable {
     case invalid(reason: RecorderInvalidReason)
     /// Valid combo captured; conflicts listed for the UI to present.
     case captured(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict])
+    /// Bare fn arrived as keyDown (code 63, external keyboards): no
+    /// flagsChanged ever fires, so the flags path can't arm. Stage
+    /// exactly like a flags capture via `onCaptureModifier`.
+    case captureModifier(code: UInt16)
 
     // Explicit: compared in tests from nonisolated contexts (Swift 6).
     nonisolated static func == (lhs: RecorderOutcome, rhs: RecorderOutcome) -> Bool {
@@ -31,6 +35,8 @@ enum RecorderOutcome: Equatable, Sendable {
             return a == b
         case (.captured(let lm, let lk, let lc), .captured(let rm, let rk, let rc)):
             return lm == rm && lk == rk && lc == rc
+        case (.captureModifier(let a), .captureModifier(let b)):
+            return a == b
         default:
             return false
         }
@@ -77,6 +83,9 @@ enum RecorderInvalidReason: Equatable, Sendable {
 /// disarms (Escape/Delete/combo priority is checked first, as today).
 /// Untrackable codes (CapsLock has no CGEvent flag) fall through to the
 /// normal classify path, which refuses them honestly.
+/// Second arrival shape: some keyboards deliver bare fn as `keyDown`
+/// (code 63) with no `flagsChanged` at all — `classify` routes that to
+/// `.captureModifier`, the same staging as a flags capture.
 struct FlagsCaptureState: Equatable, Sendable {
     private var armed: UInt16?
 
@@ -187,6 +196,15 @@ enum ShortcutRecorderRules: Sendable {
             return .cleared
         }
 
+        // Bare fn as keyDown (code 63, external keyboards): no
+        // flagsChanged ever fires on these devices, so the flags path
+        // can't arm. Stage exactly like a flags capture. Bare only —
+        // with other modifiers held, fall through to the combo path
+        // unchanged below.
+        if keyCode == UInt16(kVK_Function), relevant.isEmpty {
+            return .captureModifier(code: keyCode)
+        }
+
         // A combo needs a real modifier (shift alone never works) or a
         // function key. Bare modifiers are held via the modifier-hold
         // path, never recorded as combos: invalid keeps the old value.
@@ -232,5 +250,39 @@ enum ShortcutRecorderRules: Sendable {
             return true
         }
         return false
+    }
+}
+
+/// What macOS does with the fn key, read live (not guessed). The
+/// value→meaning table is undocumented by Apple — the matrix fills it
+/// (plan Phase B); until then every raw value maps to `.unknown` and
+/// copy stays exactly today's conservative line. Pure + injectable
+/// (pass an isolated suite in tests; the HIToolbox domain live).
+enum SystemFnUsage: Equatable, Sendable {
+    /// Unreadable, absent, or not-yet-mapped: conservative copy always.
+    case unknown
+
+    nonisolated static let domain = "com.apple.HIToolbox"
+    nonisolated static let key = "AppleFnUsageType"
+
+    /// Read-only, never mutated: Oto adapts copy to the system, never
+    /// the system to Oto.
+    nonisolated static func read(defaults: UserDefaults? = UserDefaults(suiteName: domain)) -> SystemFnUsage {
+        guard let defaults,
+              defaults.object(forKey: key) != nil
+        else { return .unknown }
+        // Integer present but meaning unconfirmed by the matrix —
+        // conservative until Phase C pins the table.
+        return .unknown
+    }
+
+    /// Double-tap-row fn caption for a usage. Today: the conservative
+    /// line verbatim (zero visual change); Phase C adds per-option
+    /// strings once the matrix confirms the table.
+    nonisolated static func caption(for usage: SystemFnUsage) -> String {
+        switch usage {
+        case .unknown:
+            return "Double taps are handled by macOS."
+        }
     }
 }

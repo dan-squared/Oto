@@ -28,6 +28,7 @@ struct OnboardingView: View {
     // Hold-key card state. `holdKind` mirrors the live config after every
     // apply (single source stays in dispatch); messages are local.
     @State private var holdKind: ShortcutTrigger.Kind = .modifierHold(keyCode: UInt16(kVK_RightOption))
+    @State private var fnUsage = SystemFnUsage.unknown
     @State private var isRecording = false
     @State private var holdMessage: String?
     @State private var showSwap = false
@@ -72,6 +73,7 @@ struct OnboardingView: View {
         .frame(width: 620, height: 480)
         .task {
             holdKind = dispatch.configuration.hold.kind
+            fnUsage = SystemFnUsage.read()
             refreshPermissions()
             await refreshSpeech()
         }
@@ -299,7 +301,7 @@ struct OnboardingView: View {
                     }
                 }
                 if case .modifierHold(let code) = holdKind, code == UInt16(kVK_Function) {
-                    Text("Double taps are handled by macOS.")
+                    Text(SystemFnUsage.caption(for: fnUsage))
                         .font(.system(size: 11.5))
                         .foregroundStyle(OtoPalette.muted)
                 } else {
