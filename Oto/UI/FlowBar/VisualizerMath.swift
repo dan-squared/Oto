@@ -131,6 +131,13 @@ enum VisualizerMath {
         floor + (1 - floor) * min(1, max(0, smoothed))
     }
 
+    /// Absolute noise gate (total power): below this, the input is room
+    /// noise, not voice — return silence BEFORE normalization (which
+    /// would otherwise spread tiny noise across bands as if it were
+    /// speech). Starting value has an order of margin each way (noise
+    /// ~1e-6–1e-4, quiet voice ~0.1); the device matrix tunes it.
+    nonisolated static let noiseGate: Float = 1e-3
+
     /// Log-spaced band edges (Hz) over [lowEdge, highEdge], count+1 points.
     /// Voice-weighted: log spacing spends bands where speech lives.
     nonisolated static func bandEdges(
@@ -146,9 +153,12 @@ enum VisualizerMath {
 
     /// Bin-power magnitudes → per-band energies (sum of mag²), then
     /// log-mapped to 0…1 display levels. `binHz` = sampleRate / fftSize.
-    /// Total-zero (digital silence) maps to all-zero, never NaN.
+    /// Total-zero (digital silence) maps to all-zero, never NaN. Total
+    /// below `noiseFloor` maps to all-zero too — room noise must never
+    /// reach the normalization below, which would spread it as voice.
     nonisolated static func bandLevels(
-        magnitudes: [Float], edges: [Float], binHz: Float
+        magnitudes: [Float], edges: [Float], binHz: Float,
+        noiseFloor: Float = noiseGate
     ) -> [Float] {
         let bandCount = edges.count - 1
         guard bandCount > 0, binHz > 0 else {
@@ -163,7 +173,7 @@ enum VisualizerMath {
             }
         }
         let total = energies.reduce(0, +)
-        guard total > 0 else { return [Float](repeating: 0, count: bandCount) }
+        guard total > noiseFloor else { return [Float](repeating: 0, count: bandCount) }
         // log10(1 + 99e)/2: e=0→0, e=1→1, mid energies spread evenly.
         return energies.map { e in
             let normalized = e / total
