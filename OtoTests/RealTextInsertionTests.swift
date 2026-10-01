@@ -507,6 +507,24 @@ struct RealTextInsertionTests {
         #expect(EditableFocus.verdictForFocusError(.cannotComplete) == .unknown)
     }
 
+    @Test func terminalFallbackMapping() {
+        // Terminal emulators consume keystrokes by definition: a focused
+        // but unmapped role proceeds (never diverts). True void (nil
+        // role) still diverts; non-terminals are untouched.
+        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "org.alacritty", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm", "dev.warp.Warp"] {
+            #expect(TerminalEmulators.isTerminal(bundleID: id))
+            #expect(TerminalEmulators.proceeds(role: "AXUnknown", bundleID: id))
+            #expect(TerminalEmulators.proceeds(role: "AXGroup", bundleID: id))
+            #expect(!TerminalEmulators.proceeds(role: nil, bundleID: id))
+        }
+        #expect(!TerminalEmulators.isTerminal(bundleID: "com.apple.Finder"))
+        #expect(!TerminalEmulators.isTerminal(bundleID: nil))
+        #expect(!TerminalEmulators.proceeds(role: "AXUnknown", bundleID: "com.apple.Finder"))
+        // Text roles never reach the fallback (the caller consults it
+        // only on .noField), so presence alone answers true here.
+        #expect(TerminalEmulators.proceeds(role: "AXTextArea", bundleID: "com.apple.Terminal"))
+    }
+
     @Test func noEditableFocusDivertsPreClipboard() async {
         // Finder/desktop shape: focus with nowhere to paste diverts before
         // the clipboard is touched and posts nothing — recovery owns it.

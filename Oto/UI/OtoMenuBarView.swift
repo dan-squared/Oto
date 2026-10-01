@@ -90,6 +90,7 @@ struct OtoMenuBarView: View {
                 existing.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
             } else {
+                NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: SettingsWindowID.id)
             }
         }

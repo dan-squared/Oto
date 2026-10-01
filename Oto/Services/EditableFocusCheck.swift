@@ -21,6 +21,7 @@
 //
 
 import ApplicationServices
+import AppKit
 import Foundation
 import os
 
@@ -72,6 +73,44 @@ enum EditableFocus: Equatable, Sendable {
 /// Seam: the insertion path injects this; tests stub verdicts without AX.
 protocol FocusChecking: Sendable {
     nonisolated func editableFocus(for pid: pid_t) async -> EditableFocus
+}
+
+/// Terminal emulators whose screens never expose AX text roles: a
+/// focused pane consumes keystrokes by definition (the pty), so a
+/// present-but-unmapped role proceeds (`.unknown`, legacy path) instead
+/// of diverting — while true void (nothing focused) still diverts, and
+/// secure prompts are refused upstream regardless (paste into a sudo
+/// prompt is blocked by the secure-input gates, and bracketed paste
+/// keeps editors safe).
+enum TerminalEmulators: Sendable {
+    nonisolated static let bundleIDs: Set<String> = [
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "org.alacritty",
+        "net.kovidgoyal.kitty",
+        "com.mitchellh.ghostty",
+        "com.github.wez.wezterm",
+        "dev.warp.Warp",
+    ]
+
+    nonisolated static func isTerminal(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return bundleIDs.contains(bundleID)
+    }
+
+    /// Owning app's bundle ID for pid triage. Nil for dead/fake pids —
+    /// tests and unknown apps fall through to non-terminal behavior.
+    nonisolated static func bundleID(for pid: pid_t) -> String? {
+        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    }
+
+    /// True when a focused-but-unmapped role should proceed: the role
+    /// exists (something holds focus) in a keystroke-consuming app.
+    /// Nil role (true void) never proceeds.
+    nonisolated static func proceeds(role: String?, bundleID: String?) -> Bool {
+        guard role != nil else { return false }
+        return isTerminal(bundleID: bundleID)
+    }
 }
 
 struct LiveFocusCheck: FocusChecking {
@@ -217,7 +256,14 @@ struct LiveFocusCheck: FocusChecking {
             element, kAXRoleAttribute as CFString, &roleRaw
         )
         guard roleError == .success else { return (.unknown, roleError) }
-        return (EditableFocus.classify(role: roleRaw as? String, pidMatches: true), nil)
+        let role = roleRaw as? String
+        var verdict = EditableFocus.classify(role: role, pidMatches: true)
+        if verdict == .noField,
+           TerminalEmulators.proceeds(role: role, bundleID: TerminalEmulators.bundleID(for: pid))
+        {
+            verdict = .unknown
+        }
+        return (verdict, nil)
     }
 
     /// Detail variant: identical verdict, plus the raw AXError for the
@@ -245,6 +291,13 @@ struct LiveFocusCheck: FocusChecking {
             element, kAXRoleAttribute as CFString, &roleRaw
         )
         guard roleError == .success else { return (.unknown, roleError) }
-        return (EditableFocus.classify(role: roleRaw as? String), nil)
+        let role = roleRaw as? String
+        var verdict = EditableFocus.classify(role: role)
+        if verdict == .noField,
+           TerminalEmulators.proceeds(role: role, bundleID: TerminalEmulators.bundleID(for: pid))
+        {
+            verdict = .unknown
+        }
+        return (verdict, nil)
     }
 }
