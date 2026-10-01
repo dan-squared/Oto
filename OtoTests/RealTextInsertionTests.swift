@@ -525,6 +525,18 @@ struct RealTextInsertionTests {
         #expect(TerminalEmulators.proceeds(role: "AXTextArea", bundleID: "com.apple.Terminal"))
     }
 
+    @Test func terminalVoidProceeds() {
+        // Emulators publish focus transiently: a persistent void in a
+        // terminal is uninformative, so it proceeds (secure gates, race
+        // guard, clipboard restore still apply). Everywhere else — and
+        // dead pids — void still diverts.
+        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "org.alacritty", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm", "dev.warp.Warp"] {
+            #expect(TerminalEmulators.proceedsVoid(bundleID: id))
+        }
+        #expect(!TerminalEmulators.proceedsVoid(bundleID: "com.apple.Finder"))
+        #expect(!TerminalEmulators.proceedsVoid(bundleID: nil))
+    }
+
     @Test func noEditableFocusDivertsPreClipboard() async {
         // Finder/desktop shape: focus with nowhere to paste diverts before
         // the clipboard is touched and posts nothing — recovery owns it.

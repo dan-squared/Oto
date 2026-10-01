@@ -106,10 +106,19 @@ enum TerminalEmulators: Sendable {
 
     /// True when a focused-but-unmapped role should proceed: the role
     /// exists (something holds focus) in a keystroke-consuming app.
-    /// Nil role (true void) never proceeds.
+    /// Nil role (true void) never proceeds — see `proceedsVoid`.
     nonisolated static func proceeds(role: String?, bundleID: String?) -> Bool {
         guard role != nil else { return false }
         return isTerminal(bundleID: bundleID)
+    }
+
+    /// True when even a persistent void proceeds: the app is a terminal
+    /// emulator (keystrokes land in the pty by definition) but publishes
+    /// no focused element (observed: focus present transiently around
+    /// activation, absent in steady state). Nil bundle (dead pid)
+    /// never proceeds — fail closed preserved.
+    nonisolated static func proceedsVoid(bundleID: String?) -> Bool {
+        isTerminal(bundleID: bundleID)
     }
 }
 
@@ -233,6 +242,13 @@ struct LiveFocusCheck: FocusChecking {
         )
         guard focusError == .success else {
             if focusError == .noValue {
+                // Terminal void: emulators publish focus transiently, so a
+                // persistent void here is uninformative — proceed (secure
+                // gates, race guard, and clipboard restore still apply).
+                // Everywhere else: true void diverts.
+                if TerminalEmulators.proceedsVoid(bundleID: TerminalEmulators.bundleID(for: pid)) {
+                    return (.unknown, focusError)
+                }
                 return (.noField, focusError)
             }
             return syncCheckDetail(pid: pid)
@@ -277,6 +293,11 @@ struct LiveFocusCheck: FocusChecking {
             app, kAXFocusedUIElementAttribute as CFString, &focused
         )
         guard focusError == .success else {
+            if focusError == .noValue,
+               TerminalEmulators.proceedsVoid(bundleID: TerminalEmulators.bundleID(for: pid))
+            {
+                return (.unknown, focusError)
+            }
             return (EditableFocus.verdictForFocusError(focusError), focusError)
         }
         guard let raw = focused,
