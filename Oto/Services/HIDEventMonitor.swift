@@ -45,8 +45,10 @@ final class HIDEventMonitor {
     private var holdCode: UInt16?
     private var escapeObserved = false
     private var hold = ModifierHoldState()
-    private var tap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    /// C-tap lifetime owner. Nonisolated so teardown always runs, even
+    /// from deinit (MainActor state can't reliably die there); the tap
+    /// itself still fires on the main runloop only (see handle).
+    private let lifetime = TapLifetime()
     private var pressedFunctionCode: Int64?
 
     // MARK: - Dual-slot path (hold + hands-free live together)
@@ -85,7 +87,7 @@ final class HIDEventMonitor {
         hold = ModifierHoldState()
         pressedFunctionCode = nil
         sync()
-        isLive = tap != nil
+        isLive = lifetime.isLive
     }
 
     // MARK: - Legacy single-slot path (unchanged)
@@ -105,11 +107,11 @@ final class HIDEventMonitor {
         slotHolds = [:]
         pressedFunction = nil
         sync()
-        isLive = tap != nil
+        isLive = lifetime.isLive
     }
 
     func stop() {
-        uninstall()
+        lifetime.uninstall()
         functionCodes = []
         holdCode = nil
         hold = ModifierHoldState()
@@ -148,65 +150,28 @@ final class HIDEventMonitor {
 
     // MARK: - Private
 
+    /// Unit-test gate: real event taps never install under XCTest.
+    /// Decide logic is fully driveable without hardware, and leaked
+    /// taps from parallel tests firing into freed monitors crashed the
+    /// runner (22-report cluster) — impossible with the gate closed.
+    /// UI tests launch the app (no XCTest linked in) → fully live there.
+    /// Immutable per process (test host vs app) — never toggled.
+    nonisolated static let liveTapsEnabled = NSClassFromString("XCTestCase") == nil
+
     private func sync() {
         if functionCodes.isEmpty, holdCode == nil, !escapeObserved {
-            uninstall()
-        } else {
-            install()
+            lifetime.uninstall()
+        } else if Self.liveTapsEnabled {
+            lifetime.install(owner: Unmanaged.passUnretained(self).toOpaque())
         }
-    }
-
-    private func install() {
-        guard tap == nil else { return }
-
-        let callback: CGEventTapCallBack = { _, type, event, userInfo in
-            guard let userInfo else { return Unmanaged.passUnretained(event) }
-            let monitor = Unmanaged<HIDEventMonitor>.fromOpaque(userInfo).takeUnretainedValue()
-            return monitor.handle(type: type, event: event)
-        }
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: CGEventMask(
-                (1 << CGEventType.keyDown.rawValue)
-                    | (1 << CGEventType.keyUp.rawValue)
-                    | (1 << CGEventType.flagsChanged.rawValue)
-                    | (1 << CGEventType.leftMouseDown.rawValue)
-                    | (1 << CGEventType.rightMouseDown.rawValue)
-                    | (1 << CGEventType.otherMouseDown.rawValue)
-            ),
-            callback: callback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            // tapCreate fails without Accessibility trust. Choice is kept;
-            // sync() retries on next launch/trigger change/activation, and
-            // dispatch reports unavailable meanwhile.
-            return
-        }
-
-        self.tap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-    }
-
-    private func uninstall() {
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-            runLoopSource = nil
-        }
-        if let tap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            self.tap = nil
-        }
+        // Gate closed (unit tests): configured logically, never live.
     }
 
     /// Runs from a C callback on the main runloop: the consume decision is
     /// synchronous HERE; actions hop async. Never blocks, never awaits.
-    private nonisolated func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    /// File-visible (not private) solely for `TapLifetime`'s callback;
+    /// never called directly outside the tap path.
+    fileprivate nonisolated func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // The tap lives on the main runloop; anything else means the
         // assumeIsolated below would trap. Pass through unconsumed (safe
         // default) and canary in Debug — symmetric with CarbonHotKey.
@@ -217,8 +182,7 @@ final class HIDEventMonitor {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             DispatchQueue.main.async { [weak self] in
                 Task { @MainActor [weak self] in
-                    guard let self, let tap = self.tap else { return }
-                    CGEvent.tapEnable(tap: tap, enable: true)
+                    guard let self, self.lifetime.reenable() else { return }
                     self.noteMonitorLost()
                 }
             }
@@ -475,5 +439,79 @@ struct ModifierHoldState: Equatable, Sendable {
         case UInt16(kVK_Function): return .maskSecondaryFn
         default: return nil
         }
+    }
+}
+
+/// Owns the C event tap + runloop source. Main-confined by contract:
+/// installed from MainActor `sync`, delivered on the main runloop,
+/// torn down from deinit (CF teardown calls are thread-safe; delivery
+/// stays main-only per `handle`'s guard). `@unchecked Sendable` names
+/// that contract — same shape as `SpectrumEngine`'s C-resource split.
+///
+/// Lifetime rule (the 22-report crash fix): the tap holds the owner
+/// `passUnretained` (no cycle, no leak), the callback pins the owner
+/// for its duration (`retain` on entry, `release` on exit), and
+/// teardown always precedes deallocation. A tap can therefore never
+/// fire into a freed monitor.
+final class TapLifetime: @unchecked Sendable {
+    private nonisolated(unsafe) var tap: CFMachPort?
+    private nonisolated(unsafe) var source: CFRunLoopSource?
+
+    nonisolated var isLive: Bool { tap != nil }
+
+    nonisolated func install(owner: UnsafeMutableRawPointer) {
+        guard tap == nil else { return }
+        guard let tap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(
+                (1 << CGEventType.keyDown.rawValue)
+                    | (1 << CGEventType.keyUp.rawValue)
+                    | (1 << CGEventType.flagsChanged.rawValue)
+                    | (1 << CGEventType.leftMouseDown.rawValue)
+                    | (1 << CGEventType.rightMouseDown.rawValue)
+                    | (1 << CGEventType.otherMouseDown.rawValue)
+            ),
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let unmanaged = Unmanaged<HIDEventMonitor>.fromOpaque(userInfo)
+                unmanaged.retain()
+                defer { unmanaged.release() }
+                return unmanaged.takeUnretainedValue().handle(type: type, event: event)
+            },
+            userInfo: owner
+        ) else {
+            // tapCreate fails without Accessibility trust. Choice is kept;
+            // sync() retries on next launch/trigger change/activation, and
+            // dispatch reports unavailable meanwhile.
+            return
+        }
+        self.tap = tap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        self.source = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    nonisolated func uninstall() {
+        if let source {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            self.source = nil
+        }
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            self.tap = nil
+        }
+    }
+
+    nonisolated func reenable() -> Bool {
+        guard let tap else { return false }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        return true
+    }
+
+    deinit {
+        uninstall()
     }
 }
