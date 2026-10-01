@@ -70,19 +70,12 @@ struct PasteboardOwnershipTests {
 }
 
 struct InsertionDecisionTests {
-    @Test func untrustedBeatsSecureInput() {
-        #expect(InsertionDecision.next(isTrusted: false, secureInput: true, holder: "Safari")
-            == .refuseUntrusted)
-    }
-
-    @Test func secureInputRefusesWithHolder() {
-        #expect(InsertionDecision.next(isTrusted: true, secureInput: true, holder: "Terminal")
-            == .refuseSecureInput(holder: "Terminal"))
+    @Test func untrustedRefuses() {
+        #expect(InsertionDecision.next(isTrusted: false) == .refuseUntrusted)
     }
 
     @Test func clearPathProceeds() {
-        #expect(InsertionDecision.next(isTrusted: true, secureInput: false, holder: nil)
-            == .proceed)
+        #expect(InsertionDecision.next(isTrusted: true) == .proceed)
     }
 
     @Test func restoreGuardNeedsBoth() {

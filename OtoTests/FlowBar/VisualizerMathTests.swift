@@ -81,6 +81,31 @@ struct VisualizerMathTests {
         #expect(levels.allSatisfy { $0 == 0 && !$0.isNaN })
     }
 
+    @Test func subGateNoiseMapsToZeros() {
+        // Room-noise scale (total ~2.6e-6, under the 1e-3 gate): must not
+        // reach normalization, which would spread it as voice.
+        let hiss = [Float](repeating: 1e-4, count: 256)
+        let levels = VisualizerMath.bandLevels(
+            magnitudes: hiss, edges: VisualizerMath.bandEdges(count: 10), binHz: 31.25
+        )
+        #expect(levels.count == 10)
+        #expect(levels.allSatisfy { $0 == 0 })
+    }
+
+    @Test func loudSignalPassesGateUnchanged() {
+        var mags = [Float](repeating: 0, count: 256)
+        mags[14] = 1
+        let gated = VisualizerMath.bandLevels(
+            magnitudes: mags, edges: VisualizerMath.bandEdges(count: 10), binHz: 31.25
+        )
+        let open = VisualizerMath.bandLevels(
+            magnitudes: mags, edges: VisualizerMath.bandEdges(count: 10), binHz: 31.25,
+            noiseFloor: 0
+        )
+        #expect(gated == open)
+        #expect(gated.max()! > 0.9)
+    }
+
     @Test func singleToneDominatesOneBand() {
         // All energy in bin 14 (≈440 Hz @ 31.25 Hz/bin): band 2
         // (253–450 Hz at 8 bands) must own it, neighbors stay near zero.

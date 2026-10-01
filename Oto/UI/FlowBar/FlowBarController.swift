@@ -36,9 +36,9 @@ final class FlowBarController {
     /// one 150 ms poll (and completion melts in 0.14s), so the loader
     /// often never paints. Every completed session holds loader pixels
     /// for at least this long — a readability floor for work that
-    /// genuinely happened, never motion for its own sake. Matrix-tuned,
-    /// never guessed.
-    nonisolated static let loaderMinDwell: TimeInterval = 0.6
+    /// genuinely happened, never motion for its own sake. Quick by
+    /// design (0.4 s); matrix-tuned, never guessed.
+    nonisolated static let loaderMinDwell: TimeInterval = 0.4
     /// Per-session loader-tail latch: the completed tail below fires
     /// once per session id. Without it, every later completed poll
     /// (state is terminal-persistent until the next begin) would

@@ -47,7 +47,6 @@ final class HookCount: @unchecked Sendable {
 
 private func scriptedEvents(
     trusted: Bool = true,
-    secure: Bool = false,
     reactivate: @escaping @Sendable (pid_t) -> Bool = { _ in true },
     frontmostPID: @escaping @Sendable () -> pid_t? = { 99999 },
     otoFrontmost: @escaping @Sendable () -> Bool = { false },
@@ -55,8 +54,6 @@ private func scriptedEvents(
 ) -> InsertionEvents {
     InsertionEvents(
         isTrusted: { trusted },
-        secureInputEnabled: { secure },
-        secureHolderName: { secure ? "TestHolder" : nil },
         reactivate: reactivate,
         currentModifiers: { [] },
         frontmostPID: frontmostPID,
@@ -118,25 +115,28 @@ struct RealTextInsertionTests {
         #expect(focusReads.count == 0)
     }
 
-    // 02 recovery table, secure-input row: a global holder (any app) must not
-    // cost the person their clipboard. Same untouched proof; the holder hint
-    // must survive in the reason (it is the only place naming it).
-    @Test func secureInputRefusalLeavesClipboardUntouched() async {
+    // Secure FIELD row (replaces the old global secure-input refusal, which
+    // Hex device-proved unnecessary — the OS delivers synthetic paste
+    // while secure input is held): a focused password field refuses with
+    // the transcript kept for explicit manual paste. Automation never
+    // fills passwords by itself. Same untouched proof as every refusal.
+    @Test func secureFieldRefusesLeavingClipboardUntouched() async {
         let board = scratchBoard()
         board.clearContents()
         board.setString("mine", forType: .string)
         let before = board.changeCount
         let hid = HookCount()
         let service = RealTextInsertion(
-            events: scriptedEvents(secure: true, postedHID: { hid.bump() }),
-            timings: fastTimings(), pasteboard: board
+            events: scriptedEvents(postedHID: { hid.bump() }),
+            timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .secureField)
         )
         let result = await service.insert("secret words", into: anyTarget())
         guard case .recoverableFailure(let reason) = result else {
             Issue.record("expected recoverableFailure, got \(result)")
             return
         }
-        #expect(reason.contains("TestHolder"))
+        #expect(reason.contains("password"))
         #expect(board.changeCount == before)
         #expect(board.string(forType: .string) == "mine")
         #expect(board.string(forType: PasteboardReceipt.markerType) == nil)
@@ -422,25 +422,6 @@ struct RealTextInsertionTests {
         #expect(board.string(forType: .string) == "mine")
     }
 
-    // F4: retry under secure input must refuse (not post into the void
-    // while the menu claims success). Clipboard untouched, nothing posted.
-    @Test func retryRefusesUnderSecureInput() async {
-        let board = scratchBoard()
-        board.clearContents()
-        board.setString("mine", forType: .string)
-        let before = board.changeCount
-        let hid = HookCount()
-        let service = RealTextInsertion(
-            events: scriptedEvents(secure: true, postedHID: { hid.bump() }),
-            timings: fastTimings(), pasteboard: board
-        )
-        let posted = await service.retryPostToFrontmost("kept words")
-        #expect(!posted)
-        #expect(hid.count == 0)
-        #expect(board.changeCount == before)
-        #expect(board.string(forType: .string) == "mine")
-    }
-
     // 11 clipboard-restoration acceptance: the transcript lingers only until
     // the guarded restore returns the prior clipboard, marker included.
     @Test func restoreReturnsPriorClipboardWhenUntouched() async {
@@ -493,6 +474,14 @@ struct RealTextInsertionTests {
         #expect(EditableFocus.classify(role: nil) == .unknown)
         #expect(EditableFocus.classify(role: "AXTextField", pidMatches: false) == .unknown)
         #expect(EditableFocus.classify(role: "AXButton", pidMatches: false) == .unknown)
+        // Secure subrole (wire string pinned literally): a password field
+        // refuses even though the role is text. Any other subrole — or
+        // none — leaves the role verdict untouched.
+        #expect(EditableFocus.classify(role: "AXTextField", subrole: "AXSecureTextField") == .secureField)
+        #expect(EditableFocus.classify(role: "AXTextArea", subrole: "AXSecureTextField") == .secureField)
+        #expect(EditableFocus.classify(role: "AXTextField", subrole: "AXUsernameField") == .editable)
+        #expect(EditableFocus.classify(role: "AXTextField") == .editable)
+        #expect(EditableFocus.classify(role: "AXButton", subrole: "AXSecureTextField") == .noField)
         #expect(LiveFocusCheck.timeoutNanoseconds == 700_000_000)
         #expect(LiveFocusCheck.maxAttempts == 3)
     }
@@ -505,6 +494,57 @@ struct RealTextInsertionTests {
         #expect(EditableFocus.verdictForFocusError(.invalidUIElement) == .unknown)
         #expect(EditableFocus.verdictForFocusError(.apiDisabled) == .unknown)
         #expect(EditableFocus.verdictForFocusError(.cannotComplete) == .unknown)
+    }
+
+    @Test func terminalFallbackMapping() {
+        // Terminal emulators consume keystrokes by definition: a focused
+        // but unmapped role proceeds (never diverts). True void (nil
+        // role) still diverts; non-terminals are untouched.
+        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "org.alacritty", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm", "dev.warp.Warp"] {
+            #expect(TerminalEmulators.isTerminal(bundleID: id))
+            #expect(TerminalEmulators.proceeds(role: "AXUnknown", bundleID: id))
+            #expect(TerminalEmulators.proceeds(role: "AXGroup", bundleID: id))
+            #expect(!TerminalEmulators.proceeds(role: nil, bundleID: id))
+        }
+        #expect(!TerminalEmulators.isTerminal(bundleID: "com.apple.Finder"))
+        #expect(!TerminalEmulators.isTerminal(bundleID: nil))
+        #expect(!TerminalEmulators.proceeds(role: "AXUnknown", bundleID: "com.apple.Finder"))
+        // Text roles never reach the fallback (the caller consults it
+        // only on .noField), so presence alone answers true here.
+        #expect(TerminalEmulators.proceeds(role: "AXTextArea", bundleID: "com.apple.Terminal"))
+    }
+
+    @Test func terminalVoidProceeds() {
+        // Emulators publish focus transiently: a persistent void in a
+        // terminal is uninformative, so it proceeds (race guard and
+        // clipboard restore still apply; secure password fields refuse
+        // via .secureField). Everywhere else — and
+        // dead pids — void still diverts.
+        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "org.alacritty", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm", "dev.warp.Warp"] {
+            #expect(TerminalEmulators.proceedsVoid(bundleID: id))
+        }
+        #expect(!TerminalEmulators.proceedsVoid(bundleID: "com.apple.Finder"))
+        #expect(!TerminalEmulators.proceedsVoid(bundleID: nil))
+    }
+
+    @Test func terminalFallbackNeverOverridesSecureField() {
+        // The fallback only converts .noField: a password field refuses
+        // even inside a terminal emulator, and non-terminals pass every
+        // verdict through untouched.
+        for id in ["com.apple.Terminal", "com.mitchellh.ghostty", "org.alacritty"] {
+            #expect(TerminalEmulators.fallback(
+                verdict: .secureField, role: "AXTextField", bundleID: id
+            ) == .secureField)
+            #expect(TerminalEmulators.fallback(
+                verdict: .noField, role: "AXGroup", bundleID: id
+            ) == .unknown)
+            #expect(TerminalEmulators.fallback(
+                verdict: .editable, role: "AXTextArea", bundleID: id
+            ) == .editable)
+        }
+        #expect(TerminalEmulators.fallback(
+            verdict: .noField, role: "AXGroup", bundleID: "com.apple.Finder"
+        ) == .noField)
     }
 
     @Test func noEditableFocusDivertsPreClipboard() async {

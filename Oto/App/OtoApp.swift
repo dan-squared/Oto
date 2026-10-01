@@ -251,6 +251,9 @@ private struct SettingsCommands: View {
                 existing.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
             } else {
+                // Activate first: as a menu-bar app Oto is often inactive,
+                // and a fresh window opened while inactive can land behind.
+                NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: SettingsWindowID.id)
             }
         }

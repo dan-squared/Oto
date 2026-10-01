@@ -21,6 +21,7 @@
 //
 
 import ApplicationServices
+import AppKit
 import Foundation
 import os
 
@@ -30,13 +31,16 @@ enum EditableFocus: Equatable, Sendable {
     case editable
     /// Focus exists but is not editable (or nothing is focused) — divert.
     case noField
+    /// Focus is a secure password field — refuse (never auto-fill).
+    case secureField
     /// AX errored, timed out, or answered ambiguously — legacy path.
     case unknown
 
     // Explicit: compared in the retry worker from nonisolated contexts (Swift 6).
     nonisolated static func == (lhs: EditableFocus, rhs: EditableFocus) -> Bool {
         switch (lhs, rhs) {
-        case (.editable, .editable), (.noField, .noField), (.unknown, .unknown):
+        case (.editable, .editable), (.noField, .noField),
+            (.secureField, .secureField), (.unknown, .unknown):
             return true
         default:
             return false
@@ -45,15 +49,21 @@ enum EditableFocus: Equatable, Sendable {
 
     /// Pure role mapping (unit-tested): nil role is unknown, text roles
     /// are editable, everything else present-but-not-editable diverts.
+    /// A text role with the `AXSecureTextField` subrole is a password
+    /// field (`AXRoleConstants.h:408` — the role stays `AXTextField`, the
+    /// subrole is the distinguishing mark) and refuses via `.secureField`.
     /// `pidMatches` is the system-wide ownership check: a focused element
     /// owned by another app is ambiguity (`.unknown`, legacy proceed) —
     /// the frontmostPID race guard owns that failure mode with the better
     /// message, so this layer never double-jeopards it. Single owner per
     /// failure mode.
-    nonisolated static func classify(role: String?, pidMatches: Bool = true) -> EditableFocus {
+    nonisolated static func classify(role: String?, subrole: String? = nil, pidMatches: Bool = true) -> EditableFocus {
         guard pidMatches else { return .unknown }
         guard let role else { return .unknown }
         if role == kAXTextFieldRole as String || role == kAXTextAreaRole as String {
+            if subrole == kAXSecureTextFieldSubrole as String {
+                return .secureField
+            }
             return .editable
         }
         return .noField
@@ -72,6 +82,66 @@ enum EditableFocus: Equatable, Sendable {
 /// Seam: the insertion path injects this; tests stub verdicts without AX.
 protocol FocusChecking: Sendable {
     nonisolated func editableFocus(for pid: pid_t) async -> EditableFocus
+}
+
+/// Terminal emulators whose screens never expose AX text roles: a
+/// focused pane consumes keystrokes by definition (the pty), so a
+/// present-but-unmapped role proceeds (`.unknown`, legacy path) instead
+/// of diverting — while true void (nothing focused) still diverts.
+/// Secure password FIELDS still refuse via `.secureField` (subrole-gated,
+/// never the global secure-input flag, which is not a gate); bracketed
+/// paste keeps editors safe.
+enum TerminalEmulators: Sendable {
+    nonisolated static let bundleIDs: Set<String> = [
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "org.alacritty",
+        "net.kovidgoyal.kitty",
+        "com.mitchellh.ghostty",
+        "com.github.wez.wezterm",
+        "dev.warp.Warp",
+    ]
+
+    nonisolated static func isTerminal(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return bundleIDs.contains(bundleID)
+    }
+
+    /// Owning app's bundle ID for pid triage. Nil for dead/fake pids —
+    /// tests and unknown apps fall through to non-terminal behavior.
+    nonisolated static func bundleID(for pid: pid_t) -> String? {
+        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    }
+
+    /// True when a focused-but-unmapped role should proceed: the role
+    /// exists (something holds focus) in a keystroke-consuming app.
+    /// Nil role (true void) never proceeds — see `proceedsVoid`.
+    nonisolated static func proceeds(role: String?, bundleID: String?) -> Bool {
+        guard role != nil else { return false }
+        return isTerminal(bundleID: bundleID)
+    }
+
+    /// Terminal fallback applied to a classified verdict: a divert in a
+    /// keystroke-consuming app proceeds (legacy path) — every other
+    /// verdict passes through untouched, notably `.secureField` (a
+    /// password field refuses even in a terminal).
+    nonisolated static func fallback(
+        verdict: EditableFocus, role: String?, bundleID: String?
+    ) -> EditableFocus {
+        guard verdict == .noField, proceeds(role: role, bundleID: bundleID) else {
+            return verdict
+        }
+        return .unknown
+    }
+
+    /// True when even a persistent void proceeds: the app is a terminal
+    /// emulator (keystrokes land in the pty by definition) but publishes
+    /// no focused element (observed: focus present transiently around
+    /// activation, absent in steady state). Nil bundle (dead pid)
+    /// never proceeds — fail closed preserved.
+    nonisolated static func proceedsVoid(bundleID: String?) -> Bool {
+        isTerminal(bundleID: bundleID)
+    }
 }
 
 struct LiveFocusCheck: FocusChecking {
@@ -194,6 +264,13 @@ struct LiveFocusCheck: FocusChecking {
         )
         guard focusError == .success else {
             if focusError == .noValue {
+                // Terminal void: emulators publish focus transiently, so a
+                // persistent void here is uninformative — proceed (secure
+                // gates, race guard, and clipboard restore still apply).
+                // Everywhere else: true void diverts.
+                if TerminalEmulators.proceedsVoid(bundleID: TerminalEmulators.bundleID(for: pid)) {
+                    return (.unknown, focusError)
+                }
                 return (.noField, focusError)
             }
             return syncCheckDetail(pid: pid)
@@ -217,7 +294,29 @@ struct LiveFocusCheck: FocusChecking {
             element, kAXRoleAttribute as CFString, &roleRaw
         )
         guard roleError == .success else { return (.unknown, roleError) }
-        return (EditableFocus.classify(role: roleRaw as? String, pidMatches: true), nil)
+        let role = roleRaw as? String
+        let verdict = TerminalEmulators.fallback(
+            verdict: EditableFocus.classify(
+                role: role, subrole: secureSubrole(role: role, element: element), pidMatches: true
+            ),
+            role: role, bundleID: TerminalEmulators.bundleID(for: pid)
+        )
+        return (verdict, nil)
+    }
+
+    /// Secure-field subrole read, gated on text roles (the only ones it
+    /// can reclassify): nil for every other role with no round-trip, nil
+    /// on any read failure. A missing subrole means "not a password
+    /// field", never ambiguity — plain text fields need not expose one.
+    nonisolated static func secureSubrole(role: String?, element: AXUIElement) -> String? {
+        guard role == kAXTextFieldRole as String || role == kAXTextAreaRole as String else {
+            return nil
+        }
+        var subroleRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSubroleAttribute as CFString, &subroleRaw
+        ) == .success else { return nil }
+        return subroleRaw as? String
     }
 
     /// Detail variant: identical verdict, plus the raw AXError for the
@@ -231,6 +330,11 @@ struct LiveFocusCheck: FocusChecking {
             app, kAXFocusedUIElementAttribute as CFString, &focused
         )
         guard focusError == .success else {
+            if focusError == .noValue,
+               TerminalEmulators.proceedsVoid(bundleID: TerminalEmulators.bundleID(for: pid))
+            {
+                return (.unknown, focusError)
+            }
             return (EditableFocus.verdictForFocusError(focusError), focusError)
         }
         guard let raw = focused,
@@ -245,6 +349,13 @@ struct LiveFocusCheck: FocusChecking {
             element, kAXRoleAttribute as CFString, &roleRaw
         )
         guard roleError == .success else { return (.unknown, roleError) }
-        return (EditableFocus.classify(role: roleRaw as? String), nil)
+        let role = roleRaw as? String
+        let verdict = TerminalEmulators.fallback(
+            verdict: EditableFocus.classify(
+                role: role, subrole: secureSubrole(role: role, element: element)
+            ),
+            role: role, bundleID: TerminalEmulators.bundleID(for: pid)
+        )
+        return (verdict, nil)
     }
 }

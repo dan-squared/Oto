@@ -207,8 +207,8 @@ struct ShortcutRecorderTests {
     }
 
     @Test func fnUsageCaptionIsConservativeToday() {
-        // Seam test: unknown renders today's line verbatim (zero visual
-        // change until the matrix pins per-option copy).
-        #expect(SystemFnUsage.caption(for: .unknown) == "Double taps are handled by macOS.")
+        // Seam test: unknown renders the guidance line (conversion is
+        // structurally impossible for fn — the line names what works).
+        #expect(SystemFnUsage.caption(for: .unknown) == "Double-tap needs a key macOS doesn't own — any hold key but fn works.")
     }
 }

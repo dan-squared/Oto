@@ -276,13 +276,14 @@ enum SystemFnUsage: Equatable, Sendable {
         return .unknown
     }
 
-    /// Double-tap-row fn caption for a usage. Today: the conservative
-    /// line verbatim (zero visual change); Phase C adds per-option
-    /// strings once the matrix confirms the table.
+    /// Double-tap-row fn caption for a usage. Conservative: conversion
+    /// is structurally impossible for fn, so the line names what works
+    /// instead. Phase C adds per-option strings once the matrix
+    /// confirms the table.
     nonisolated static func caption(for usage: SystemFnUsage) -> String {
         switch usage {
         case .unknown:
-            return "Double taps are handled by macOS."
+            return "Double-tap needs a key macOS doesn't own — any hold key but fn works."
         }
     }
 }
