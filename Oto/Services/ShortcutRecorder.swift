@@ -254,13 +254,21 @@ enum ShortcutRecorderRules: Sendable {
 }
 
 /// What macOS does with the fn key, read live (not guessed). The
-/// value→meaning table is undocumented by Apple — the matrix fills it
-/// (plan Phase B); until then every raw value maps to `.unknown` and
-/// copy stays exactly today's conservative line. Pure + injectable
-/// (pass an isolated suite in tests; the HIToolbox domain live).
+/// value→meaning table is undocumented by Apple — pinned from the live
+/// matrix (user round 2026-10-01: Do Nothing=0, Input Source=1,
+/// Emoji=2, Dictation=3). Any unconfirmed integer stays `.unknown`.
+/// Pure + injectable (pass an isolated suite in tests; the HIToolbox
+/// domain live).
 enum SystemFnUsage: Equatable, Sendable {
-    /// Unreadable, absent, or not-yet-mapped: conservative copy always.
+    /// Unreadable, absent, wrong-typed, or not-yet-mapped: conservative
+    /// copy always.
     case unknown
+    /// "Press fn key to…": Show Emoji & Symbols (2), Start Dictation
+    /// (3), Change Input Source (1), Do Nothing (0).
+    case emoji
+    case dictation
+    case inputSource
+    case none
 
     nonisolated static let domain = "com.apple.HIToolbox"
     nonisolated static let key = "AppleFnUsageType"
@@ -268,20 +276,30 @@ enum SystemFnUsage: Equatable, Sendable {
     /// Read-only, never mutated: Oto adapts copy to the system, never
     /// the system to Oto.
     nonisolated static func read(defaults: UserDefaults? = UserDefaults(suiteName: domain)) -> SystemFnUsage {
-        guard let defaults,
-              defaults.object(forKey: key) != nil
-        else { return .unknown }
-        // Integer present but meaning unconfirmed by the matrix —
-        // conservative until Phase C pins the table.
-        return .unknown
+        guard let value = defaults?.object(forKey: key) as? Int else { return .unknown }
+        switch value {
+        case 2: return .emoji
+        case 3: return .dictation
+        case 1: return .inputSource
+        case 0: return .none
+        default: return .unknown
+        }
     }
 
-    /// Double-tap-row fn caption for a usage. Conservative: conversion
-    /// is structurally impossible for fn, so the line names what works
-    /// instead. Phase C adds per-option strings once the matrix
-    /// confirms the table.
+    /// Double-tap-row fn caption for a usage. Conversion is structurally
+    /// impossible for fn, so every line names what works instead: who
+    /// owns quick taps (per the matrix), and that double-tap needs a
+    /// non-fn hold key.
     nonisolated static func caption(for usage: SystemFnUsage) -> String {
         switch usage {
+        case .emoji:
+            return "Quick fn taps open macOS Emoji — double-tap needs a key macOS doesn't own."
+        case .dictation:
+            return "Quick fn taps start macOS Dictation — double-tap needs a key macOS doesn't own."
+        case .inputSource:
+            return "Quick fn taps switch input source — double-tap needs a key macOS doesn't own."
+        case .none:
+            return "fn is free on this Mac — but double-tap still needs a non-fn hold key."
         case .unknown:
             return "Double-tap needs a key macOS doesn't own — any hold key but fn works."
         }

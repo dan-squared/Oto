@@ -202,17 +202,36 @@ struct ShortcutRecorderTests {
         #expect(flags.stepFlagsUp(code: UInt16(kVK_Function)) == .none)
     }
 
-    // MARK: - System fn usage probe (mapping filled by matrix, Phase C)
+    // MARK: - System fn usage probe (table pinned by matrix, Phase C)
 
     @Test func fnUsageUnknownWithoutDomain() {
         #expect(SystemFnUsage.read(defaults: nil) == .unknown)
+    }
+
+    @Test func fnUsageMapsMatrixIntegers() {
+        // Live matrix 2026-10-01: Do Nothing=0, Input Source=1,
+        // Emoji=2, Dictation=3.
+        let suite = "app.Oto.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for (value, usage) in [
+            (0, SystemFnUsage.none), (1, SystemFnUsage.inputSource),
+            (2, SystemFnUsage.emoji), (3, SystemFnUsage.dictation),
+        ] as [(Int, SystemFnUsage)] {
+            defaults.set(value, forKey: SystemFnUsage.key)
+            #expect(SystemFnUsage.read(defaults: defaults) == usage)
+        }
     }
 
     @Test func fnUsageUnknownForUnmappedValues() {
         let suite = "app.Oto.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(0, forKey: SystemFnUsage.key)
+        defaults.set(999, forKey: SystemFnUsage.key)
+        #expect(SystemFnUsage.read(defaults: defaults) == .unknown)
+        defaults.set("emoji", forKey: SystemFnUsage.key)
+        #expect(SystemFnUsage.read(defaults: defaults) == .unknown)
+        defaults.removeObject(forKey: SystemFnUsage.key)
         #expect(SystemFnUsage.read(defaults: defaults) == .unknown)
     }
 
@@ -220,5 +239,14 @@ struct ShortcutRecorderTests {
         // Seam test: unknown renders the guidance line (conversion is
         // structurally impossible for fn — the line names what works).
         #expect(SystemFnUsage.caption(for: .unknown) == "Double-tap needs a key macOS doesn't own — any hold key but fn works.")
+    }
+
+    @Test func fnUsageCaptionsNameQuickTapOwner() {
+        // Per-option lines (matrix 2026-10-01): each names who owns
+        // quick fn taps; none promises fn double-tap conversion.
+        #expect(SystemFnUsage.caption(for: .emoji) == "Quick fn taps open macOS Emoji — double-tap needs a key macOS doesn't own.")
+        #expect(SystemFnUsage.caption(for: .dictation) == "Quick fn taps start macOS Dictation — double-tap needs a key macOS doesn't own.")
+        #expect(SystemFnUsage.caption(for: .inputSource) == "Quick fn taps switch input source — double-tap needs a key macOS doesn't own.")
+        #expect(SystemFnUsage.caption(for: .none) == "fn is free on this Mac — but double-tap still needs a non-fn hold key.")
     }
 }
