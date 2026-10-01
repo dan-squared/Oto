@@ -76,7 +76,7 @@ struct OtoMenuBarView: View {
                     let posted = await inserter.retryPostToFrontmost(text)
                     feedback = posted
                         ? "Posted — check the frontmost app."
-                        : "Retry failed — secure input may be blocking it, or the clipboard was unavailable."
+                        : "Retry failed — Accessibility permission may be off, or the clipboard was unavailable."
                 }
             }
             Divider()

@@ -37,8 +37,6 @@ struct InsertionTimings: Equatable, Sendable {
 /// Production uses `.live`; tests use fakes + a scratch pasteboard.
 struct InsertionEvents: Sendable {
     var isTrusted: @Sendable () -> Bool
-    var secureInputEnabled: @Sendable () -> Bool
-    var secureHolderName: @Sendable () -> String?
     var reactivate: @Sendable (pid_t) -> Bool
     var currentModifiers: @Sendable () -> NSEvent.ModifierFlags
     /// Advisory focus read, used ONCE pre-post as a race guard (no retries,
@@ -59,8 +57,6 @@ struct InsertionEvents: Sendable {
     static var live: InsertionEvents {
         InsertionEvents(
             isTrusted: { AXIsProcessTrusted() },
-            secureInputEnabled: { SecureInput.isEnabled },
-            secureHolderName: { SecureInput.holderName() },
             reactivate: { pid in
                 guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
                 guard !app.isActive else { return true }
@@ -118,16 +114,20 @@ struct InsertionEvents: Sendable {
     }
 }
 
-/// Pure gate ordering: trust → secure input → paste. Unit-tested without
-/// hardware; the live edge is proven by the device matrix only.
+/// Pure gate ordering: trust → paste. Unit-tested without hardware; the
+/// live edge is proven by the device matrix only. Secure input is
+/// deliberately NOT a gate: the OS delivers synthetic paste while it is
+/// held (Hex posts unconditionally and lands; password managers fill
+/// under it daily), so refusing on the global flag only strands sessions
+/// whose target is nowhere near the holder. Secure password FIELDS still
+/// refuse one layer down, via the focus check's `.secureField` verdict
+/// (subrole-gated, pre-clipboard, transcript kept).
 enum InsertionDecision: Equatable, Sendable {
     // Explicit: compared in decision tests from any domain (Swift 6).
     nonisolated static func == (lhs: InsertionDecision, rhs: InsertionDecision) -> Bool {
         switch (lhs, rhs) {
         case (.proceed, .proceed), (.refuseUntrusted, .refuseUntrusted):
             return true
-        case (.refuseSecureInput(let a), .refuseSecureInput(let b)):
-            return a == b
         default:
             return false
         }
@@ -135,11 +135,9 @@ enum InsertionDecision: Equatable, Sendable {
 
     case proceed
     case refuseUntrusted
-    case refuseSecureInput(holder: String?)
 
-    nonisolated static func next(isTrusted: Bool, secureInput: Bool, holder: String?) -> InsertionDecision {
+    nonisolated static func next(isTrusted: Bool) -> InsertionDecision {
         if !isTrusted { return .refuseUntrusted }
-        if secureInput { return .refuseSecureInput(holder: holder) }
         return .proceed
     }
 
@@ -182,11 +180,7 @@ final class RealTextInsertion: TextInserting {
     }
 
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult {
-        switch InsertionDecision.next(
-            isTrusted: events.isTrusted(),
-            secureInput: events.secureInputEnabled(),
-            holder: events.secureHolderName()
-        ) {
+        switch InsertionDecision.next(isTrusted: events.isTrusted()) {
         case .refuseUntrusted:
             // Clipboard untouched by design (02 recovery: Copy is an explicit
             // user action, not an auto-overwrite). The transcript survives in
@@ -194,14 +188,6 @@ final class RealTextInsertion: TextInserting {
             log.info("refused: accessibility untrusted, clipboard untouched")
             return .recoverableFailure(reason:
                 "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
-            )
-        case .refuseSecureInput(let holder):
-            // Same discipline: a global secure-input holder (any app, e.g. a
-            // background sudo prompt) must not cost the person their clipboard.
-            log.info("refused: secure input held by \(holder ?? "?", privacy: .public), clipboard untouched")
-            let who = holder.map { " (held by \($0))" } ?? ""
-            return .recoverableFailure(reason:
-                "Secure input is enabled\(who). Synthetic keystrokes are blocked — nothing was pasted, the transcript is kept for recovery."
             )
         case .proceed:
             break
@@ -248,6 +234,15 @@ final class RealTextInsertion: TextInserting {
         case .noField:
             log.info("diverted: no editable focus in target \(pid, privacy: .public), clipboard untouched")
             return .noEditableField
+        case .secureField:
+            // Password field focused: automation never fills passwords by
+            // itself. Same clipboard-untouched discipline as every refusal;
+            // the transcript survives in recoveryTranscript + the menu copy
+            // action for an explicit manual paste.
+            log.info("refused: secure password field in target \(pid, privacy: .public), clipboard untouched")
+            return .recoverableFailure(reason:
+                "The focused field is a secure password field. Nothing was pasted — the transcript is kept; copy and paste it manually if you intend it there."
+            )
         }
 
         let saved = PasteboardSnapshot.capture(pasteboard)
@@ -275,24 +270,15 @@ final class RealTextInsertion: TextInserting {
             ))
         }
 
-        // Re-gate immediately pre-post (audit F4): trust and secure input
-        // were read hundreds of ms ago (settle + drain + focus + verify
-        // windows). A revocation in between — or an apiDisabled focus
-        // read — would vanish silently while reporting success. Posting
-        // into a revoked state is refused exactly like the entry gates.
+        // Re-gate immediately pre-post (audit F4): trust was read hundreds
+        // of ms ago (settle + drain + focus + verify windows). A revocation
+        // in between would vanish silently while reporting success. Posting
+        // into a revoked state is refused exactly like the entry gate.
         guard events.isTrusted() else {
             log.info("refused: accessibility revoked pre-post, clipboard restored")
             PasteboardSnapshot.restore(saved, to: pasteboard)
             return .recoverableFailure(reason:
                 "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
-            )
-        }
-        if events.secureInputEnabled() {
-            let who = events.secureHolderName().map { " (held by \($0))" } ?? ""
-            log.info("refused: secure input engaged pre-post, clipboard restored")
-            PasteboardSnapshot.restore(saved, to: pasteboard)
-            return .recoverableFailure(reason:
-                "Secure input is enabled\(who). Synthetic keystrokes are blocked — nothing was pasted, the transcript is kept for recovery."
             )
         }
 
@@ -311,19 +297,12 @@ final class RealTextInsertion: TextInserting {
     /// User-driven recovery post (production menu until the Flow Bar). FOCUS
     /// gates are deliberately absent: the person switched back to the target
     /// app themselves and pressed the button — they are the check. Trust
-    /// and secure input are NOT waivable (physical preconditions for posting,
-    /// not policy judgments): without them the keystroke never exists while
-    /// the caller reports success. Clipboard discipline + write-verify +
-    /// guarded restore are kept. Returns true when the keystroke was posted
+    /// is NOT waivable (a physical precondition for posting, not a policy
+    /// judgment): without it the keystroke never exists while the caller
+    /// reports success. Clipboard discipline + write-verify + guarded
+    /// restore are kept. Returns true when the keystroke was posted
     /// (delivery itself remains unverified, as always).
     func retryPostToFrontmost(_ text: String) async -> Bool {
-        // Secure input still blocks synthetic keystrokes — posting anyway
-        // would vanish silently while the caller reports success. Refuse
-        // honestly (audit F4); the trust/focus policy gates stay skipped.
-        if events.secureInputEnabled() {
-            log.info("retry: refused, secure input enabled")
-            return false
-        }
         guard events.isTrusted() else {
             log.info("retry: refused, accessibility untrusted")
             return false
