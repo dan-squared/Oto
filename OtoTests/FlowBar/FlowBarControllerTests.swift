@@ -159,6 +159,46 @@ struct FlowBarControllerTests {
         }
     }
 
+    @Test func completedHoldsLoaderPastVanish() async throws {
+        // Loader guarantee: finalizing/inserting often pass inside one
+        // 150 ms poll, and completion melts in 0.14s — without the tail
+        // the loader would never paint. A completed session holds loader
+        // pixels for loaderMinDwell (0.6s) instead.
+        let sut = makeSUT(insertionResult: .inserted)
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.coordinator.finish(id!)
+        await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        // Past the 0.14s melt, inside the 0.6s dwell: still showing AND
+        // fully opaque (a lingering window with faded content is the
+        // exact missing-loader shape this tail fixes).
+        try? await Task.sleep(for: .milliseconds(350))
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        #expect(sut.controller.isContentFull)
+        // Past the dwell: gone and stays gone (single-shot per session).
+        try? await Task.sleep(for: .milliseconds(500))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func cancelledGetsNoTail() async throws {
+        // Cancellation celebrates nothing: no loader tail, normal melt.
+        let sut = makeSUT(insertionResult: .inserted)
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.coordinator.cancel(id!)
+        await waitFor(sut.coordinator) { if case .cancelled = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        try? await Task.sleep(for: .milliseconds(350))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+    }
+
     @Test func failedInsertionShowsModalWhenModalOn() async throws {
         let sut = makeSUT(insertionResult: .recoverableFailure(reason: "nope"))
         defer { Task { @MainActor in sut.controller.modal.hide() } }
@@ -290,8 +330,9 @@ struct FlowBarControllerTests {
         await sut.coordinator.finish(id!)
         await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
         await sut.controller.pollOnce()
-        // Past the adoption park (400 ms): the parked hide melts as usual.
-        try? await Task.sleep(for: .milliseconds(550))
+        // Past the adoption park (400 ms) and the 0.6 s loader dwell:
+        // the parked hide melts as usual.
+        try? await Task.sleep(for: .milliseconds(800))
         await sut.controller.pollOnce()
         #expect(!sut.controller.isLiveValues)
         #expect(!sut.controller.isPillVisible)

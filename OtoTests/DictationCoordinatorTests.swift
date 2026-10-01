@@ -104,6 +104,40 @@ struct DictationCoordinatorTests {
         #expect(calls.first?.target == Self.stubTarget)
     }
 
+    // MARK: - Mic release (never greedy: capture ends with the session)
+
+    @Test func finishedSessionReleasesMicrophone() async {
+        // The engine stops first in finalize — the mic is released the
+        // moment the key comes up, before transcription even runs. Other
+        // apps can open the device while Oto post-processes.
+        let sut = makeSUT(finalText: "hello oto")
+        let id = await sut.coordinator.beginHold()
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        await sut.coordinator.finish(id!)
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .completed = terminal else {
+            Issue.record("expected completed, got \(terminal)")
+            return
+        }
+        #expect(await sut.audio.stopCalls == 1)
+    }
+
+    @Test func cancelledSessionReleasesMicrophone() async {
+        // Cancel tears down capture (not stop — same release, cancel
+        // semantics for the service). Nothing holds the device after.
+        let sut = makeSUT(finalText: "hello oto")
+        let id = await sut.coordinator.beginHold()
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        await sut.coordinator.cancel(id!)
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .cancelled = terminal else {
+            Issue.record("expected cancelled, got \(terminal)")
+            return
+        }
+        #expect(await sut.audio.cancelCalls == 1)
+        #expect(await sut.audio.stopCalls == 0)
+    }
+
     // MARK: - Silent skip (no loader for voice-less sessions)
 
     @Test func silentLongSessionSkipsTranscription() async {
@@ -633,6 +667,7 @@ struct DictationCoordinatorTests {
         }
         #expect(await sut.audio.startCalls == 1)
         #expect(await sut.speech.prepareCalls == 0)
+        #expect(await sut.audio.stopCalls == 0)
         #expect(id != nil)
     }
 

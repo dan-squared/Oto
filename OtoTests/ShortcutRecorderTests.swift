@@ -147,4 +147,68 @@ struct ShortcutRecorderTests {
         #expect(loaded == .default())
         #expect(loaded.trigger == .defaultHoldToTalk())
     }
+
+    // MARK: - Bare fn as keyDown (code 63, external keyboards)
+
+    @Test func fnKeyDownCapturesModifier() {
+        #expect(
+            ShortcutRecorderRules.classify(keyCode: UInt16(kVK_Function), modifiers: [], systemShortcuts: [])
+                == .captureModifier(code: UInt16(kVK_Function))
+        )
+    }
+
+    @Test func fnKeyDownWithFunctionFlagStillBare() {
+        // The .function flag alone is not a combo (it never enters the
+        // relevant set) — still stages like the flags path.
+        #expect(
+            ShortcutRecorderRules.classify(keyCode: UInt16(kVK_Function), modifiers: [.function], systemShortcuts: [])
+                == .captureModifier(code: UInt16(kVK_Function))
+        )
+    }
+
+    @Test func fnKeyDownWithCommandStaysCombo() {
+        // Boundary pinned: with real modifiers held, the combo path is
+        // unchanged (code 63 travels as the combo key).
+        let outcome = ShortcutRecorderRules.classify(
+            keyCode: UInt16(kVK_Function), modifiers: [.command], systemShortcuts: []
+        )
+        guard case .captured(_, let code, _) = outcome else {
+            Issue.record("expected captured, got \(outcome)")
+            return
+        }
+        #expect(code == UInt32(kVK_Function))
+    }
+
+    @Test func fnKeyDownDisarmsThenStagesOnce() {
+        // Interleave: a flags arm killed by the keyDown disarm never
+        // double-stages — the flags-up after finds no arm.
+        var flags = FlagsCaptureState()
+        #expect(flags.stepFlagsDown(code: UInt16(kVK_Function)) == .none)
+        flags.stepKeyDown()
+        #expect(
+            ShortcutRecorderRules.classify(keyCode: UInt16(kVK_Function), modifiers: [], systemShortcuts: [])
+                == .captureModifier(code: UInt16(kVK_Function))
+        )
+        #expect(flags.stepFlagsUp(code: UInt16(kVK_Function)) == .none)
+    }
+
+    // MARK: - System fn usage probe (mapping filled by matrix, Phase C)
+
+    @Test func fnUsageUnknownWithoutDomain() {
+        #expect(SystemFnUsage.read(defaults: nil) == .unknown)
+    }
+
+    @Test func fnUsageUnknownForUnmappedValues() {
+        let suite = "app.Oto.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(0, forKey: SystemFnUsage.key)
+        #expect(SystemFnUsage.read(defaults: defaults) == .unknown)
+    }
+
+    @Test func fnUsageCaptionIsConservativeToday() {
+        // Seam test: unknown renders today's line verbatim (zero visual
+        // change until the matrix pins per-option copy).
+        #expect(SystemFnUsage.caption(for: .unknown) == "Double taps are handled by macOS.")
+    }
 }

@@ -245,6 +245,10 @@ final class FlowBarPanel {
 
     var isVisible: Bool { panel.isVisible }
 
+    /// Test hook: content opacity (a lingering window with faded content
+    /// reads as missing pixels — visibility alone can't catch that).
+    var contentAlpha: CGFloat { content.alphaValue }
+
     /// Current pill frame for the catcher morph (v4): nil unless the pill
     /// is visibly up. The controller snapshots this BEFORE the vanish
     /// path runs (recovery routes before panel sync).

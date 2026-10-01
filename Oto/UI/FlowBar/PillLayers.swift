@@ -61,6 +61,9 @@ final class PillContentView: NSView {
     private let recordDot = CALayer()
     private var barLayers: [CAShapeLayer] = []
     private var chaseLayers: [CALayer] = []
+    /// Native Apple spinner. Forced dark appearance so it always draws
+    /// its light variant — the pill is near-black in both schemes, and
+    /// the default appearance resolution can leave it dark-on-dark.
     private let spinner = NSProgressIndicator()
     private let label = NSTextField(labelWithString: "")
     private var currentWidth: CGFloat = 0
@@ -139,6 +142,7 @@ final class PillContentView: NSView {
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
+        spinner.appearance = NSAppearance(named: .darkAqua)
         spinner.frame = CGRect(x: 0, y: 0, width: VisualizerMath.spinnerSize, height: VisualizerMath.spinnerSize)
         addSubview(spinner)
 
