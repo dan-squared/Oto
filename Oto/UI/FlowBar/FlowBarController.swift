@@ -32,6 +32,18 @@ final class FlowBarController {
     /// the loader out immediately — no hold, no end-state. Total exit ≈
     /// one 0.12s fade + this margin.
     nonisolated static let vanishDelay: Double = 0.14
+    /// Loader minimum dwell: finalizing/inserting routinely pass inside
+    /// one 150 ms poll (and completion melts in 0.14s), so the loader
+    /// often never paints. Every completed session holds loader pixels
+    /// for at least this long — a readability floor for work that
+    /// genuinely happened, never motion for its own sake. Matrix-tuned,
+    /// never guessed.
+    nonisolated static let loaderMinDwell: TimeInterval = 0.6
+    /// Per-session loader-tail latch: the completed tail below fires
+    /// once per session id. Without it, every later completed poll
+    /// (state is terminal-persistent until the next begin) would
+    /// re-schedule and the pill would pop back forever.
+    private var loaderTailedSession: UUID?
 
     let model: FlowBarModel
     private let log = Logger(subsystem: "app.Oto", category: "flowbar")
@@ -227,6 +239,37 @@ final class FlowBarController {
                 return
             }
             guard hideTask == nil else { return }
+            // Loader guarantee: a completed session holds loader pixels
+            // for loaderMinDwell even when finalizing/inserting passed
+            // between polls (or melted instantly). Once per session id
+            // (state persists until the next begin); cancelled/failed and
+            // recovery routes keep their existing paths.
+            if case .completed(let context) = state, lastRouteKey == nil,
+               loaderTailedSession != context.id
+            {
+                loaderTailedSession = context.id
+                if panel == nil {
+                    panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .inserting))
+                }
+                panel?.setLiveValues(nil)
+                panel?.show(
+                    sessionID: nil,
+                    displayID: Self.targetScreen(of: state),
+                    width: VisualizerMath.panelWidth(for: .inserting),
+                    position: FlowBarPosition.current()
+                )
+                panel?.render(
+                    visual: .dotsSpinner,
+                    values: [],
+                    text: nil,
+                    centerText: false,
+                    reduceMotion: model.motionFrozen,
+                    animated: true,
+                    liveValues: false
+                )
+                scheduleHide(after: UInt64(Self.loaderMinDwell * 1_000_000_000), parked: true)
+                return
+            }
             guard panel?.isVisible == true else {
                 panel?.hide()
                 return
