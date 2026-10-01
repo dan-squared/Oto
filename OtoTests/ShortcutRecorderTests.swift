@@ -34,6 +34,16 @@ struct ShortcutRecorderTests {
         )
     }
 
+    @Test func mysteryKey241RoutesInvalid() {
+        // 241 (0xF1) is outside every kVK_ constant: a bare press is
+        // plainKey-invalid (beep + hint), never a capture. The
+        // invalid-path log line is the standing trap that names it on
+        // device (plan/241-key-identification.md).
+        #expect(
+            ShortcutRecorderRules.classify(keyCode: 241, modifiers: [], systemShortcuts: []) == .invalid(reason: .plainKey)
+        )
+    }
+
     @Test func bareShiftIsInvalid() {
         #expect(
             ShortcutRecorderRules.classify(keyCode: UInt16(kVK_Shift), modifiers: [.shift], systemShortcuts: []) == .invalid(reason: .modifiersOnly)

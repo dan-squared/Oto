@@ -6,6 +6,7 @@
 import AppKit
 import Carbon.HIToolbox
 import SwiftUI
+import os
 
 /// Product combo recorder + conflict copy + calibration text. Migrated
 /// from the Phase 3 diagnostics section with logic unchanged — only the
@@ -226,6 +227,17 @@ struct ShortcutRecorderModifier: ViewModifier {
 
     @State private var box = MonitorBox()
 
+    /// Standing trap for mystery keys (e.g. 241): invalid captures
+    /// otherwise leave no trace — the combo path logs in the modal,
+    /// but beeps never do. Key metadata only (codes, never keystroke
+    /// streams), same privacy as the combo line. Logged through a
+    /// static func (never `Self.` in monitor closures).
+    private static let invalidLog = Logger(subsystem: "app.Oto", category: "shortcut")
+
+    private static func logInvalid(keyCode: UInt16, mods: UInt, reason: String) {
+        invalidLog.info("capture-invalid key=\(keyCode, privacy: .public) mods=\(mods, privacy: .public) reason=\(reason, privacy: .public)")
+    }
+
     func body(content: Content) -> some View {
         content
             .onChange(of: isListening) { _, listening in
@@ -265,6 +277,7 @@ struct ShortcutRecorderModifier: ViewModifier {
             case .cleared:
                 onClear()
             case .invalid(let reason):
+                ShortcutRecorderModifier.logInvalid(keyCode: event.keyCode, mods: event.modifierFlags.rawValue, reason: String(describing: reason))
                 onInvalid(reason)
             case .captured(let modifiers, let keyCode, let conflicts):
                 onCapture(modifiers, keyCode, conflicts)
@@ -290,6 +303,7 @@ struct ShortcutRecorderModifier: ViewModifier {
             case .capture(let code):
                 onCaptureModifier(code)
             case .chord:
+                ShortcutRecorderModifier.logInvalid(keyCode: event.keyCode, mods: event.modifierFlags.rawValue, reason: "chordOnly")
                 onInvalid(.chordOnly)
             }
             return event
