@@ -63,6 +63,35 @@ final class SettingsUITests: XCTestCase {
                 .waitForExistence(timeout: 10),
             "General must expose the Show-in-Dock toggle"
         )
+
+        // Catcher toggle: flip it and flip it back, asserting the value
+        // round-trips through the real defaults. Self-restoring by
+        // construction — the runner leaves the pref as it found it.
+        // (The Dock toggle above stays existence-only: flipping it would
+        // hide the runner's Dock.)
+        settingsWindow.descendants(matching: .any)["Dictation"].click()
+        let catcher = settingsWindow.toggles["CatcherToggle"]
+        XCTAssertTrue(
+            catcher.waitForExistence(timeout: 10),
+            "Dictation must expose the catcher toggle"
+        )
+        guard let before = catcher.value as? String else {
+            XCTFail("Catcher toggle must expose an On/Off value")
+            return
+        }
+        catcher.click()
+        let flipped = before == "On" ? "Off" : "On"
+        wait(
+            for: [expectation(for: NSPredicate(format: "value == %@", flipped), evaluatedWith: catcher, handler: nil)],
+            timeout: 5
+        )
+        XCTAssertEqual(catcher.value as? String, flipped, "Catcher toggle must flip from \(before) to \(flipped)")
+        catcher.click()
+        wait(
+            for: [expectation(for: NSPredicate(format: "value == %@", before), evaluatedWith: catcher, handler: nil)],
+            timeout: 5
+        )
+        XCTAssertEqual(catcher.value as? String, before, "Catcher toggle must restore to \(before)")
     }
 
     /// First-run onboarding ("Welcome to Oto") is the only window allowed

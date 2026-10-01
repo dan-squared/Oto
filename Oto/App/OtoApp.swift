@@ -118,14 +118,15 @@ struct OtoApp: App {
         // default). No NSEvent monitors in the trigger path — they wedge
         // MenuBarExtra menu tracking (bisect-proven, see HIDEventMonitor).
         dispatch.start()
+        // Hoisted UI state first: onboarding shares it (permissions/speech
+        // render from one model, never duplicated per surface).
+        self.settingsUIState = SettingsUIState(preparer: preparer, permissions: permissions)
         let onboarding = OnboardingWindowController(
             dispatch: dispatch,
-            preparer: preparer,
-            permissions: permissions
+            uiState: settingsUIState
         )
         self.onboarding = onboarding
         DockRestoreDelegate.onboarding = onboarding
-        self.settingsUIState = SettingsUIState(preparer: preparer, permissions: permissions)
         // Stores load off the launch path; rules push when ready. Dictation
         // before this lands uses trim-only (today's behavior), never blocks.
         Task {

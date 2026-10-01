@@ -5,8 +5,10 @@
 //  Five-page first-run flow, dressed like the reference welcome: ground
 //  canvas, 520 column, 26pt page titles, Big capsule footer (dots + Back +
 //  Continue/Finish — no Skip), asymmetric slide transitions. Owns no
-//  services: dispatch/preparer/permissions arrive as params. The hold-key
-//  card reuses the Settings machinery and applies immediately.
+//  services: dispatch and the shared SettingsUIState arrive as params
+//  (permissions/speech state live in the hoisted model, never duplicated
+//  here — the mic-flash fix). The hold-key card reuses the Settings
+//  machinery and applies immediately.
 //
 
 import ApplicationServices
@@ -18,8 +20,7 @@ struct OnboardingView: View {
     private static let pageCount = 5
 
     let dispatch: ShortcutDispatch
-    let preparer: SpeechAssetPreparer
-    let permissions: PermissionsManager
+    let uiState: SettingsUIState
     let onFinish: () -> Void
 
     @State private var page = 0
@@ -33,14 +34,8 @@ struct OnboardingView: View {
     @State private var holdMessage: String?
     @State private var showSwap = false
 
-    // Permissions page state (DictationPane patterns, copied verbatim).
-    @State private var micText = "Checking…"
-    @State private var axTrusted = false
-    @State private var speechText = "Checking…"
-
-    // Ready page state.
-    @State private var readinessText = "Checking…"
-    @State private var languageText = "—"
+    // Ready page state (trial text only — readiness and permissions
+    // render from the shared model).
     @State private var trialText = ""
 
     var body: some View {
@@ -74,8 +69,12 @@ struct OnboardingView: View {
         .task {
             holdKind = dispatch.configuration.hold.kind
             fnUsage = SystemFnUsage.read()
-            refreshPermissions()
-            await refreshSpeech()
+            // Slow state is hoisted (same model Settings uses) — read it,
+            // never duplicate it. Speech/mac state loads once per window
+            // open via ensureLoaded; the panes own that call, this only
+            // re-reads the fast permission surface and the speech report.
+            uiState.refreshPermissions()
+            await uiState.refreshSpeech()
         }
         .onDisappear {
             // Safety: an armed recording suspends global shortcuts — never
@@ -362,37 +361,43 @@ struct OnboardingView: View {
                 permissionRow(
                     icon: "mic",
                     title: "Microphone",
-                    status: micText,
-                    actionTitle: micText == "Allowed" ? nil : "Allow microphone access",
+                    status: micStatusText,
+                    actionTitle: uiState.micText == "Allowed" ? nil : "Allow microphone access",
                     action: {
                         Task {
-                            _ = await permissions.ensureMicrophone()
-                            refreshPermissions()
+                            _ = await uiState.ensureMicrophoneGrant()
+                            uiState.refreshPermissions()
                         }
                     }
                 )
                 permissionRow(
                     icon: "accessibility",
                     title: "Accessibility",
-                    status: axTrusted ? "Allowed" : "Not allowed",
-                    actionTitle: axTrusted ? nil : "Open Accessibility settings",
+                    status: uiState.axTrusted ? "Allowed" : "Not allowed",
+                    actionTitle: uiState.axTrusted ? nil : "Open Accessibility settings",
                     action: {
-                        requestAccessibilityPrompt()
+                        uiState.requestAccessibilityPrompt()
                         Task {
                             try? await Task.sleep(for: .seconds(2))
-                            refreshPermissions()
+                            uiState.refreshPermissions()
                         }
                     }
                 )
                 permissionRow(
                     icon: "checkmark",
                     title: "Speech recognition",
-                    status: speechText,
+                    status: uiState.speechText,
                     actionTitle: nil,
                     action: {}
                 )
             }
         }
+    }
+
+    /// Onboarding's mic-denied copy keeps its guidance suffix; the shared
+    /// model carries the bare status ("Denied") for the panes.
+    private var micStatusText: String {
+        uiState.micText == "Denied" ? "Denied — allow it in System Settings." : uiState.micText
     }
 
     private func permissionRow(icon: String, title: String, status: String, actionTitle: String?, action: @escaping () -> Void) -> some View {
@@ -421,37 +426,6 @@ struct OnboardingView: View {
         }
     }
 
-    private func refreshPermissions() {
-        switch permissions.microphoneStatus() {
-        case .granted:
-            micText = "Allowed"
-        case .denied:
-            micText = "Denied — allow it in System Settings."
-        case .notDetermined:
-            micText = "Not asked yet"
-        }
-        axTrusted = AXIsProcessTrusted()
-        switch permissions.speechStatus() {
-        case .authorized:
-            speechText = "Allowed"
-        case .denied, .restricted:
-            speechText = "Not allowed"
-        case .notDetermined:
-            speechText = "Not asked yet"
-        @unknown default:
-            speechText = "Unknown"
-        }
-    }
-
-    /// Apple's blessed prompt: opens System Settings at the Accessibility
-    /// page itself when untrusted, no-ops when trusted. Same call as
-    /// DictationPane — one blessed path, never duplicated logic.
-    private func requestAccessibilityPrompt() {
-        _ = AXIsProcessTrustedWithOptions([
-            PermissionsManager.axPromptKey: true,
-        ] as CFDictionary)
-    }
-
     // MARK: - Page 5: Ready + try it
 
     private var readyPage: some View {
@@ -460,19 +434,27 @@ struct OnboardingView: View {
                 "Get set up.",
                 "Try it below, then press Finish."
             )
-            HStack(spacing: 8) {
-                if readinessText == "Checking…" {
-                    OtoStatus(text: "Checking…", tone: .idle)
-                } else if speechReady {
+            if uiState.readinessText == "Checking…" {
+                OtoStatus(text: "Checking…", tone: .idle)
+            } else if uiState.speechReady {
+                HStack(spacing: 8) {
                     OtoStatus(text: "Ready", tone: .ok)
-                    Text(languageText)
+                    Text(uiState.languageText)
                         .font(.system(size: 13))
                         .foregroundStyle(OtoPalette.muted)
-                } else {
-                    OtoStatus(text: "Not prepared yet", tone: .idle)
-                    Text("Prepare it any time in Settings › Dictation.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(OtoPalette.muted)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        OtoStatus(text: "Not prepared yet", tone: .idle)
+                        Text(uiState.prepareFeedback ?? "Works offline once prepared.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(OtoPalette.muted)
+                    }
+                    OtoBig(uiState.isPreparing ? "Preparing…" : "Prepare offline speech") {
+                        Task { await uiState.runPrepare() }
+                    }
+                    .disabled(uiState.isPreparing)
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -491,19 +473,4 @@ struct OnboardingView: View {
             }
         }
     }
-
-    private func refreshSpeech() async {
-        let report = await preparer.status()
-        if let tag = report.resolved?.identifier(.bcp47) {
-            let systemTag = Locale.current.identifier(.bcp47)
-            languageText = tag == systemTag
-                ? tag
-                : "\(systemTag) → engine uses \(tag)"
-        } else {
-            languageText = Locale.current.identifier(.bcp47)
-        }
-        readinessText = report.readiness.errorDescription ?? "Ready (\(languageText))"
-    }
-
-    private var speechReady: Bool { readinessText.hasPrefix("Ready") }
 }

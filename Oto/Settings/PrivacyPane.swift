@@ -16,38 +16,11 @@ struct PrivacyPane: View {
         VStack(alignment: .leading, spacing: 6) {
             OtoCaption(text: "Privacy")
             OtoCard {
-                OtoLine("Microphone", uiState.micDeniedGuidance) {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        OtoStatus(text: uiState.micText, tone: uiState.micTone)
-                        if !uiState.micAllowed {
-                            OtoBig("Allow microphone access") {
-                                Task {
-                                    _ = await uiState.ensureMicrophoneGrant()
-                                    uiState.refreshPermissions()
-                                }
-                            }
-                        }
-                    }
-                }
+                MicStatusRow(uiState: uiState, title: "Microphone")
                 OtoRule()
-                OtoLine("Accessibility", uiState.axTrusted ? nil : "Global keys and insertion need it.") {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        OtoStatus(text: uiState.axTrusted ? "Allowed" : "Not allowed", tone: uiState.axTrusted ? .ok : .warn)
-                        if !uiState.axTrusted {
-                            OtoBig("Open Accessibility settings") {
-                                uiState.requestAccessibilityPrompt()
-                                Task {
-                                    try? await Task.sleep(for: .seconds(2))
-                                    uiState.refreshPermissions()
-                                }
-                            }
-                        }
-                    }
-                }
+                AccessibilityRow(uiState: uiState)
                 OtoRule()
-                OtoLine("Speech recognition", nil) {
-                    OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
-                }
+                SpeechStatusRow(uiState: uiState)
             }
             Text("Oto stores what you choose: rules, snippets, and transcripts only if you enable history. Never audio or other apps' content.")
                 .font(.system(size: 11.5))
