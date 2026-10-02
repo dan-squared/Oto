@@ -95,7 +95,9 @@ struct OtoApp: App {
             targetService: RealTargetCapture(),
             inserter: inserter,
             history: historyStore,
-            mediaDuck: MediaDuck()
+            mediaDuck: MediaDuck(),
+            polish: polishService,
+            behaviorProvider: { PolishBehavior.current() }
         )
         let analyzer = AudioSpectrumAnalyzer()
         let modalController = NoTargetModalController()
@@ -123,6 +125,10 @@ struct OtoApp: App {
         // default). No NSEvent monitors in the trigger path — they wedge
         // MenuBarExtra menu tracking (bisect-proven, see HIDEventMonitor).
         dispatch.start()
+        // Slice B input clock: every physical tap event (matched or not)
+        // pushes one bump to the coordinator, whose upgrade race snapshots
+        // it at insertion. Fire-and-forget by design (see noteInput).
+        dispatch.setInputClock({ Task { await coordinator.noteInput() } })
         // Hoisted UI state first: onboarding shares it (permissions/speech
         // render from one model, never duplicated per surface).
         self.settingsUIState = SettingsUIState(preparer: preparer, permissions: permissions)

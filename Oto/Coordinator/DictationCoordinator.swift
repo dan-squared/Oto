@@ -39,6 +39,14 @@ actor DictationCoordinator {
     private var currentSessionID: UUID?
     private var sessionContext: SessionContext?
     private var finishRequested = false
+    /// Slice B input clock: bumped (via the tap→dispatch wiring) for every
+    /// physical event. The upgrade race snapshots it at insertion; any bump
+    /// vetoes the swap. Fire-and-forget by design — only eventual
+    /// consistency at human-typing scale is required.
+    private var inputClock: UInt64 = 0
+    /// Swap window (Slice B): seconds after insertion during which polish
+    /// may swap in. Matrix-tuned starting value; widen only with evidence.
+    nonisolated static let upgradeWindowSeconds: Double = 2
     /// When the current session entered recording (silent-skip duration
     /// guard). Nil until the starting→recording transition; cleared on
     /// every begin so a stale instant can never green-light a new session.
@@ -67,10 +75,22 @@ actor DictationCoordinator {
     /// duck-off sessions behave exactly as before. Injected (protocol)
     /// so coordinator tests never touch the HAL.
     private let mediaDuck: (any MediaDucking)?
+    /// Slice B upgrade inputs. All nil in existing tests and when unwired —
+    /// every call site is optional, so pre-Slice-B sessions behave exactly
+    /// as before. `behaviorProvider` reads prefs per session (Settings flips
+    /// apply to the next dictation, no restart); `polish` streams cleanup.
+    private let polish: (any PolishServing)?
+    private let behaviorProvider: (@Sendable () -> PolishBehavior)?
 
     /// Phase 1 observability: state transitions are the only visible trace
     /// of fake sessions (no Flow Bar yet). Watch in Console.app.
     private let log = Logger(subsystem: "app.Oto", category: "coordinator")
+
+    /// Last auto-polish available for Revert (Slice B beat). Set only on a
+    /// successful swap; cleared on next begin and on successful revert.
+    /// Reading it back on failure keeps Revert retryable; the raw always
+    /// survives in History regardless.
+    private(set) var lastPolish: LastPolish?
 
     init(
         audio: any AudioCaptureServing,
@@ -80,7 +100,9 @@ actor DictationCoordinator {
         pipeline: TranscriptPipeline = TranscriptPipeline(),
         history: HistoryStore?,
         micDeniedOverride: (@Sendable () -> Bool)? = nil,
-        mediaDuck: (any MediaDucking)? = nil
+        mediaDuck: (any MediaDucking)? = nil,
+        polish: (any PolishServing)? = nil,
+        behaviorProvider: (@Sendable () -> PolishBehavior)? = nil
     ) {
         self.audio = audio
         self.speech = speech
@@ -90,6 +112,8 @@ actor DictationCoordinator {
         self.history = history
         self.micDeniedOverride = micDeniedOverride
         self.mediaDuck = mediaDuck
+        self.polish = polish
+        self.behaviorProvider = behaviorProvider
     }
 
     /// Live rule refresh from the dictionary store (Writing pane saves).
@@ -97,6 +121,17 @@ actor DictationCoordinator {
     func setDictionaryRules(_ rules: [DictionaryRule]) {
         pipeline = TranscriptPipeline(dictionaryRules: rules)
     }
+
+    /// Slice B input-clock bump. Called (fire-and-forget) for every physical
+    /// tap event via the OtoApp wiring. Idempotent, order-free.
+    func noteInput() {
+        inputClock &+= 1
+    }
+
+    /// Slice B: Revert affordance for the menu (one-shot read per open, same
+    /// pattern as `recoveryText`). True while a swapped polish can be
+    /// reverted to the raw.
+    func canRevertPolish() -> Bool { lastPolish != nil }
 
     // MARK: - Intents
 
@@ -229,6 +264,7 @@ actor DictationCoordinator {
         finishRequested = false
         recordingBeganAt = nil
         recoveryTranscript = nil
+        lastPolish = nil
         state = .starting(context)
         log.info("begin \(context.id.uuidString.prefix(8), privacy: .public) mode=\(String(describing: interaction), privacy: .public) target=\(context.target.bundleIdentifier ?? "?", privacy: .public)")
 
@@ -431,6 +467,12 @@ actor DictationCoordinator {
         case .inserted:
             state = .completed(context)
             log.info("completed, inserted \(clean.count, privacy: .public) chars into \(context.target.bundleIdentifier ?? "?", privacy: .public)")
+            // Detached by design: the race runs POST-terminal (insertion is
+            // done and reported) and must never hold finalization open —
+            // a parked stream (closed gate, slow model) would otherwise
+            // wedge finish(). State guards inside veto anything stale.
+            // Same unstructured-Task precedent as begin()'s runPreparation.
+            Task { await self.maybeUpgradePolished(clean: clean, context: context) }
         case .recoverableFailure(let reason):
             // No false success: the transcript stays recoverable.
             recoveryTranscript = Transcript(text: clean)
@@ -445,4 +487,75 @@ actor DictationCoordinator {
             log.info("failed no-text-field, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
         }
     }
+
+    /// Slice B upgrade race: after a successful insert, polish the text and
+    /// swap it in — but ONLY while the strict window holds (no input since
+    /// insertion, same completed session, inside the time bound, target
+    /// still alive). Any violation cancels: raw stands, nothing is stored
+    /// anywhere, and the polished draft is dropped (raw is already in
+    /// History). Runs post-terminal: it never blocks insertion and can never
+    /// resurrect a superseded session (state guards on every step).
+    private func maybeUpgradePolished(clean: String, context: SessionContext) async {
+        guard let polish, let behaviorProvider else { return }
+        let behavior = behaviorProvider()
+        // Automatic falls back to manual until Slice C builds it — future
+        // values can never trigger unbuilt behavior.
+        guard behavior.enabled, behavior.mode == .upgrade else { return }
+        guard polish.availability() == .available else { return }
+        let clockAtInsert = inputClock
+        let insertedAt = Date()
+        var polished = ""
+        for await snapshot in polish.streamCleanup(clean) {
+            polished = snapshot
+            // Violation mid-stream: stop consuming immediately (the task
+            // ends here; nothing is published, nothing stored).
+            guard inputClock == clockAtInsert else { return }
+            guard Date().timeIntervalSince(insertedAt) <= Self.upgradeWindowSeconds else { return }
+            guard case .completed(let done) = state, done.id == context.id else { return }
+        }
+        guard !polished.isEmpty, polished != clean else { return }
+        guard inputClock == clockAtInsert else { return }
+        guard Date().timeIntervalSince(insertedAt) <= Self.upgradeWindowSeconds else { return }
+        guard case .completed(let done) = state, done.id == context.id else { return }
+        // Fresh liveness: the app may have died while polishing.
+        guard await targetService.isAlive(context.target) else { return }
+        guard case .completed(let done2) = state, done2.id == context.id else { return }
+        switch await inserter.replaceLast(polished, into: context.target) {
+        case .inserted:
+            guard case .completed(let done3) = state, done3.id == context.id else { return }
+            lastPolish = LastPolish(raw: clean, polished: polished, context: context, at: Date())
+            log.info("upgraded to polished \(polished.count, privacy: .public) chars")
+        case .recoverableFailure(let reason):
+            // Raw stands in the field (and in History). The polished draft
+            // is dropped — a missed magic moment, never data loss.
+            log.info("upgrade swap refused (\(reason), privacy: .public); raw stands")
+        case .noEditableField:
+            log.info("upgrade swap refused (no editable field); raw stands")
+        }
+    }
+
+    /// Slice B undo: re-paste the raw over the swapped polish. Idempotent —
+    /// safe to call repeatedly and safe when no swap happened. On success
+    /// the beat clears; on failure lastPolish is KEPT so Revert stays
+    /// retryable (raw survives in History regardless).
+    func revertLastPolish() async {
+        guard let last = lastPolish else { return }
+        switch await inserter.replaceLast(last.raw, into: last.context.target) {
+        case .inserted:
+            lastPolish = nil
+            log.info("reverted to raw")
+        case .recoverableFailure(let reason):
+            log.info("revert refused (\(reason), privacy: .public); keeping Revert available")
+        case .noEditableField:
+            log.info("revert refused (no editable field); keeping Revert available")
+        }
+    }
+}
+
+/// One completed auto-polish available for Revert (Slice B beat).
+struct LastPolish: Sendable {
+    var raw: String
+    var polished: String
+    var context: SessionContext
+    var at: Date
 }

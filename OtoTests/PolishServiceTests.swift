@@ -83,6 +83,32 @@ struct PolishServiceTests {
         #expect(board.string(forType: .string) == "cleaned text")
     }
 
+    @Test func useOriginalWritesRawToClipboard() {
+        // Symmetric clipboard (Matrix A finding): Use original copies the
+        // raw, so paste always reflects the last decision — a previous Keep
+        // must not survive a change of mind.
+        let board = NSPasteboard(name: NSPasteboard.Name("test.oto.polish.\(UUID().uuidString)"))
+        placePolishedOnClipboard("polished", board: board)
+        placePolishedOnClipboard("helo wrld", board: board)
+        #expect(board.string(forType: .string) == "helo wrld")
+    }
+
+    @Test func captionFormatsElapsedAndWords() {
+        #expect(polishTimingCaption(stats: PolishRunStats(
+            firstTokenMs: 400, totalMs: 1400, inWords: 30, outWords: 38
+        )) == "Cleaned in 1.4s · 38 words")
+        #expect(polishTimingCaption(stats: PolishRunStats(
+            firstTokenMs: 120, totalMs: 400, inWords: 4, outWords: 4
+        )) == "Cleaned in 0.4s · 4 words")
+    }
+
+    @Test func tokenCapScalesWithInput() {
+        // Short entries finish sooner; long ones keep full headroom.
+        #expect(LivePolishService.options(for: String(repeating: "a", count: 200)).maximumResponseTokens == 164)
+        #expect(LivePolishService.options(for: String(repeating: "a", count: 20)).maximumResponseTokens == 128)
+        #expect(LivePolishService.options(for: String(repeating: "a", count: 5000)).maximumResponseTokens == 512)
+    }
+
     @Test func manualFlowNeverWritesHistory() async {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

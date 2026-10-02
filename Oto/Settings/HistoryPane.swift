@@ -16,7 +16,7 @@ struct HistoryPane: View {
     @AppStorage("app.Oto.historyEnabled") private var historyEnabled = false
     /// Mirrors the Intelligence master switch (same key as IntelligencePane):
     /// off hides every Clean up button — no dead controls.
-    @AppStorage("app.Oto.intelligenceEnabled") private var intelligenceEnabled = true
+    @AppStorage(IntelligenceSettings.enabledKey) private var intelligenceEnabled = true
     @State private var showClearConfirm = false
     @State private var feedback: String?
     @State private var historyPage = 1

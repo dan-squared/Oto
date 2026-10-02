@@ -49,11 +49,22 @@ struct PolishSheet: View {
                     Text(streaming && draft.isEmpty ? "Cleaning…" : draft)
                         .font(.system(size: 13))
                         .foregroundStyle(OtoPalette.ink)
+                    if !streaming, let stats = polish.lastRunStats() {
+                        Text(polishTimingCaption(stats: stats))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(OtoPalette.muted)
+                    }
                 }
             }
             HStack(spacing: 8) {
                 Spacer()
-                OtoPill("Use original", filled: false) { dismiss() }
+                OtoPill("Use original", filled: false) {
+                    // Symmetric clipboard: Keep→polished, Original→raw, so
+                    // paste always reflects the last decision (a previous
+                    // Keep must not survive a change of mind).
+                    placePolishedOnClipboard(entry.finalText)
+                    dismiss()
+                }
                 OtoPill("Keep", filled: true) {
                     placePolishedOnClipboard(draft)
                     dismiss()

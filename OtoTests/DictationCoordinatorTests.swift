@@ -82,6 +82,208 @@ struct DictationCoordinatorTests {
         return await coordinator.state
     }
 
+    // MARK: - Slice B upgrade race
+
+    private func makeUpgradeSUT(
+        behavior: PolishBehavior = PolishBehavior(enabled: true, mode: .upgrade),
+        polishAvailable: PolishAvailability = .available,
+        chunks: [String] = ["polished text"],
+        replaceResult: InsertionResult = .inserted
+    ) -> (
+        coordinator: DictationCoordinator,
+        inserter: FakeTextInsertion,
+        polish: FakePolishService
+    ) {
+        let audio = FakeAudioCapture(startError: nil, stubPeak: 1.0)
+        let speech = FakeSpeechService(
+            finalText: "hello oto", prepareError: nil, finishError: nil,
+            prepareGateOpen: true, finishGateOpen: true
+        )
+        let target = FakeTargetCapture(stubTarget: Self.stubTarget)
+        let inserter = FakeTextInsertion(
+            result: .inserted, insertGateOpen: true, replaceResult: replaceResult
+        )
+        let polish = FakePolishService()
+        polish.availabilityResult = polishAvailable
+        polish.chunks = chunks
+        let coordinator = DictationCoordinator(
+            audio: audio, speech: speech, targetService: target,
+            inserter: inserter, history: nil,
+            micDeniedOverride: { false },
+            polish: polish, behaviorProvider: { behavior }
+        )
+        return (coordinator, inserter, polish)
+    }
+
+    /// Runs one hold session to a terminal state. Returns nil when begin
+    /// itself refused (never in these tests).
+    private func runCompletedSession(_ coordinator: DictationCoordinator) async {
+        guard let id = await coordinator.beginHold() else {
+            Issue.record("beginHold refused")
+            return
+        }
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.finish(id)
+        _ = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+    }
+
+    private func waitForPolish(
+        _ coordinator: DictationCoordinator,
+        timeout: Duration = .seconds(5)
+    ) async -> LastPolish? {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if let last = await coordinator.lastPolish { return last }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return await coordinator.lastPolish
+    }
+
+    @Test func upgradeSwapsWhenWindowHolds() async {
+        let (coordinator, inserter, _) = makeUpgradeSUT()
+        await runCompletedSession(coordinator)
+        guard let last = await waitForPolish(coordinator) else {
+            Issue.record("expected a swapped polish")
+            return
+        }
+        #expect(last.raw == "hello oto")
+        #expect(last.polished == "polished text")
+        let inserts = await inserter.calls
+        #expect(inserts.count == 1)
+        #expect(inserts.first?.text == "hello oto")
+        let replaces = await inserter.replaceCalls
+        #expect(replaces.count == 1)
+        #expect(replaces.first?.text == "polished text")
+        #expect(await coordinator.canRevertPolish())
+    }
+
+    @Test func offNeverPolishes() async {
+        let (coordinator, inserter, polish) = makeUpgradeSUT(
+            behavior: PolishBehavior(enabled: false, mode: .upgrade)
+        )
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts.isEmpty)
+        #expect(!(await coordinator.canRevertPolish()))
+    }
+
+    @Test func manualNeverSwaps() async {
+        // Manual polishes only on tap (History sheet) — the auto race never
+        // runs, so no stream even starts.
+        let (coordinator, inserter, polish) = makeUpgradeSUT(
+            behavior: PolishBehavior(enabled: true, mode: .manual)
+        )
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts.isEmpty)
+    }
+
+    @Test func automaticFallsBackToManual() async {
+        // Slice C builds Automatic; until then the value must behave as
+        // Manual — future values can never trigger unbuilt behavior.
+        let (coordinator, inserter, polish) = makeUpgradeSUT(
+            behavior: PolishBehavior(enabled: true, mode: .automatic)
+        )
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts.isEmpty)
+    }
+
+    @Test func unavailableNeverSwaps() async {
+        let (coordinator, inserter, polish) = makeUpgradeSUT(
+            polishAvailable: .unavailable(copy: "nope")
+        )
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts.isEmpty)
+    }
+
+    @Test func inputVetoesSwap() async {
+        // Park the race at the stream gate, bump the clock (one keystroke),
+        // then open the gate: the per-snapshot check trips, no swap, raw
+        // stands, nothing stored.
+        let (coordinator, inserter, polish) = makeUpgradeSUT()
+        await polish.streamGate.setOpen(false)
+        await runCompletedSession(coordinator)
+        await coordinator.noteInput()
+        await polish.streamGate.setOpen(true)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(500)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        // The stream still ran (polish did its work); only the swap refused.
+        #expect(polish.prompts == ["hello oto"])
+    }
+
+    @Test func slowPolishMissesWindow() async {
+        // Polish finishing after the 2s window drops the swap even with a
+        // silent room: stale upgrades never rewrite settled text. Parked at
+        // the gate past the window, then released — the time guard trips.
+        let (coordinator, inserter, polish) = makeUpgradeSUT()
+        await polish.streamGate.setOpen(false)
+        await runCompletedSession(coordinator)
+        try? await Task.sleep(for: .milliseconds(2300))
+        await polish.streamGate.setOpen(true)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(500)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+    }
+
+    @Test func revertRestoresRaw() async {
+        let (coordinator, inserter, _) = makeUpgradeSUT()
+        await runCompletedSession(coordinator)
+        guard await waitForPolish(coordinator) != nil else {
+            Issue.record("expected a swapped polish")
+            return
+        }
+        await coordinator.revertLastPolish()
+        let replaces = await inserter.replaceCalls
+        #expect(replaces.count == 2)
+        #expect(replaces.last?.text == "hello oto")
+        #expect(await coordinator.canRevertPolish() == false)
+        #expect(await coordinator.lastPolish == nil)
+    }
+
+    @Test func revertFailureKeepsBeat() async {
+        let (coordinator, inserter, _) = makeUpgradeSUT()
+        await runCompletedSession(coordinator)
+        guard await waitForPolish(coordinator) != nil else {
+            Issue.record("expected a swapped polish")
+            return
+        }
+        await inserter.setReplaceResult(.recoverableFailure(reason: "nope"))
+        await coordinator.revertLastPolish()
+        // Beat stays retryable; raw survives in History regardless.
+        #expect(await coordinator.canRevertPolish())
+        #expect(await coordinator.lastPolish != nil)
+    }
+
+    @Test func beatClearsOnNextBegin() async {
+        let (coordinator, _, _) = makeUpgradeSUT()
+        await runCompletedSession(coordinator)
+        guard await waitForPolish(coordinator) != nil else {
+            Issue.record("expected a swapped polish")
+            return
+        }
+        _ = await coordinator.beginHold()
+        #expect(await coordinator.lastPolish == nil)
+        #expect(await coordinator.canRevertPolish() == false)
+    }
+
+    @Test func behaviorPrefsReadPerSession() {
+        // Absent keys ⇒ shipped defaults (enabled + upgrade). Present but
+        // unknown mode ⇒ safe manual. Explicit values round-trip.
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        #expect(PolishBehavior.current(defaults: defaults) == PolishBehavior(enabled: true, mode: .upgrade))
+        defaults.set(false, forKey: IntelligenceSettings.enabledKey)
+        defaults.set("manual", forKey: IntelligenceSettings.modeKey)
+        #expect(PolishBehavior.current(defaults: defaults) == PolishBehavior(enabled: false, mode: .manual))
+        defaults.set("quantum", forKey: IntelligenceSettings.modeKey)
+        #expect(PolishBehavior.current(defaults: defaults).mode == .manual)
+    }
+
     // MARK: - 1. Happy path
 
     @Test func holdBeginFinishInsertsIntoCapturedTarget() async {

@@ -12,6 +12,12 @@ import Foundation
 /// Success is determined here — never by merely sending a paste event.
 protocol TextInserting: Sendable {
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult
+    /// Guarded undo-last-paste + insert replacement (swap/undo flows). Same
+    /// fail-closed contract as insert; reasons name the replacement. The
+    /// undo step is unverifiable by nature — callers must only invoke it
+    /// inside a strict window (seconds after their own paste, zero
+    /// intervening input) where the undo top is near-certainly theirs.
+    func replaceLast(_ text: String, into target: TargetApplication) async -> InsertionResult
 }
 
 /// Recording fake for Phase 1 coordinator tests. Asserts which target the
@@ -28,9 +34,14 @@ actor FakeTextInsertion: TextInserting {
     private var insertGateOpen: Bool
     private var insertWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(result: InsertionResult = .inserted, insertGateOpen: Bool = true) {
+    init(
+        result: InsertionResult = .inserted,
+        insertGateOpen: Bool = true,
+        replaceResult: InsertionResult = .inserted
+    ) {
         self.result = result
         self.insertGateOpen = insertGateOpen
+        self.replaceResult = replaceResult
     }
 
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult {
@@ -41,6 +52,21 @@ actor FakeTextInsertion: TextInserting {
             }
         }
         return result
+    }
+
+    /// Outcome returned by `replaceLast`.
+    var replaceResult: InsertionResult = .inserted
+
+    private(set) var replaceCalls: [(text: String, target: TargetApplication)] = []
+
+    func replaceLast(_ text: String, into target: TargetApplication) async -> InsertionResult {
+        replaceCalls.append((text: text, target: target))
+        return replaceResult
+    }
+
+    /// Test-only outcome re-scripting mid-test (swap-then-revert-failure).
+    func setReplaceResult(_ result: InsertionResult) {
+        replaceResult = result
     }
 
     func openInsertGate() {

@@ -35,6 +35,14 @@ import Foundation
 final class HIDEventMonitor {
     /// Emitted for normalized physical events. Synchronous, value-only.
     var onEvent: ((ShortcutEvent) -> Void)?
+    /// Slice B swap-window clock: fired for EVERY physical event passing the
+    /// tap (matched or not — plain typing included), right after the type
+    /// filter and before any decision. Set once at composition (OtoApp);
+    /// nil in tests. `nonisolated(unsafe)` + set-once: written once on the
+    /// main thread at startup, read on the tap thread (main by the guard
+    /// below) — never mutated after. One fire-and-forget hop per event;
+    /// the coordinator serializes the bumps.
+    nonisolated(unsafe) var onAnyInput: (@Sendable () -> Void)?
     /// Escape was pressed (observed only — never consumed; it still reaches
     /// the focused app). Wired to coordinator cancel by dispatch.
     var onEscape: (() -> Void)?
@@ -194,6 +202,10 @@ final class HIDEventMonitor {
         else {
             return Unmanaged.passUnretained(event)
         }
+
+        // Swap-window clock: every physical event, matched or not. Read
+        // synchronously here (tap thread); the push itself hops async.
+        if let onAnyInput { onAnyInput() }
 
         // Sendable snapshot before the isolation boundary: the non-Sendable
         // CGEvent must not cross into the @Sendable assumeIsolated body

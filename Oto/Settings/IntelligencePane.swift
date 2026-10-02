@@ -13,8 +13,19 @@ import SwiftUI
 struct IntelligencePane: View {
     let polish: any PolishServing
 
-    @AppStorage("app.Oto.intelligenceEnabled") private var enabled = true
+    @AppStorage(IntelligenceSettings.enabledKey) private var enabled = true
+    @AppStorage(IntelligenceSettings.modeKey) private var modeRaw = IntelligenceMode.upgrade.rawValue
     @State private var availability: PolishAvailability = .available
+
+    /// Bound through the raw string so a future value stored by a newer
+    /// build never crashes this one — unknown reads as manual (same rule
+    /// as `PolishBehavior.current`).
+    private var mode: Binding<IntelligenceMode> {
+        Binding(
+            get: { IntelligenceMode(rawValue: modeRaw) ?? .manual },
+            set: { modeRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -32,6 +43,27 @@ struct IntelligencePane: View {
                     OtoSwitch(on: $enabled)
                 }
             }
+            OtoCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("When to clean up")
+                        .font(.system(size: 13))
+                        .foregroundStyle(OtoPalette.ink)
+                    OtoSegmented(
+                        options: [
+                            (.manual, "Manual"),
+                            (.upgrade, "Upgrade if fast"),
+                        ],
+                        selection: mode
+                    )
+                    Text("Manual cleans only when you tap Clean up. Upgrade if fast inserts your words instantly, then swaps in the cleanup when it is ready.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(OtoPalette.muted)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+            }
+            .disabled(!enabled)
+            .opacity(enabled ? 1 : 0.45)
             Text("On-device only — transcripts and prompts never leave this Mac. Off means exactly today's app: no model contact at all.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(OtoPalette.muted)

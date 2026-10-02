@@ -22,6 +22,7 @@ struct OtoMenuBarView: View {
 
     @State private var status = "idle — no session yet"
     @State private var recoveryAvailable = false
+    @State private var revertAvailable = false
     @State private var feedback: String?
     @State private var escapeUnavailable = false
 
@@ -37,6 +38,7 @@ struct OtoMenuBarView: View {
                 escapeUnavailable = !dispatch.isEscapeCancelAvailable
                 status = await coordinator.lastSessionSummary()
                 recoveryAvailable = await coordinator.recoveryText() != nil
+                revertAvailable = await coordinator.canRevertPolish()
             }
 
         // Escape rides the HID tap (needs Accessibility); combo triggers
@@ -77,6 +79,23 @@ struct OtoMenuBarView: View {
                     feedback = posted
                         ? "Posted — check the frontmost app."
                         : "Retry failed — Accessibility permission may be off, or the clipboard was unavailable."
+                }
+            }
+            Divider()
+        }
+
+        // Slice B undo: a swapped polish can be reverted to the raw wording.
+        // Shown only while revertable — same no-dead-buttons rule as
+        // recovery above. The pill stays out of this by house rule (v6/v7:
+        // no end-state pixels, errors never touch the pill).
+        if revertAvailable {
+            Button("Revert to original wording") {
+                Task {
+                    await coordinator.revertLastPolish()
+                    revertAvailable = await coordinator.canRevertPolish()
+                    feedback = revertAvailable
+                        ? "Revert failed — try again, or copy the original from History."
+                        : "Original wording restored."
                 }
             }
             Divider()
