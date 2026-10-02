@@ -77,9 +77,12 @@ slices; safe to stop after any of them.
 2. Availability→copy mapper (pure, same file): every `UnavailableReason` → one
    honest line; unknown → generic "not available".
 3. New `Oto/Settings/IntelligencePane.swift` — status card (mapper copy),
-   master toggle, behavior picker (`OtoSegmented`, three modes). Prefs:
-   `app.Oto.intelligenceEnabled` (default true — OS-level AI opt-in already
-   happened if the model exists), `app.Oto.intelligenceMode` (default upgrade).
+   master toggle, Manual explanation line. (The behavior picker was planned
+   here but deferred during build: a picker whose options have no backend
+   would be a dead control. It lands with Slice B, when Upgrade exists to
+   select.) Prefs: `app.Oto.intelligenceEnabled` (default true — OS-level
+   AI opt-in already happened if the model exists); `app.Oto.intelligenceMode`
+   arrives with the picker in Slice B.
 4. `SettingsPane` (+`Intelligence`, "sparkles") in `SettingsRoot.swift:18-49`,
    `content` switch (`:210-253`), `OtoApp.swift` wiring (construct service once,
    pass down the existing `SettingsRoot → HistoryPane` chain).

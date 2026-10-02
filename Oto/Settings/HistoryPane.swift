@@ -11,11 +11,19 @@ import SwiftUI
 
 struct HistoryPane: View {
     let history: HistoryStore
+    let polish: any PolishServing
 
     @AppStorage("app.Oto.historyEnabled") private var historyEnabled = false
+    /// Mirrors the Intelligence master switch (same key as IntelligencePane):
+    /// off hides every Clean up button — no dead controls.
+    @AppStorage("app.Oto.intelligenceEnabled") private var intelligenceEnabled = true
     @State private var showClearConfirm = false
     @State private var feedback: String?
     @State private var historyPage = 1
+    /// Unknown until appear (then read once): unknown ⇒ hidden, so the
+    /// button can never appear without a live model behind it.
+    @State private var polishAvailability: PolishAvailability = .unavailable(copy: "")
+    @State private var polishEntry: HistoryEntry?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -64,6 +72,9 @@ struct HistoryPane: View {
                             .foregroundStyle(OtoPalette.muted)
                             HStack(spacing: 12) {
                                 OtoQuick("Copy") { copyEntry(entry) }
+                                if polishActionVisible(availability: polishAvailability, enabled: intelligenceEnabled) {
+                                    OtoQuick("Clean up") { polishEntry = entry }
+                                }
                                 OtoQuick("Delete", tint: .red) {
                                     Task { await history.remove(id: entry.id) }
                                 }
@@ -111,9 +122,20 @@ struct HistoryPane: View {
                     .padding(.leading, 2)
             }
         }
+        .sheet(item: $polishEntry) { entry in
+            PolishSheet(entry: entry, polish: polish)
+        }
         .onChange(of: historyEnabled) { _, new in
             history.setEnabled(new)
             if !new { historyPage = 1 }
+        }
+        .onAppear {
+            // Read once per visit (cheap sync property): unknown ⇒ hidden,
+            // and prewarm while the user browses so the first tap streams.
+            polishAvailability = polish.availability()
+            if polishActionVisible(availability: polishAvailability, enabled: intelligenceEnabled) {
+                polish.prewarm()
+            }
         }
         .onChange(of: history.entries.count) { _, _ in
             historyPage = HistoryPage.clampedPage(historyPage, total: history.entries.count)

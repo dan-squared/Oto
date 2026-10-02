@@ -47,7 +47,7 @@ final class SettingsUITests: XCTestCase {
         // native sidebar lists all four destinations (labels, not custom
         // buttons — rows are native List cells).
         XCTAssertTrue(settingsWindow.buttons["_XCUI:CloseWindow"].exists)
-        for name in ["General", "Dictation", "Dictionary", "Snippets", "History", "Privacy"] {
+        for name in ["General", "Dictation", "Dictionary", "Snippets", "History", "Privacy", "Intelligence"] {
             XCTAssertTrue(
                 settingsWindow.descendants(matching: .any)[name].exists,
                 "Sidebar must list \(name)"

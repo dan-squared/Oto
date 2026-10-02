@@ -22,6 +22,7 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
     case snippets
     case history
     case privacy
+    case intelligence
 
     var id: Self { self }
 
@@ -33,6 +34,7 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
         case .snippets: "Snippets"
         case .history: "History"
         case .privacy: "Privacy"
+        case .intelligence: "Intelligence"
         }
     }
 
@@ -44,6 +46,7 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
         case .snippets: "text.quote"
         case .history: "clock"
         case .privacy: "hand.raised"
+        case .intelligence: "sparkles"
         }
     }
 }
@@ -59,6 +62,9 @@ struct SettingsRoot: View {
     let dictionary: DictionaryStore
     let snippets: SnippetStore
     let history: HistoryStore
+    /// Intelligence service (Slice A: Manual only — status + History clean
+    /// up. Auto behaviors arrive behind the mode picker in Slices B/C).
+    let polish: any PolishServing
 
     /// Panel size (+15% over the reference 660×500: room for Oto's recorder
     /// rows with air to spare). FIXED, not a minimum: the window is pinned
@@ -249,9 +255,11 @@ struct SettingsRoot: View {
                     case .snippets:
                         SnippetsPane(snippets: snippets)
                     case .history:
-                        HistoryPane(history: history)
+                        HistoryPane(history: history, polish: polish)
                     case .privacy:
                         PrivacyPane(uiState: uiState)
+                    case .intelligence:
+                        IntelligencePane(polish: polish)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

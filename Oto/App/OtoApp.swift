@@ -63,6 +63,11 @@ struct OtoApp: App {
     // once per app life, never reset by rail navigation; see
     // SettingsUIState). Single instance, audit S2 rule.
     private let settingsUIState: SettingsUIState
+    // Intelligence service (Slice A: Manual only). One instance, shared by
+    // Settings and History; single instance, audit S2 rule. Init does no
+    // model contact (availability is read on demand), so construction is
+    // safe in every host including UI tests.
+    private let polishService: any PolishServing = LivePolishService()
 
     init() {
         // Crash backstop first: a kill mid-dictation leaves the duck flag
@@ -160,7 +165,8 @@ struct OtoApp: App {
                 coordinator: coordinator,
                 dictionary: dictionaryStore,
                 snippets: snippetStore,
-                history: historyStore
+                history: historyStore,
+                polish: polishService
             )
             // `toolbar(removing:)` is a View modifier, not a Scene one, so
             // the title-text removal belongs on the window's content. This
