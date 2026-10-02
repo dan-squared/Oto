@@ -49,12 +49,7 @@ struct KeycapField: View {
                             .foregroundStyle(OtoPalette.muted)
                     } else {
                         ForEach(chips, id: \.self) { chip in
-                            Text(chip)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(OtoPalette.ink)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            OtoKey(text: chip)
                         }
                     }
                 }

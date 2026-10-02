@@ -470,6 +470,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone required for dictation.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Oto shows speech recognition permission status in Settings.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -502,6 +503,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone required for dictation.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Oto shows speech recognition permission status in Settings.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

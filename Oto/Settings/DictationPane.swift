@@ -55,7 +55,7 @@ struct DictationPane: View {
                         }
                     }
                 }
-                .sheet(isPresented: $showShortcutModal) {
+                .sheet(isPresented: $showShortcutModal, onDismiss: syncFromDispatch) {
                     ShortcutModal(dispatch: dispatch)
                 }
             }
@@ -83,43 +83,16 @@ struct DictationPane: View {
                         }
                     }
                     OtoRule()
-                    OtoLine("Status", uiState.micDeniedGuidance) {
-                        VStack(alignment: .trailing, spacing: 8) {
-                            OtoStatus(text: uiState.micText, tone: uiState.micTone)
-                            if !uiState.micAllowed {
-                                OtoBig("Allow microphone access") {
-                                    Task {
-                                        _ = await uiState.ensureMicrophoneGrant()
-                                        uiState.refreshPermissions()
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    MicStatusRow(uiState: uiState, title: "Status")
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 OtoCaption(text: "Permissions")
                 OtoCard {
-                    OtoLine("Accessibility", uiState.axTrusted ? nil : "Global keys and insertion need it.") {
-                        VStack(alignment: .trailing, spacing: 8) {
-                            OtoStatus(text: uiState.axTrusted ? "Allowed" : "Not allowed", tone: uiState.axTrusted ? .ok : .warn)
-                            if !uiState.axTrusted {
-                                OtoBig("Open Accessibility settings") {
-                                    uiState.requestAccessibilityPrompt()
-                                    Task {
-                                        try? await Task.sleep(for: .seconds(2))
-                                        uiState.refreshPermissions()
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    AccessibilityRow(uiState: uiState)
                     OtoRule()
-                    OtoLine("Speech recognition", nil) {
-                        OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
-                    }
+                    SpeechStatusRow(uiState: uiState)
                 }
             }
 
@@ -131,6 +104,7 @@ struct DictationPane: View {
                         "No text field? Oto opens a small window with your transcript and a Copy button. Off: auto-copies instead."
                     ) {
                         OtoSwitch(on: $catcherEnabled)
+                            .accessibilityIdentifier("CatcherToggle")
                     }
                 }
             }
@@ -163,19 +137,12 @@ struct DictationPane: View {
                     .padding(.leading, 2)
             }
         }
-        .task {
-            syncFromDispatch()
-            // Slow state lives in the hoisted model (loaded once per
-            // window open) — this task only restarts the cheap live poll.
-            while !Task.isCancelled {
-                shortcutSummary = "Hold \(KeyNames.shortLabel(for: dispatch.configuration.hold.kind)) and speak."
-                shortcutStatus = dispatch.calibrationText
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
         .onAppear {
-            // Fast only: keeps grant-in-System-Settings flows live with
-            // no flash (never re-probes speech or devices here).
+            // Fast only: shortcut summary (the config can change in the
+            // modal or onboarding, so re-sync on every visit and on modal
+            // close) plus grant-in-System-Settings flows live with no
+            // flash (never re-probes speech or devices here).
+            syncFromDispatch()
             uiState.refreshPermissions()
         }
     }

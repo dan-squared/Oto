@@ -5,7 +5,7 @@
 //  The control kit, cloned pixel-for-pixel from the reference's pieces:
 //  Big (primary capsule), Pill (outline capsule), OtoSwitch (ink toggle),
 //  OtoSegmented (sliding thumb), OtoDoor (26px square), OtoKey (keycap),
-//  OtoHunt (search field), OtoQuick (mini action). All plain-button-style,
+//  OtoQuick (mini action). All plain-button-style,
 //  all hover-aware, all palette-driven.
 //
 
@@ -188,42 +188,6 @@ struct OtoKey: View {
             .padding(.vertical, 3)
             .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             .frame(minWidth: 44)
-    }
-}
-
-/// The field for narrowing a list. Wash, glass, clear cross.
-struct OtoHunt: View {
-    @Binding var text: String
-    var prompt = "Search"
-    var focus: FocusState<Bool>.Binding
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(OtoPalette.muted)
-            ZStack(alignment: .leading) {
-                if text.isEmpty {
-                    Text(prompt).foregroundStyle(OtoPalette.muted.opacity(0.7))
-                }
-                TextField("", text: $text)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(OtoPalette.ink)
-                    .focused(focus)
-            }
-            .font(.system(size: 13))
-            if !text.isEmpty {
-                Button { text = "" } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(OtoPalette.faint)
-                }
-                .buttonStyle(OtoBounce())
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 

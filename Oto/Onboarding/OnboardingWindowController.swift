@@ -24,14 +24,12 @@ final class OnboardingWindowController {
     nonisolated static let height: CGFloat = 480
 
     private let dispatch: ShortcutDispatch
-    private let preparer: SpeechAssetPreparer
-    private let permissions: PermissionsManager
+    private let uiState: SettingsUIState
     private var window: NSWindow?
 
-    init(dispatch: ShortcutDispatch, preparer: SpeechAssetPreparer, permissions: PermissionsManager) {
+    init(dispatch: ShortcutDispatch, uiState: SettingsUIState) {
         self.dispatch = dispatch
-        self.preparer = preparer
-        self.permissions = permissions
+        self.uiState = uiState
     }
 
     /// First-launch entry: shows only while unseen. Suppressed under unit
@@ -77,8 +75,7 @@ final class OnboardingWindowController {
     private func freshView() -> OnboardingView {
         OnboardingView(
             dispatch: dispatch,
-            preparer: preparer,
-            permissions: permissions,
+            uiState: uiState,
             onFinish: { [weak self] in self?.finish() }
         )
     }

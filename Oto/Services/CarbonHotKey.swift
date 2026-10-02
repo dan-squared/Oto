@@ -38,6 +38,13 @@ extension NSEvent.ModifierFlags {
 /// HotKey cannot remain registered. Technique follows the
 /// KeyboardShortcuts 3.1.0 reference (`HotKey.swift`, MIT) as Oto-owned
 /// code; the center below is simplified to Oto's one-combo reality.
+///
+/// Explicit `@MainActor` (matches the project's `SWIFT_DEFAULT_ACTOR_ISOLATION`,
+/// so zero behavior change): Carbon's "Not thread safe" contract (`CarbonEvents.h`)
+/// is then a compile-time property, not a comment. `deinit` stays nonisolated
+/// by language rule and touches only the `nonisolated(unsafe)` ref.
+/// Explicit so a build-setting change can never silently de-isolate this file.
+@MainActor
 final class CarbonHotKey {
     let carbonKeyCode: Int
     let carbonModifiers: Int
@@ -70,7 +77,10 @@ final class CarbonHotKey {
         // the RAII guarantee (a dead HotKey cannot remain registered)
         // holds; the center's weak entry evaporates and is swept on the
         // next registration. Runs on the main actor in practice (the
-        // monitor owns this from @MainActor lifecycle methods).
+        // monitor owns this from @MainActor lifecycle methods) — asserted,
+        // so an off-main release traps loudly in Debug instead of
+        // violating Carbon's "Not thread safe" contract silently.
+        assert(Thread.isMainThread, "CarbonHotKey must die on the main thread.")
         if let ref = eventHotKeyRef {
             UnregisterEventHotKey(ref)
             eventHotKeyRef = nil
@@ -85,6 +95,10 @@ final class CarbonHotKey {
 /// the trigger path stays on Carbon + HID tap only. A combo pressed while
 /// a menu is open is simply missed (benign: no partial state exists to
 /// stick). Follows the 3.1.0 reference registration design, Oto-owned.
+///
+/// Explicit `@MainActor` for the same reason as `CarbonHotKey` above:
+/// same file, same contract, zero behavior change.
+@MainActor
 final class CarbonHotKeyCenter {
     static let shared = CarbonHotKeyCenter()
 

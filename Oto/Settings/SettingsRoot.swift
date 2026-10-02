@@ -12,9 +12,9 @@
 
 import SwiftUI
 
-/// First-release Settings destinations. Writing and Privacy & History
-/// arrived with their Phase 6A stores — no blank tabs, every tab binds a
-/// real backend.
+/// First-release Settings destinations: six focused panes (General,
+/// Dictation, Dictionary, Snippets, History, Privacy) — no blank tabs,
+/// every pane binds a real backend.
 enum SettingsPane: Hashable, CaseIterable, Identifiable {
     case general
     case dictation
