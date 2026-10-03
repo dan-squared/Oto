@@ -12,7 +12,10 @@ import Foundation
 import os
 
 /// One remembered dictation. CodingKeys are pinned by test: adding a key is
-/// a privacy decision, not a refactor.
+/// a privacy decision, not a refactor. `rawText` (E1) holds what was said
+/// when Auto Cleanup rewrote it; nil for verbatim entries and all pre-rework
+/// rows (old JSON decodes with nils — same data class as `finalText`, same
+/// bounds/caps/retention/deletion, never audio/partials/clipboard).
 struct HistoryEntry: Sendable, Hashable, Codable, Identifiable {
     nonisolated static let maxTextLength = 5000
 
@@ -20,17 +23,48 @@ struct HistoryEntry: Sendable, Hashable, Codable, Identifiable {
     var finalText: String
     var createdAt: Date
     var bundleIdentifier: String?
+    var rawText: String?
+    var wasCleaned: Bool = false
 
     nonisolated init(
         id: UUID = UUID(),
         finalText: String,
         createdAt: Date = Date(),
-        bundleIdentifier: String? = nil
+        bundleIdentifier: String? = nil,
+        rawText: String? = nil,
+        wasCleaned: Bool = false
     ) {
         self.id = id
         self.finalText = finalText
         self.createdAt = createdAt
         self.bundleIdentifier = bundleIdentifier
+        self.rawText = rawText
+        self.wasCleaned = wasCleaned
+    }
+
+    /// Tolerant decode: pre-rework rows lack `rawText`/`wasCleaned` — they
+    /// read as nil/false (Undo stays hidden for them) instead of failing.
+    /// New rows always carry both keys when set (nil `rawText` still omits
+    /// its key per `JSONEncoder` optional rules — pinned by test).
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        finalText = try container.decode(String.self, forKey: .finalText)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        bundleIdentifier = try container.decodeIfPresent(String.self, forKey: .bundleIdentifier)
+        rawText = try container.decodeIfPresent(String.self, forKey: .rawText)
+        wasCleaned = try container.decodeIfPresent(Bool.self, forKey: .wasCleaned) ?? false
+    }
+}
+
+extension HistoryEntry {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case finalText
+        case createdAt
+        case bundleIdentifier
+        case rawText
+        case wasCleaned
     }
 }
 
@@ -67,17 +101,41 @@ final class HistoryStore {
 
     /// Records one final transcript. No-op when history is off or text is
     /// blank. Bounds enforced synchronously on every write: 30-day age,
-    /// newest-100 cap (createdAt desc, id tie-break), 5000-char text cap.
-    func record(finalText: String, bundleID: String?, at date: Date = Date()) async {
+    /// newest-100 cap (createdAt desc, id tie-break), 5000-char text cap
+    /// (both texts). When Auto Cleanup rewrote the dictation, `rawText`
+    /// carries what was said and `wasCleaned` marks the row Undo-able.
+    func record(
+        finalText: String,
+        rawText: String? = nil,
+        wasCleaned: Bool = false,
+        bundleID: String?,
+        at date: Date = Date()
+    ) async {
         guard enabled() else { return }
         let clean = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
+        let raw = rawText?.trimmingCharacters(in: .whitespacesAndNewlines)
         entries.append(HistoryEntry(
             finalText: String(clean.prefix(HistoryEntry.maxTextLength)),
             createdAt: date,
-            bundleIdentifier: bundleID
+            bundleIdentifier: bundleID,
+            rawText: raw.flatMap { String($0.prefix(HistoryEntry.maxTextLength)) },
+            wasCleaned: wasCleaned && !(raw?.isEmpty ?? true)
         ))
         trim()
+        await persist()
+    }
+
+    /// Undo AI edit (E1): restores the raw wording on a cleaned entry,
+    /// then clears the raw (a second Undo is a no-op — the entry is now
+    /// verbatim). No-op for verbatim entries and unknown IDs.
+    func undoCleanup(id: UUID) async {
+        guard let index = entries.firstIndex(where: { $0.id == id }),
+              let raw = entries[index].rawText, !raw.isEmpty
+        else { return }
+        entries[index].finalText = raw
+        entries[index].rawText = nil
+        entries[index].wasCleaned = false
         await persist()
     }
 

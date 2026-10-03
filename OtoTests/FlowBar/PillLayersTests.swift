@@ -167,4 +167,30 @@ struct PillLayersTests {
         #expect(pill.chaseOpacity(3) == 0)
         #expect(pill.labelText() == "")
     }
+
+    @Test func workShowsJointLabelDividerSpinner() {
+        // E2 work visual: full-word verb left, native spinner snug right
+        // (no divider, no dead space beyond padding, never truncated).
+        // Longest verb pins the fit.
+        let text = "Formalizing"
+        let width = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(text))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: 26.4))
+        pill.show(visual: .work)
+        pill.layout(width: width)
+        pill.update(values: [], text: text, centerText: false, reduceMotion: false)
+        #expect(pill.labelText() == text)
+        #expect(!pill.spinnerHidden())
+        #expect(pill.barOpacity(0) == 0)
+        #expect(!pill.chaseHasAnimation())
+        // Frame containment: label inside, spinner snug to the right edge.
+        let frames = pill.workLayoutFrames()
+        #expect(frames.label.minX >= 0)
+        #expect(frames.spinner.maxX <= width)
+        #expect(width - frames.spinner.maxX <= VisualizerMath.workPadding + 1)
+        #expect(frames.spinner.minX >= frames.label.maxX)
+        #expect(frames.label.height <= VisualizerMath.pillHeight)
+        // Leaving work kills the joint group like every other switch.
+        pill.show(visual: .message, animated: false)
+        #expect(pill.spinnerHidden())
+    }
 }

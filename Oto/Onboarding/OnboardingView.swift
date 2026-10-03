@@ -28,7 +28,7 @@ struct OnboardingView: View {
 
     // Hold-key card state. `holdKind` mirrors the live config after every
     // apply (single source stays in dispatch); messages are local.
-    @State private var holdKind: ShortcutTrigger.Kind = .modifierHold(keyCode: UInt16(kVK_RightOption))
+    @State private var holdKind: ShortcutTrigger.Kind = ShortcutTrigger.defaultHoldToTalk().kind
     @State private var fnUsage = SystemFnUsage.unknown
     @State private var isRecording = false
     @State private var holdMessage: String?

@@ -89,11 +89,57 @@ struct HistoryStoreTests {
     @Test func entryKeysPinned() throws {
         // Adding a stored key is a privacy decision. This test fails the
         // moment a new key appears — audio/partials/clipboard keys can never
-        // slip in silently.
-        let entry = HistoryEntry(finalText: "hi", bundleIdentifier: "com.a.App")
+        // slip in silently. (E1 deliberately adds rawText + wasCleaned: the
+        // user's own raw dictation, same class as finalText — recorded here
+        // as the reviewed decision, not a silent slip. A nil rawText omits
+        // its key per JSONEncoder optional rules — also pinned.)
+        let entry = HistoryEntry(
+            finalText: "hi", bundleIdentifier: "com.a.App",
+            rawText: "h", wasCleaned: true
+        )
         let encoded = try JSONEncoder().encode(entry)
         let keys = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
-        #expect(Set(keys.keys) == ["id", "finalText", "createdAt", "bundleIdentifier"])
+        #expect(Set(keys.keys) == ["id", "finalText", "createdAt", "bundleIdentifier", "rawText", "wasCleaned"])
+        let verbatim = HistoryEntry(finalText: "hi", bundleIdentifier: "com.a.App")
+        let verbatimKeys = try JSONSerialization.jsonObject(with: JSONEncoder().encode(verbatim)) as! [String: Any]
+        #expect(Set(verbatimKeys.keys) == ["id", "finalText", "createdAt", "bundleIdentifier", "wasCleaned"])
+    }
+
+    @Test func cleanedEntryKeepsRawAndUndoes() async {
+        let (store, _) = makeStore()
+        store.setEnabled(true)
+        await store.record(
+            finalText: "Hello world.", rawText: "helo wrld",
+            wasCleaned: true, bundleID: "com.a.App"
+        )
+        #expect(store.entries.count == 1)
+        #expect(store.entries[0].finalText == "Hello world.")
+        #expect(store.entries[0].rawText == "helo wrld")
+        #expect(store.entries[0].wasCleaned)
+
+        await store.undoCleanup(id: store.entries[0].id)
+        #expect(store.entries[0].finalText == "helo wrld")
+        #expect(store.entries[0].rawText == nil)
+        #expect(!store.entries[0].wasCleaned)
+
+        // Second Undo is a no-op (the entry is verbatim now); unknown IDs
+        // and verbatim entries are no-ops too.
+        await store.undoCleanup(id: store.entries[0].id)
+        #expect(store.entries[0].finalText == "helo wrld")
+        await store.undoCleanup(id: UUID())
+    }
+
+    @Test func preReworkJSONDecodesWithNils() throws {
+        // Old rows (no rawText/wasCleaned keys) decode: raw is nil, Undo
+        // stays hidden for them.
+        let id = UUID()
+        let json = """
+        {"id":"\(id.uuidString)","finalText":"hi","createdAt":718011600,"bundleIdentifier":"com.a.App"}
+        """.data(using: .utf8)!
+        let entry = try JSONDecoder().decode(HistoryEntry.self, from: json)
+        #expect(entry.rawText == nil)
+        #expect(!entry.wasCleaned)
+        #expect(entry.finalText == "hi")
     }
 
     @Test func concurrentRecordsStayConsistent() async {

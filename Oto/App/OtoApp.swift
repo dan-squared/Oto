@@ -63,13 +63,29 @@ struct OtoApp: App {
     // once per app life, never reset by rail navigation; see
     // SettingsUIState). Single instance, audit S2 rule.
     private let settingsUIState: SettingsUIState
+    // Intelligence service (Slice A: Manual only). One instance, shared by
+    // Settings and History; single instance, audit S2 rule. Init does no
+    // model contact (availability is read on demand), so construction is
+    // safe in every host including UI tests.
+    private let polishService: any PolishServing = LivePolishService()
+    // E2 transforms: selection grabber + serial runner + three-combo
+    // dispatch. One instance each (audit S2 rule); runner never touches
+    // dictation state, dispatch never interleaves with recording.
+    private let transformRunner: TransformRunner
+    private let transformDispatch: TransformDispatch
 
     init() {
         // Crash backstop first: a kill mid-dictation leaves the duck flag
         // set — put the user's volume back before anything else runs.
         // One-shot migrations precede it (audit F7): Container-scoped
         // state from the sandboxed era would otherwise be invisible.
-        LocalPersistence.migrateSandboxedStoreIfNeeded()
+        // Dev clean slate first of all (`-OtoCleanSlate`): wipes the domain
+        // + support dir and skips the sandbox migration (which would copy
+        // cleared data straight back).
+        let wipedClean = CleanSlate.wipeIfRequested()
+        if !wipedClean {
+            LocalPersistence.migrateSandboxedStoreIfNeeded()
+        }
         MediaDuck.migrateSandboxedFlagIfNeeded()
         MediaDuck.restoreIfCrashed()
         let relay = AudioBufferRelay()
@@ -79,7 +95,34 @@ struct OtoApp: App {
             spectrumBox.offer(buffer)
         })
         let speech = AppleSpeechService(relay: relay)
-        let inserter = RealTextInsertion()
+        // Insertion experiment (8b Slice 3): hidden A/B seam, read once
+        // here. Defaults reproduce today's behavior exactly — the matrix
+        // flips values via `defaults write` + relaunch, zero rebuilds.
+        let experiment = InsertionExperiment.current()
+        let xpSource: SyntheticEventSource =
+            experiment.useDefaultEventSource ? .systemDefault : .privateState
+        var insertionEvents = InsertionEvents.live
+        insertionEvents.postPaste = {
+            await InsertionEvents.postFullCommandV(
+                key: PasteKeycodeResolver.keyCode(for: "v"), source: xpSource
+            )
+        }
+        insertionEvents.postCopy = {
+            await InsertionEvents.postFullCommandV(
+                key: PasteKeycodeResolver.keyCode(for: "c"), source: xpSource
+            )
+        }
+        insertionEvents.postUndo = {
+            await InsertionEvents.postFullCommandV(
+                key: PasteKeycodeResolver.keyCode(for: "z"), source: xpSource
+            )
+        }
+        var insertionTimings = InsertionTimings()
+        insertionTimings.keyStep = experiment.keyStepNs
+        insertionTimings.restoreDelay = experiment.restoreDelayNs
+        let inserter = RealTextInsertion(
+            events: insertionEvents, timings: insertionTimings
+        )
         let persistence = LocalPersistence()
         let dictionaryStore = DictionaryStore(persistence: persistence)
         let snippetStore = SnippetStore(persistence: persistence)
@@ -90,17 +133,26 @@ struct OtoApp: App {
             targetService: RealTargetCapture(),
             inserter: inserter,
             history: historyStore,
-            mediaDuck: MediaDuck()
+            mediaDuck: MediaDuck(),
+            polish: polishService,
+            behaviorProvider: { CleanupBehavior.current() }
         )
         let analyzer = AudioSpectrumAnalyzer()
         let modalController = NoTargetModalController()
         let permissionController = PermissionModalController()
+        let transformRunner = TransformRunner(
+            grabber: LiveSelectionGrabber(),
+            inserter: inserter,
+            targetService: RealTargetCapture(),
+            polish: polishService
+        )
         let flowController = FlowBarController(
             coordinator: coordinator,
             analyzer: analyzer,
             box: spectrumBox,
             modal: modalController,
-            permission: permissionController
+            permission: permissionController,
+            runner: transformRunner
         )
         self.coordinator = coordinator
         self.inserter = inserter
@@ -114,10 +166,34 @@ struct OtoApp: App {
         self.historyStore = historyStore
         let dispatch = ShortcutDispatch(coordinator: coordinator)
         self.dispatch = dispatch
-        // Shortcut layer: Carbon combos + HID tap (right-Option hold
+        // Shortcut layer: Carbon combos + HID tap (Right Command hold
         // default). No NSEvent monitors in the trigger path — they wedge
         // MenuBarExtra menu tracking (bisect-proven, see HIDEventMonitor).
         dispatch.start()
+        let transformDispatch = TransformDispatch(
+            runner: transformRunner,
+            dictationLive: { await !coordinator.state.isTerminal },
+            dictationKinds: {
+                (dispatch.configuration.hold.kind, dispatch.configuration.handsFree.kind)
+            },
+            cancelFreshMicroSession: { await coordinator.cancelFreshHoldMicroSession() },
+            setDictationSuspended: { dispatch.setSuspended($0) }
+        )
+        self.transformRunner = transformRunner
+        self.transformDispatch = transformDispatch
+        transformDispatch.start()
+        // Intelligence one-shot migration + launch prewarm (E1): legacy
+        // Slice-B prefs land on the new cleanup keys once; the model warms
+        // while cold. Both gated on sync reads — never a download, never a
+        // prompt. (The Slice-B tap→coordinator input clock died with the
+        // swap race; the HID tap fires nothing now.)
+        CleanupMigrator.migrateIfNeeded()
+        let launchCleanup = CleanupBehavior.current()
+        if launchCleanup.enabled, launchCleanup.level != .none,
+           polishService.availability() == .available
+        {
+            polishService.prewarm(job: .cleanup(launchCleanup.level))
+        }
         // Hoisted UI state first: onboarding shares it (permissions/speech
         // render from one model, never duplicated per surface).
         self.settingsUIState = SettingsUIState(preparer: preparer, permissions: permissions)
@@ -160,7 +236,9 @@ struct OtoApp: App {
                 coordinator: coordinator,
                 dictionary: dictionaryStore,
                 snippets: snippetStore,
-                history: historyStore
+                history: historyStore,
+                polish: polishService,
+                transforms: transformDispatch
             )
             // `toolbar(removing:)` is a View modifier, not a Scene one, so
             // the title-text removal belongs on the window's content. This

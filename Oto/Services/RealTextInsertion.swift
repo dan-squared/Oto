@@ -9,6 +9,46 @@ import CoreGraphics
 import Foundation
 import os
 
+/// Hidden A/B seam for keystroke-shape experiments (8b Slice 3): three
+/// UserDefaults keys with today-value defaults. Read once at composition
+/// (app launch) — the matrix flips values via `defaults write` + relaunch,
+/// zero rebuilds. No UI, deliberately: winners graduate to real defaults,
+/// losers die with data. Defaults byte-identical to today — the seam
+/// itself changes nothing (pinned by test).
+struct InsertionExperiment: Sendable, Equatable {
+    /// Synthetic event source: private-state (today) vs system-default
+    /// (null source, the Hex shape).
+    var useDefaultEventSource: Bool
+    /// Gap between the Cmd-V sub-events, ns (today 10M; 0 = Hex shape:
+    /// back-to-back posts).
+    var keyStepNs: UInt64
+    /// Transcript linger before clipboard restore, ns (today 100M;
+    /// Hex uses 500M for slow readers).
+    var restoreDelayNs: UInt64
+
+    nonisolated static let sourceKey = "app.Oto.xpEventSource"
+    nonisolated static let keyStepKey = "app.Oto.xpKeyStepNs"
+    nonisolated static let restoreDelayKey = "app.Oto.xpRestoreDelayNs"
+
+    nonisolated static func current(defaults: UserDefaults = .standard) -> InsertionExperiment {
+        let source = defaults.string(forKey: sourceKey) ?? "private"
+        let keyStep = defaults.object(forKey: keyStepKey) as? UInt64
+        let restore = defaults.object(forKey: restoreDelayKey) as? UInt64
+        return InsertionExperiment(
+            useDefaultEventSource: source == "default",
+            keyStepNs: keyStep ?? InsertionTimings().keyStep,
+            restoreDelayNs: restore ?? InsertionTimings().restoreDelay
+        )
+    }
+}
+
+/// Synthetic keystroke event source. Private-state is today's HID path;
+/// system-default (null source) is the Hex shape under test.
+enum SyntheticEventSource: Sendable {
+    case privateState
+    case systemDefault
+}
+
 /// Paste timings. Yap-tuned starting values against the same app classes
 /// (Chromium async clipboard readers); the device matrix tunes from data,
 /// never from guesses.
@@ -52,6 +92,13 @@ struct InsertionEvents: Sendable {
     /// Returns false when no event could be created (nil source/event) so
     /// callers fail closed instead of claiming a post that never existed.
     var postPaste: @Sendable () async -> Bool
+    /// Selection-grab route for `SelectionGrabber`: full 4-event Cmd-C
+    /// through the same tap. Same fail-closed contract as `postPaste`.
+    var postCopy: @Sendable () async -> Bool
+    /// Undo route for `replaceLast`: full 4-event Cmd-Z through the same tap.
+    /// Same fail-closed contract as `postPaste`. The caller guarantees the
+    /// strict window (seconds after its own paste, zero intervening input).
+    var postUndo: @Sendable () async -> Bool
     var sleep: @Sendable (UInt64) async -> Void
 
     static var live: InsertionEvents {
@@ -68,22 +115,42 @@ struct InsertionEvents: Sendable {
                 NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                     == Bundle.main.bundleIdentifier
             },
-            postPaste: { await Self.postFullCommandV() },
+            postPaste: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "v")) },
+            postCopy: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "c")) },
+            postUndo: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "z")) },
             sleep: { try? await Task.sleep(nanoseconds: $0) }
         )
     }
 
-    /// Full Cmd-V as four events (Command down, V down, V up, Command up) on
-    /// a private source. A lone V with `.maskCommand` works natively, but
-    /// Chromium rebuilds modifier state from the raw stream and needs a
+    /// Full Command-letter as four events (Command down, key down/up,
+    /// Command up) on a private source. V by default; Z powers the guarded
+    /// undo step of `replaceLast`. A lone letter with `.maskCommand` works
+    /// natively, but Chromium rebuilds modifier state from the raw stream and needs a
     /// genuine Command keyDown or the paste silently does nothing. The HID
     /// tap is where hardware events enter, so Chromium reads the sequence
     /// as genuine typing. Pattern follows Yap (MIT) as Oto-owned code.
     /// `NX_DEVICELCMDKEYMASK` — "left command physically down": Qt/Java apps
     /// read the device-dependent bits and ignore a bare command flag.
-    static func postFullCommandV(step: UInt64 = 10_000_000) async -> Bool {
-        guard let source = CGEventSource(stateID: .privateState) else { return false }
-        source.setLocalEventsFilterDuringSuppressionState(
+    /// `source` selects the event source (private-state today; the
+    /// experiment can switch to system-default/null, the Hex shape).
+    /// Every event carries the Oto synthetic marker
+    /// (`kCGEventSourceUserData`) so device trails distinguish Oto
+    /// keystrokes from hardware in logs.
+    nonisolated static let syntheticMarker: Int64 = 0x4F54_4F // "OTO"
+    static func postFullCommandV(
+        key: CGKeyCode = CGKeyCode(kVK_ANSI_V),
+        step: UInt64 = 10_000_000,
+        source: SyntheticEventSource = .privateState
+    ) async -> Bool {
+        let eventSource: CGEventSource?
+        switch source {
+        case .privateState:
+            guard let created = CGEventSource(stateID: .privateState) else { return false }
+            eventSource = created
+        case .systemDefault:
+            eventSource = nil
+        }
+        eventSource?.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitSystemDefinedEvents],
             state: .eventSuppressionStateSuppressionInterval
         )
@@ -91,16 +158,17 @@ struct InsertionEvents: Sendable {
             rawValue: CGEventFlags.maskCommand.rawValue | 0x0000_0008
         )
         let commandKey = CGKeyCode(kVK_Command)
-        let vKey = CGKeyCode(kVK_ANSI_V)
+        let vKey = key
         var posted = true
         func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) {
             guard let event = CGEvent(
-                keyboardEventSource: source, virtualKey: key, keyDown: down
+                keyboardEventSource: eventSource, virtualKey: key, keyDown: down
             ) else {
                 posted = false
                 return
             }
             event.flags = flags
+            event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
             event.post(tap: .cghidEventTap)
         }
         post(commandKey, down: true, flags: commandFlags)
@@ -180,114 +248,253 @@ final class RealTextInsertion: TextInserting {
     }
 
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult {
+        // Same gates, same tail, same words as always — now shared so
+        // replaceLast cannot drift from the proven policy. Covered by the
+        // unchanged 02 recovery table.
+        switch await readyPID(into: target, context: .insert) {
+        case .refused(let result):
+            return result
+        case .ready(let pid):
+            let saved = PasteboardSnapshot.capture(pasteboard)
+            let receipt = placeOnClipboard(text)
+            return await postPlacedText(text, pid: pid, saved: saved, receipt: receipt, context: .insert)
+        }
+    }
+
+    /// Guarded undo-last-paste + insert replacement (swap/undo flows). Gates,
+    /// tail, and restore discipline are the shared `insert` machinery; only
+    /// the undo step and the failure words are new. The undo is
+    /// unverifiable by nature — the caller owns the strict window (seconds
+    /// after its own paste, zero intervening input) that makes the undo top
+    /// near-certainly ours.
+    func replaceLast(_ text: String, into target: TargetApplication) async -> InsertionResult {
+        switch await readyPID(into: target, context: .replace) {
+        case .refused(let result):
+            return result
+        case .ready(let pid):
+            guard await events.postUndo() else {
+                log.error("replace: no undo keystroke created, clipboard untouched")
+                return .recoverableFailure(reason:
+                    "The replacement could not be applied. Nothing was changed — the original text stands."
+                )
+            }
+            await events.sleep(timings.reactivateSettle)
+            let saved = PasteboardSnapshot.capture(pasteboard)
+            let receipt = placeOnClipboard(text)
+            return await postPlacedText(text, pid: pid, saved: saved, receipt: receipt, context: .replace)
+        }
+    }
+    /// Plain selection replacement (E2 transforms): the caller's selection
+    /// is still selected, so a guarded paste overwrites exactly it. Gates,
+    /// tail, and restore discipline are the shared `insert` machinery; only
+    /// the failure words are selection-honest. No undo step (unlike
+    /// `replaceLast`) — native Cmd+Z in the target app is the undo path.
+    func replaceSelection(_ text: String, into target: TargetApplication) async -> InsertionResult {
+        switch await readyPID(into: target, context: .replaceSelection) {
+        case .refused(let result):
+            return result
+        case .ready(let pid):
+            let saved = PasteboardSnapshot.capture(pasteboard)
+            let receipt = placeOnClipboard(text)
+            return await postPlacedText(text, pid: pid, saved: saved, receipt: receipt, context: .replaceSelection)
+        }
+    }
+    /// Post context: identical posting policy, but failure words must be
+    /// honest about what already happened. A failed insert pasted nothing;
+    /// a failed replace may already have undone the original.
+    private enum PostContext {
+        case insert
+        case replace
+        case replaceSelection
+    }
+
+    /// Outcome of the shared pre-post gates.
+    private enum PostReady {
+        case ready(pid: pid_t)
+        case refused(InsertionResult)
+    }
+
+    /// Shared pre-post gates (trust → pid → reactivate → settle → modifiers
+    /// → focus). Identical policy for insert and replace; only the failure
+    /// words differ per context. Clipboard untouched on every refusal.
+    private func readyPID(into target: TargetApplication, context: PostContext) async -> PostReady {
         switch InsertionDecision.next(isTrusted: events.isTrusted()) {
         case .refuseUntrusted:
-            // Clipboard untouched by design (02 recovery: Copy is an explicit
-            // user action, not an auto-overwrite). The transcript survives in
-            // the coordinator's recoveryTranscript + the menu copy action.
-            log.info("refused: accessibility untrusted, clipboard untouched")
-            return .recoverableFailure(reason:
-                "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
-            )
+            switch context {
+            case .insert:
+                log.info("refused: accessibility untrusted, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
+                ))
+            case .replace:
+                log.info("replace refused: accessibility untrusted, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "Accessibility permission is required to replace text. Nothing was changed — the original text stands."
+                ))
+            case .replaceSelection:
+                log.info("replaceSelection refused: accessibility untrusted, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "Accessibility permission is required to replace the selection. Nothing was changed — your text stands as it was."
+                ))
+            }
         case .proceed:
             break
         }
 
-        // No pid means capture found no frontmost app (screen locked, login
-        // window): there is nowhere safe to paste. Fail closed, untouched.
         guard let pid = target.processIdentifier else {
-            log.error("refused: no pid on target, clipboard untouched")
-            return .recoverableFailure(reason:
-                "No target app was captured. Nothing was pasted — the transcript is kept for recovery."
-            )
+            switch context {
+            case .insert:
+                log.error("refused: no pid on target, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "No target app was captured. Nothing was pasted — the transcript is kept for recovery."
+                ))
+            case .replace:
+                log.error("replace refused: no pid on target, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "No target app was captured. Nothing was changed — the original text stands."
+                ))
+            case .replaceSelection:
+                log.error("replaceSelection refused: no pid on target, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "No target app was captured. Nothing was changed — your text stands as it was."
+                ))
+            }
         }
 
-        // Activation proxy, not a courtesy: `reactivate` answers true when
-        // the target is already frontmost (or activation succeeded). A
-        // `false` here means activation was refused — posting anyway would
-        // land in the WRONG app (02 forbids substituting the frontmost
-        // app), so fail closed with recovery. The menu retry button is
-        // the escape hatch.
         let accepted = events.reactivate(pid)
         log.info("reactivate: target \(pid, privacy: .public) activate=\(accepted, privacy: .public)")
         guard accepted else {
-            return .recoverableFailure(reason: focusFailureReason(switchedReason:
-                "The target app is no longer in front. Nothing was pasted — switch back and use Retry paste, or copy the kept transcript."
-            ))
+            switch context {
+            case .insert:
+                return .refused(.recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app is no longer in front. Nothing was pasted — switch back and use Retry paste, or copy the kept transcript."
+                )))
+            case .replace:
+                return .refused(.recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app is no longer in front. Nothing was changed — the original text stands."
+                )))
+            case .replaceSelection:
+                return .refused(.recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app is no longer in front. Nothing was changed — your text stands as it was."
+                )))
+            }
         }
         await events.sleep(timings.reactivateSettle)
-
-        // Insurance: a held modifier leaking into Cmd-V mistypes (our own
-        // default trigger is a held modifier; the release precedes us, but
-        // some apps track modifiers from the raw stream themselves).
         await waitForModifiersToClear()
 
-        // Void-paste guard (catcher fix): focus without an editable field
-        // means nowhere to paste — divert to recovery instead of posting
-        // into the void. Sited AFTER focus is meaningful (reactivated +
-        // settled) and BEFORE the clipboard is touched, so divert leaves
-        // the clipboard byte-identical. `.unknown` (AX error/timeout)
-        // proceeds exactly as before: exotic trees never regress.
         switch await focusCheck.editableFocus(for: pid) {
         case .editable, .unknown:
             break
         case .noField:
             log.info("diverted: no editable focus in target \(pid, privacy: .public), clipboard untouched")
-            return .noEditableField
+            return .refused(.noEditableField)
         case .secureField:
-            // Password field focused: automation never fills passwords by
-            // itself. Same clipboard-untouched discipline as every refusal;
-            // the transcript survives in recoveryTranscript + the menu copy
-            // action for an explicit manual paste.
-            log.info("refused: secure password field in target \(pid, privacy: .public), clipboard untouched")
-            return .recoverableFailure(reason:
-                "The focused field is a secure password field. Nothing was pasted — the transcript is kept; copy and paste it manually if you intend it there."
-            )
+            switch context {
+            case .insert:
+                log.info("refused: secure password field in target \(pid, privacy: .public), clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "The focused field is a secure password field. Nothing was pasted — the transcript is kept; copy and paste it manually if you intend it there."
+                ))
+            case .replace:
+                log.info("replace refused: secure password field in target \(pid, privacy: .public), clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "The focused field is a secure password field. Nothing was changed — the original text stands."
+                ))
+            case .replaceSelection:
+                log.info("replaceSelection refused: secure password field in target \(pid, privacy: .public), clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "The focused field is a secure password field. Nothing was changed — your text stands as it was."
+                ))
+            }
         }
+        return .ready(pid: pid)
+    }
 
-        let saved = PasteboardSnapshot.capture(pasteboard)
-        let receipt = placeOnClipboard(text)
+    /// Shared post tail: pre-paste breather → write-verify → single-read
+    /// race guard → trust re-gate → post → guarded restore. `insert()` takes
+    /// the identical path it always did (same order, same words); only the
+    /// failure copy differs per context.
+    private func postPlacedText(
+        _ text: String, pid: pid_t,
+        saved: [[NSPasteboard.PasteboardType: Data]],
+        receipt: PasteboardReceipt, context: PostContext
+    ) async -> InsertionResult {
         await events.sleep(timings.prePasteDelay)
 
-        // Never post ahead of an invisible write: that is how stale content
-        // gets pasted. Fail closed on timeout, clipboard restored on the spot.
         guard await waitForClipboard(text: text, marker: receipt.marker) else {
             log.error("verify: clipboard write never visible, failing closed")
             PasteboardSnapshot.restore(saved, to: pasteboard)
-            return .recoverableFailure(reason:
-                "The clipboard was unavailable. Nothing was pasted — the transcript is kept for recovery."
-            )
+            switch context {
+            case .insert:
+                return .recoverableFailure(reason:
+                    "The clipboard was unavailable. Nothing was pasted — the transcript is kept for recovery."
+                )
+            case .replace:
+                return .recoverableFailure(reason:
+                    "The clipboard was unavailable. The replacement was not pasted — the original text stands."
+                )
+            case .replaceSelection:
+                return .recoverableFailure(reason:
+                    "The clipboard was unavailable. The replacement was not pasted — your text stands as it was."
+                )
+            }
         }
 
-        // Single-read race guard: someone took focus during the settle above.
-        // No retries (refusals are policy, not timing) — restore synchronously
-        // and fail closed rather than paste into the new frontmost app.
         guard events.frontmostPID() == pid else {
             log.error("race: focus left target \(pid, privacy: .public) pre-post, failing closed")
             PasteboardSnapshot.restore(saved, to: pasteboard)
-            return .recoverableFailure(reason: focusFailureReason(switchedReason:
-                "The target app lost focus just before pasting. Nothing was pasted — the transcript is kept for recovery."
-            ))
+            switch context {
+            case .insert:
+                return .recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app lost focus just before pasting. Nothing was pasted — the transcript is kept for recovery."
+                ))
+            case .replace:
+                return .recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app lost focus just before pasting. The replacement was not pasted — the original text stands."
+                ))
+            case .replaceSelection:
+                return .recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app lost focus just before pasting. The replacement was not pasted — your text stands as it was."
+                ))
+            }
         }
 
-        // Re-gate immediately pre-post (audit F4): trust was read hundreds
-        // of ms ago (settle + drain + focus + verify windows). A revocation
-        // in between would vanish silently while reporting success. Posting
-        // into a revoked state is refused exactly like the entry gate.
         guard events.isTrusted() else {
             log.info("refused: accessibility revoked pre-post, clipboard restored")
             PasteboardSnapshot.restore(saved, to: pasteboard)
-            return .recoverableFailure(reason:
-                "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
-            )
+            switch context {
+            case .insert:
+                return .recoverableFailure(reason:
+                    "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
+                )
+            case .replace:
+                return .recoverableFailure(reason:
+                    "Accessibility permission is required to replace text. The replacement was not pasted — the original text stands."
+                )
+            case .replaceSelection:
+                return .recoverableFailure(reason:
+                    "Accessibility permission is required to replace the selection. The replacement was not pasted — your text stands as it was."
+                )
+            }
         }
 
         guard await events.postPaste() else {
             log.error("post: no keystroke created, failing closed")
             PasteboardSnapshot.restore(saved, to: pasteboard)
-            return .recoverableFailure(reason:
-                "The keystroke could not be posted. Nothing was pasted — the transcript is kept for recovery."
-            )
+            switch context {
+            case .insert:
+                return .recoverableFailure(reason:
+                    "The keystroke could not be posted. Nothing was pasted — the transcript is kept for recovery."
+                )
+            case .replace:
+                return .recoverableFailure(reason:
+                    "The keystroke could not be posted. The replacement was not pasted — the original text stands."
+                )
+            case .replaceSelection:
+                return .recoverableFailure(reason:
+                    "The keystroke could not be posted. The replacement was not pasted — your text stands as it was."
+                )
+            }
         }
         log.info("posted HID Cmd-V to frontmost (delivery unverified) for target \(pid, privacy: .public)")
         scheduleRestore(saved: saved, receipt: receipt)

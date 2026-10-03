@@ -126,14 +126,116 @@ struct DualShortcutConfigurationTests {
         #expect(!a.conflictsWith(.combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_G))))
     }
 
-    @Test func holdVersusComboNeverConflictsEitherOrder() {
-        let hold = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_RightOption))
-        let combo = ShortcutTrigger.Kind.combo(
+    @Test func holdVersusComboConflictsOnSharedFamilyEitherOrder() {
+        // Rule B: a hold begin fires on modifier-down before any combo can
+        // complete (only the release is swallowed) — same-family bindings
+        // across purposes double-fire, so they are refused both orders.
+        let holdOpt = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_RightOption))
+        let comboOpt = ShortcutTrigger.Kind.combo(
             modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_D)
         )
-        // Combo wins by construction (hold release swallowed).
-        #expect(!hold.conflictsWith(combo))
-        #expect(!combo.conflictsWith(hold))
+        #expect(holdOpt.conflictsWith(comboOpt))
+        #expect(comboOpt.conflictsWith(holdOpt))
+        // Family-level: left side groups with right (Carbon combos are
+        // side-blind, so sides can't be distinguished honestly).
+        let holdLeftOpt = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_Option))
+        #expect(holdLeftOpt.conflictsWith(comboOpt))
+        // Different families never collide…
+        let holdCmd = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_RightCommand))
+        #expect(!holdCmd.conflictsWith(comboOpt))
+        #expect(!comboOpt.conflictsWith(holdCmd))
+        let comboCmd = ShortcutTrigger.Kind.combo(
+            modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_D)
+        )
+        #expect(!holdOpt.conflictsWith(comboCmd))
+        // …and fn holds never conflict with combos (fn is no combo modifier).
+        let holdFn = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_Function))
+        #expect(!holdFn.conflictsWith(comboOpt))
+        #expect(!comboOpt.conflictsWith(holdFn))
+    }
+
+    @Test func siblingTransformCombosStayAllowed() {
+        // Opt+1 vs Opt+2: different digits, Carbon distinguishes by keyCode —
+        // the trio the product promises must not refuse itself.
+        let one = ShortcutTrigger.Kind.combo(
+            modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_1)
+        )
+        let two = ShortcutTrigger.Kind.combo(
+            modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_2)
+        )
+        #expect(!one.conflictsWith(two))
+        #expect(!two.conflictsWith(one))
+    }
+
+    @Test func refusalCopyNamesPurpose() {
+        #expect(ShortcutRefusalMessage.alreadyInUse(by: "Polish") ==
+            "Already in use by Polish — pick a different one.")
+        #expect(ShortcutRefusalMessage.tooSimilar(
+            to: "Push to talk", heldChip: "Right ⌥", glyph: "⌥", family: "Option"
+        ) ==
+            "Too similar to your Push to talk shortcut (Right ⌥) — ⌥ shortcuts fire on either Option key and would trigger together. Pick a different one.")
+        // Rule-aware pick: exact dups get "already in use", same-family
+        // hold/combo gets the side-naming "too similar".
+        let holdOpt = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_RightOption))
+        let comboOpt = ShortcutTrigger.Kind.combo(
+            modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_D)
+        )
+        let similar = ShortcutRefusalMessage.message(
+            refused: comboOpt, byExisting: holdOpt, purposeName: "Push to talk"
+        )
+        #expect(similar.contains("Too similar"))
+        #expect(similar.contains("Right ⌥"))
+        #expect(similar.contains("either Option key"))
+        #expect(ShortcutRefusalMessage.message(
+            refused: holdOpt, byExisting: holdOpt, purposeName: "Hands-free"
+        ).contains("Already in use by Hands-free"))
+        #expect(ShortcutTrigger.Kind.familyName(forHoldCode: UInt16(kVK_RightOption)) == "Option")
+        #expect(ShortcutTrigger.Kind.familyGlyph(forHoldCode: UInt16(kVK_RightCommand)) == "⌘")
+        #expect(ShortcutTrigger.Kind.familyName(forHoldCode: UInt16(kVK_Function)) == nil)
+    }
+
+    @Test func factoryDefaultsSatisfyPolicy() {
+        // The out-of-box setup must obey its own rule: right-Cmd hold +
+        // unassigned hands-free + Opt+1/2/3 transforms, zero conflicts.
+        let config = DualShortcutConfiguration.default()
+        let transforms = TransformShortcuts.default()
+        #expect(ShortcutAudit.violations(
+            hold: config.hold.kind, handsFree: config.handsFree.kind,
+            transforms: transforms
+        ).isEmpty)
+        #expect(transforms.polish == .combo(
+            modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_1)))
+    }
+
+    @Test func auditNamesGrandfatheredViolations() {
+        // A stored violating pair (Option hold + Opt-digit transforms, the
+        // pre-Cmd-trio shape) is named, never silently cleared: the hold
+        // plus all three transforms flag each other.
+        let clashing = TransformShortcuts(
+            polish: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_1)),
+            concise: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_2)),
+            professional: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_3))
+        )
+        let violations = ShortcutAudit.violations(
+            hold: .modifierHold(keyCode: UInt16(kVK_RightOption)),
+            handsFree: .unassigned,
+            transforms: clashing
+        )
+        #expect(violations.count == 4)
+        #expect(violations.allSatisfy { $0.message.contains("Too similar") })
+    }
+
+    @Test func transformShortcutsRoundTripAndFallBack() {
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        #expect(TransformShortcuts.load(from: defaults) == .default())
+        var custom = TransformShortcuts.default()
+        custom.concise = .combo(
+            modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_2)
+        )
+        custom.save(to: defaults)
+        #expect(TransformShortcuts.load(from: defaults) == custom)
+        defaults.set("garbage".data(using: .utf8)!, forKey: TransformShortcuts.defaultsKey)
+        #expect(TransformShortcuts.load(from: defaults) == .default())
     }
 
     @Test func holdVersusFunctionNeverConflictsEitherOrder() {

@@ -63,18 +63,19 @@ struct FlowBarPositionTests {
         #expect(FlowBarPosition.nearest(dropCenterY: screen.midY, on: screen) == .top)
     }
 
-    @Test func settingRoundTripsAndDefaultsToBottom() {
+    @Test func settingRoundTripsAndDefaultsToTop() {
         let (defaults, suite) = scratchDefaults()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
-        // Absent key → Bottom (current behavior, forever).
-        #expect(FlowBarPosition.current(defaults: defaults) == .bottom)
+        // Absent key → Top (user asked). Stored choices always win — a
+        // dragged-to-bottom pill is never overridden.
+        #expect(FlowBarPosition.current(defaults: defaults) == .top)
         FlowBarPosition.save(.top, defaults: defaults)
         #expect(FlowBarPosition.current(defaults: defaults) == .top)
         FlowBarPosition.save(.bottom, defaults: defaults)
         #expect(FlowBarPosition.current(defaults: defaults) == .bottom)
         // Unknown strings (hand-edited defaults) fall back, never crash.
         defaults.set("penthouse", forKey: FlowBarPosition.defaultsKey)
-        #expect(FlowBarPosition.current(defaults: defaults) == .bottom)
+        #expect(FlowBarPosition.current(defaults: defaults) == .top)
     }
 
     @Test func tickGateFiresOncePerEntry() {

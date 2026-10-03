@@ -30,7 +30,8 @@ struct FlowBarControllerTests {
         insertionResult: InsertionResult = .inserted,
         pasteboard: NSPasteboard? = nil,
         micDenied: Bool = false,
-        finalText: String = "kept words"
+        finalText: String = "kept words",
+        runner: TransformRunner? = nil
     ) -> (
         controller: FlowBarController,
         coordinator: DictationCoordinator,
@@ -59,6 +60,7 @@ struct FlowBarControllerTests {
             modal: NoTargetModalController(),
             permission: permission,
             pasteboard: board,
+            runner: runner,
             isMicDenied: { micDenied }
         )
         return (controller, coordinator, box, board, permission)
@@ -372,5 +374,84 @@ struct FlowBarControllerTests {
         try? await Task.sleep(for: .milliseconds(550))
         await sut.controller.pollOnce()
         #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func transformPillRepaintsOnRepeatPress() async {
+        // Repeat-press invisibility class: run 1 shows then hides; run 2
+        // must re-show with the new word (pre-fix the resize-only path
+        // skipped orderFront, so the pill stayed hidden with live work).
+        // Streams park at the gate so the transient beat is observable
+        // (instant fakes would finish before the first poll).
+        let grabber = FakeSelectionGrabber()
+        grabber.selection = "helo wrld"
+        let inserter = FakeTextInsertion()
+        let polish = FakePolishService()
+        polish.chunks = ["Hello world."]
+        await polish.streamGate.setOpen(false)
+        let runner = TransformRunner(
+            grabber: grabber, inserter: inserter,
+            targetService: FakeTargetCapture(stubTarget: TargetApplication(
+                bundleIdentifier: "com.example.FakeTarget",
+                processIdentifier: 1234
+            )),
+            polish: polish,
+            behaviorProvider: { CleanupBehavior(enabled: true, level: .light) }
+        )
+        let sut = makeSUT(runner: runner)
+
+        // Press 1: run in the background, poll until the beat shows.
+        let run1 = Task { await runner.execute(preset: .polish) }
+        await self.waitForWork(runner, timeout: .seconds(5))
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await polish.streamGate.setOpen(true)
+        await run1.value
+        // Let the melt + hide fire fully.
+        await self.waitForHidden(sut, timeout: .seconds(5))
+        #expect(!sut.controller.isPillVisible)
+
+        // Press 2 (new text, new preset): the pill must repaint, new word.
+        grabber.selection = "Hello world."
+        polish.chunks = ["Hello again."]
+        await polish.streamGate.setOpen(false)
+        let run2 = Task { await runner.execute(preset: .concise) }
+        await self.waitForWork(runner, timeout: .seconds(5))
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await polish.streamGate.setOpen(true)
+        await run2.value
+        #expect(await inserter.replaceSelectionCalls.count == 2)
+    }
+
+    /// Polls until the runner publishes work (the pill feed is live).
+    private func waitForWork(_ runner: TransformRunner, timeout: Duration) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if await runner.currentWorkLabel() != nil { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("timed out waiting for work beat")
+    }
+
+    /// Polls until the pill melts out fully.
+    private func waitForHidden(
+        _ sut: (
+            controller: FlowBarController,
+            coordinator: DictationCoordinator,
+            box: SpectrumFeedBox,
+            board: NSPasteboard,
+            permission: PermissionModalController
+        ),
+        timeout: Duration
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            await sut.controller.pollOnce()
+            if !sut.controller.isPillVisible { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("timed out waiting for pill hide")
     }
 }

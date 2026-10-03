@@ -229,11 +229,16 @@ final class FlowBarPanel {
         content.alphaValue = 1
     }
 
-    /// Order out + leave the content visible for next show.
+    /// Order out + leave the content visible for next show. Pins are
+    /// forgotten: the next show takes the full orderFront path (a
+    /// resize-only re-show of a hidden panel would never repaint —
+    /// the repeat-transform invisibility class).
     func hideNow() {
         setLiveValues(nil)
         panel.orderOut(nil)
         content.alphaValue = 1
+        pinnedSessionID = nil
+        pinnedScreen = nil
     }
 
     func hide() {
@@ -241,6 +246,8 @@ final class FlowBarPanel {
         // the controller before this runs; orderOut is the last step.
         setLiveValues(nil)
         panel.orderOut(nil)
+        pinnedSessionID = nil
+        pinnedScreen = nil
     }
 
     var isVisible: Bool { panel.isVisible }

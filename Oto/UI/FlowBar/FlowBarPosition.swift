@@ -27,10 +27,12 @@ enum FlowBarPosition: String, Sendable, Hashable {
     /// inside this window stays silent — no machine-gun (v8b).
     nonisolated static let tickRefractory: Duration = .milliseconds(100)
 
-    /// Upgrade default: absent key means Bottom (current behavior, forever).
+    /// Default: absent key means Top (user asked). Stored choices win —
+    /// a dragged-to-bottom pill is never overridden. Unknown strings
+    /// fail safe to Top.
     nonisolated static func current(defaults: UserDefaults = .standard) -> FlowBarPosition {
-        guard let raw = defaults.object(forKey: defaultsKey) as? String else { return .bottom }
-        return FlowBarPosition(rawValue: raw) ?? .bottom
+        guard let raw = defaults.object(forKey: defaultsKey) as? String else { return .top }
+        return FlowBarPosition(rawValue: raw) ?? .top
     }
 
     nonisolated static func save(_ position: FlowBarPosition, defaults: UserDefaults = .standard) {

@@ -82,6 +82,301 @@ struct DictationCoordinatorTests {
         return await coordinator.state
     }
 
+    // MARK: - E1 Auto Cleanup (pre-insertion race)
+
+    private func makeCleanupSUT(
+        behavior: CleanupBehavior = CleanupBehavior(enabled: true, level: .light),
+        polishAvailable: PolishAvailability = .available,
+        chunks: [String] = ["Hello oto."],
+        replaceResult: InsertionResult = .inserted
+    ) -> (
+        coordinator: DictationCoordinator,
+        inserter: FakeTextInsertion,
+        polish: FakePolishService
+    ) {
+        let audio = FakeAudioCapture(startError: nil, stubPeak: 1.0)
+        let speech = FakeSpeechService(
+            finalText: "hello oto", prepareError: nil, finishError: nil,
+            prepareGateOpen: true, finishGateOpen: true
+        )
+        let target = FakeTargetCapture(stubTarget: Self.stubTarget)
+        let inserter = FakeTextInsertion(
+            result: .inserted, insertGateOpen: true, replaceResult: replaceResult
+        )
+        let polish = FakePolishService()
+        polish.availabilityResult = polishAvailable
+        polish.chunks = chunks
+        let coordinator = DictationCoordinator(
+            audio: audio, speech: speech, targetService: target,
+            inserter: inserter, history: nil,
+            micDeniedOverride: { false },
+            polish: polish, behaviorProvider: { behavior }
+        )
+        return (coordinator, inserter, polish)
+    }
+
+    /// Runs one hold session to a terminal state. Returns nil when begin
+    /// itself refused (never in these tests).
+    private func runCompletedSession(_ coordinator: DictationCoordinator) async {
+        guard let id = await coordinator.beginHold() else {
+            Issue.record("beginHold refused")
+            return
+        }
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.finish(id)
+        _ = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+    }
+
+    private func waitForPolish(
+        _ coordinator: DictationCoordinator,
+        timeout: Duration = .seconds(5)
+    ) async -> LastPolish? {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if let last = await coordinator.lastPolish { return last }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return await coordinator.lastPolish
+    }
+
+    @Test func cleanupInsertsPolishedOnce() async {
+        // E1: the winner inserts exactly once — no swap, no second write.
+        let (coordinator, inserter, polish) = makeCleanupSUT()
+        await runCompletedSession(coordinator)
+        guard let last = await waitForPolish(coordinator) else {
+            Issue.record("expected a cleaned insert")
+            return
+        }
+        #expect(last.raw == "hello oto")
+        #expect(last.polished == "Hello oto.")
+        let inserts = await inserter.calls
+        #expect(inserts.count == 1)
+        #expect(inserts.first?.text == "Hello oto.")
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts == ["hello oto"])
+        #expect(polish.jobs == [.cleanup(.light)])
+        #expect(await coordinator.canRevertPolish())
+        #expect(await coordinator.workLabel() == nil)
+    }
+
+    @Test func noneLevelInsertsRaw() async {
+        let (coordinator, inserter, polish) = makeCleanupSUT(
+            behavior: CleanupBehavior(enabled: true, level: .none)
+        )
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts.isEmpty)
+        let inserts = await inserter.calls
+        #expect(inserts.first?.text == "hello oto")
+        #expect(!(await coordinator.canRevertPolish()))
+    }
+
+    @Test func offNeverCleans() async {
+        let (coordinator, inserter, polish) = makeCleanupSUT(
+            behavior: CleanupBehavior(enabled: false, level: .light)
+        )
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts.isEmpty)
+        #expect(!(await coordinator.canRevertPolish()))
+    }
+
+    @Test func unavailableInsertsRaw() async {
+        let (coordinator, inserter, polish) = makeCleanupSUT(
+            polishAvailable: .unavailable(copy: "nope")
+        )
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        #expect(polish.prompts.isEmpty)
+    }
+
+    @Test func identicalPolishStaysRaw() async {
+        // Rewritten-but-identical: nothing to undo, no Revert beat.
+        let (coordinator, inserter, _) = makeCleanupSUT(chunks: ["hello oto"])
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        let inserts = await inserter.calls
+        #expect(inserts.count == 1)
+        #expect(inserts.first?.text == "hello oto")
+        #expect(!(await coordinator.canRevertPolish()))
+    }
+
+    @Test func cleanupErrorInsertsRaw() async {
+        let (coordinator, inserter, polish) = makeCleanupSUT()
+        polish.shouldError = true
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
+        let inserts = await inserter.calls
+        #expect(inserts.first?.text == "hello oto")
+    }
+
+    @Test func slowCleanupTimesOutToRaw() async {
+        // Parked at the gate past the 3s bound: raw inserts, the stream ran,
+        // nothing is stored, nothing swaps. (~3s wall time by design.)
+        let (coordinator, inserter, polish) = makeCleanupSUT()
+        await polish.streamGate.setOpen(false)
+        await runCompletedSession(coordinator)
+        #expect(await waitForPolish(coordinator, timeout: .milliseconds(500)) == nil)
+        #expect(await inserter.replaceCalls.count == 0)
+        let inserts = await inserter.calls
+        #expect(inserts.count == 1)
+        #expect(inserts.first?.text == "hello oto")
+        #expect(polish.prompts == ["hello oto"])
+        await polish.streamGate.setOpen(true)
+    }
+
+    @Test func cancelDuringCleanupInsertsNothing() async {
+        // Cancel wins over the parked race: terminal is immediate, the
+        // abandoned stream can never insert afterwards.
+        let (coordinator, inserter, polish) = makeCleanupSUT()
+        await polish.streamGate.setOpen(false)
+        guard let id = await coordinator.beginHold() else {
+            Issue.record("beginHold refused")
+            return
+        }
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        let finishing = Task { await coordinator.finish(id) }
+        try? await Task.sleep(for: .milliseconds(100))
+        await coordinator.cancel(id)
+        await finishing.value
+        let terminal = await coordinator.state
+        guard case .cancelled = terminal else {
+            Issue.record("expected cancelled, got \(terminal)")
+            return
+        }
+        #expect(await inserter.calls.count == 0)
+        await polish.streamGate.setOpen(true)
+    }
+
+    @Test func revertRestoresRaw() async {
+        let (coordinator, inserter, _) = makeCleanupSUT()
+        await runCompletedSession(coordinator)
+        guard await waitForPolish(coordinator) != nil else {
+            Issue.record("expected a cleaned insert")
+            return
+        }
+        await coordinator.revertLastPolish()
+        let replaces = await inserter.replaceCalls
+        // No swap anymore: the only replaceLast is the Revert itself.
+        #expect(replaces.count == 1)
+        #expect(replaces.last?.text == "hello oto")
+        #expect(await coordinator.canRevertPolish() == false)
+        #expect(await coordinator.lastPolish == nil)
+    }
+
+    @Test func revertFailureKeepsBeat() async {
+        let (coordinator, inserter, _) = makeCleanupSUT()
+        await runCompletedSession(coordinator)
+        guard await waitForPolish(coordinator) != nil else {
+            Issue.record("expected a cleaned insert")
+            return
+        }
+        await inserter.setReplaceResult(.recoverableFailure(reason: "nope"))
+        await coordinator.revertLastPolish()
+        // Beat stays retryable; raw survives in History regardless.
+        #expect(await coordinator.canRevertPolish())
+        #expect(await coordinator.lastPolish != nil)
+    }
+
+    @Test func beatClearsOnNextBegin() async {
+        let (coordinator, _, _) = makeCleanupSUT()
+        await runCompletedSession(coordinator)
+        guard await waitForPolish(coordinator) != nil else {
+            Issue.record("expected a cleaned insert")
+            return
+        }
+        _ = await coordinator.beginHold()
+        #expect(await coordinator.lastPolish == nil)
+        #expect(await coordinator.canRevertPolish() == false)
+    }
+
+    @Test func cleanupPrefsReadPerSession() {
+        // Absent keys ⇒ shipped defaults (enabled + None: exact words until
+        // the user opts in). Present but unknown level ⇒ fail-safe None.
+        // Explicit values round-trip. Legacy Slice-B keys map read-only
+        // (manual→None, upgrade→Light, automatic→Medium).
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        #expect(CleanupBehavior.current(defaults: defaults) == CleanupBehavior(enabled: true, level: .none))
+        defaults.set(false, forKey: CleanupSettings.enabledKey)
+        defaults.set("medium", forKey: CleanupSettings.levelKey)
+        #expect(CleanupBehavior.current(defaults: defaults) == CleanupBehavior(enabled: false, level: .medium))
+        defaults.set("quantum", forKey: CleanupSettings.levelKey)
+        #expect(CleanupBehavior.current(defaults: defaults).level == .none)
+
+        let legacy = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        legacy.set("manual", forKey: LegacyIntelligenceSettings.modeKey)
+        #expect(CleanupBehavior.current(defaults: legacy) == CleanupBehavior(enabled: true, level: .none))
+        legacy.set("upgrade", forKey: LegacyIntelligenceSettings.modeKey)
+        #expect(CleanupBehavior.current(defaults: legacy).level == .light)
+        legacy.set("automatic", forKey: LegacyIntelligenceSettings.modeKey)
+        #expect(CleanupBehavior.current(defaults: legacy).level == .medium)
+        legacy.set("quantum", forKey: LegacyIntelligenceSettings.modeKey)
+        #expect(CleanupBehavior.current(defaults: legacy).level == .none)
+
+        let migrated = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        migrated.set(false, forKey: LegacyIntelligenceSettings.enabledKey)
+        migrated.set("upgrade", forKey: LegacyIntelligenceSettings.modeKey)
+        CleanupMigrator.migrateIfNeeded(defaults: migrated)
+        #expect(migrated.bool(forKey: CleanupSettings.enabledKey) == false)
+        #expect(migrated.string(forKey: CleanupSettings.levelKey) == "light")
+        // Second run never overwrites the new keys.
+        migrated.set("medium", forKey: CleanupSettings.levelKey)
+        CleanupMigrator.migrateIfNeeded(defaults: migrated)
+        #expect(migrated.string(forKey: CleanupSettings.levelKey) == "medium")
+    }
+
+    // MARK: - Fresh hold micro-session cancel (transform combo-wins net)
+
+    @Test func cancelsFreshHoldMicroSession() async {
+        let (coordinator, _, _, _, _) = makeSUT()
+        guard await coordinator.beginHold() != nil else {
+            Issue.record("beginHold refused")
+            return
+        }
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.cancelFreshHoldMicroSession(olderThan: .seconds(10))
+        guard case .cancelled = await coordinator.state else {
+            Issue.record("expected cancelled, got \(await coordinator.state)")
+            return
+        }
+    }
+
+    @Test func keepsSessionPastThreshold() async {
+        let (coordinator, _, _, _, _) = makeSUT()
+        guard let id = await coordinator.beginHold() else {
+            Issue.record("beginHold refused")
+            return
+        }
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        // Zero threshold: no live session is younger than nothing — kept.
+        await coordinator.cancelFreshHoldMicroSession(olderThan: .zero)
+        guard case .recording = await coordinator.state else {
+            Issue.record("expected recording, got \(await coordinator.state)")
+            return
+        }
+        await coordinator.cancel(id)
+    }
+
+    @Test func keepsHandsFreeSession() async {
+        // Different purpose, same freshness: never touched.
+        let (coordinator, _, _, _, _) = makeSUT()
+        guard let id = await coordinator.toggleHandsFree() else {
+            Issue.record("toggleHandsFree refused")
+            return
+        }
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await coordinator.cancelFreshHoldMicroSession(olderThan: .seconds(10))
+        guard case .recording = await coordinator.state else {
+            Issue.record("expected recording, got \(await coordinator.state)")
+            return
+        }
+        await coordinator.cancel(id)
+    }
+
     // MARK: - 1. Happy path
 
     @Test func holdBeginFinishInsertsIntoCapturedTarget() async {
