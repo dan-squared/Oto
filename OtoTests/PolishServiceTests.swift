@@ -39,18 +39,19 @@ struct PolishServiceTests {
         let fake = FakePolishService()
         fake.chunks = ["Clean", "Clean up", "Clean up."]
         var got: [String] = []
-        for await snapshot in fake.streamCleanup("raw") {
+        for await snapshot in fake.streamCleanup("raw", job: .cleanup(.light)) {
             got.append(snapshot)
         }
         #expect(got == ["Clean", "Clean up", "Clean up."])
         #expect(fake.prompts == ["raw"])
+        #expect(fake.jobs == [.cleanup(.light)])
     }
 
     @Test func fakeCancelStopsDelivery() async {
         let fake = FakePolishService()
         fake.chunks = ["one", "two", "three"]
         var got: [String] = []
-        for await snapshot in fake.streamCleanup("raw") {
+        for await snapshot in fake.streamCleanup("raw", job: .cleanup(.medium)) {
             got.append(snapshot)
             break
         }
@@ -63,7 +64,7 @@ struct PolishServiceTests {
         let fake = FakePolishService()
         fake.shouldError = true
         var got: [String] = []
-        for await snapshot in fake.streamCleanup("raw") {
+        for await snapshot in fake.streamCleanup("raw", job: .cleanup(.light)) {
             got.append(snapshot)
         }
         // Empty ⇒ the UI takes the "couldn't clean up" path, raw intact.
@@ -96,10 +97,39 @@ struct PolishServiceTests {
     @Test func captionFormatsElapsedAndWords() {
         #expect(polishTimingCaption(stats: PolishRunStats(
             firstTokenMs: 400, totalMs: 1400, inWords: 30, outWords: 38
-        )) == "Cleaned in 1.4s · 38 words")
+        )) == "Cleaned with Light in 1.4s · 38 words")
         #expect(polishTimingCaption(stats: PolishRunStats(
             firstTokenMs: 120, totalMs: 400, inWords: 4, outWords: 4
-        )) == "Cleaned in 0.4s · 4 words")
+        ), job: .transform(.polish)) == "Cleaned with Polish in 0.4s · 4 words")
+    }
+
+    @Test func instructionsDifferPerJob() {
+        // None never streams (nil instructions); Light is the Matrix-A v2
+        // text verbatim; Medium adds exactly the clarity-license sentence;
+        // every streamed job carries the meaning-lock + same-language +
+        // output-only locks.
+        #expect(LivePolishService.instructions(for: .cleanup(.none)) == nil)
+        let light = LivePolishService.instructions(for: .cleanup(.light))!
+        let medium = LivePolishService.instructions(for: .cleanup(.medium))!
+        #expect(light.contains("Preserve the meaning exactly"))
+        #expect(light.contains("casual stays casual"))
+        #expect(light.contains("Keep the same language"))
+        #expect(light.contains("Output only the cleaned text"))
+        #expect(medium.hasPrefix(light))
+        #expect(medium.contains("clarity and conciseness"))
+        #expect(light != medium)
+        for preset in TransformPreset.allCases {
+            let prompt = LivePolishService.instructions(for: .transform(preset))!
+            #expect(prompt.contains("Preserve the meaning exactly"))
+            #expect(prompt.contains("Keep the same language"))
+            #expect(prompt.contains("Output only the rewritten text"))
+        }
+        let concise = LivePolishService.instructions(for: .transform(.concise))!
+        #expect(concise.contains("keep every fact and number"))
+        let professional = LivePolishService.instructions(for: .transform(.professional))!
+        #expect(professional.contains("work-ready"))
+        #expect(TransformPreset.polish.displayName == "Polish")
+        #expect(TransformPreset.polish.tagline == "Improve clarity and conciseness")
     }
 
     @Test func tokenCapScalesWithInput() {
@@ -127,7 +157,7 @@ struct PolishServiceTests {
         let fake = FakePolishService()
         fake.chunks = ["hello world"]
         var draft = ""
-        for await snapshot in fake.streamCleanup(store.entries[0].finalText) {
+        for await snapshot in fake.streamCleanup(store.entries[0].finalText, job: .cleanup(.light)) {
             draft = snapshot
         }
         let board = NSPasteboard(name: NSPasteboard.Name("test.oto.polish.\(UUID().uuidString)"))

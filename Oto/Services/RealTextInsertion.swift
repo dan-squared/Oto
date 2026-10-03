@@ -9,6 +9,46 @@ import CoreGraphics
 import Foundation
 import os
 
+/// Hidden A/B seam for keystroke-shape experiments (8b Slice 3): three
+/// UserDefaults keys with today-value defaults. Read once at composition
+/// (app launch) — the matrix flips values via `defaults write` + relaunch,
+/// zero rebuilds. No UI, deliberately: winners graduate to real defaults,
+/// losers die with data. Defaults byte-identical to today — the seam
+/// itself changes nothing (pinned by test).
+struct InsertionExperiment: Sendable, Equatable {
+    /// Synthetic event source: private-state (today) vs system-default
+    /// (null source, the Hex shape).
+    var useDefaultEventSource: Bool
+    /// Gap between the Cmd-V sub-events, ns (today 10M; 0 = Hex shape:
+    /// back-to-back posts).
+    var keyStepNs: UInt64
+    /// Transcript linger before clipboard restore, ns (today 100M;
+    /// Hex uses 500M for slow readers).
+    var restoreDelayNs: UInt64
+
+    nonisolated static let sourceKey = "app.Oto.xpEventSource"
+    nonisolated static let keyStepKey = "app.Oto.xpKeyStepNs"
+    nonisolated static let restoreDelayKey = "app.Oto.xpRestoreDelayNs"
+
+    nonisolated static func current(defaults: UserDefaults = .standard) -> InsertionExperiment {
+        let source = defaults.string(forKey: sourceKey) ?? "private"
+        let keyStep = defaults.object(forKey: keyStepKey) as? UInt64
+        let restore = defaults.object(forKey: restoreDelayKey) as? UInt64
+        return InsertionExperiment(
+            useDefaultEventSource: source == "default",
+            keyStepNs: keyStep ?? InsertionTimings().keyStep,
+            restoreDelayNs: restore ?? InsertionTimings().restoreDelay
+        )
+    }
+}
+
+/// Synthetic keystroke event source. Private-state is today's HID path;
+/// system-default (null source) is the Hex shape under test.
+enum SyntheticEventSource: Sendable {
+    case privateState
+    case systemDefault
+}
+
 /// Paste timings. Yap-tuned starting values against the same app classes
 /// (Chromium async clipboard readers); the device matrix tunes from data,
 /// never from guesses.
@@ -52,6 +92,9 @@ struct InsertionEvents: Sendable {
     /// Returns false when no event could be created (nil source/event) so
     /// callers fail closed instead of claiming a post that never existed.
     var postPaste: @Sendable () async -> Bool
+    /// Selection-grab route for `SelectionGrabber`: full 4-event Cmd-C
+    /// through the same tap. Same fail-closed contract as `postPaste`.
+    var postCopy: @Sendable () async -> Bool
     /// Undo route for `replaceLast`: full 4-event Cmd-Z through the same tap.
     /// Same fail-closed contract as `postPaste`. The caller guarantees the
     /// strict window (seconds after its own paste, zero intervening input).
@@ -72,8 +115,9 @@ struct InsertionEvents: Sendable {
                 NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                     == Bundle.main.bundleIdentifier
             },
-            postPaste: { await Self.postFullCommandV() },
-            postUndo: { await Self.postFullCommandV(key: CGKeyCode(kVK_ANSI_Z)) },
+            postPaste: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "v")) },
+            postCopy: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "c")) },
+            postUndo: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "z")) },
             sleep: { try? await Task.sleep(nanoseconds: $0) }
         )
     }
@@ -87,9 +131,26 @@ struct InsertionEvents: Sendable {
     /// as genuine typing. Pattern follows Yap (MIT) as Oto-owned code.
     /// `NX_DEVICELCMDKEYMASK` — "left command physically down": Qt/Java apps
     /// read the device-dependent bits and ignore a bare command flag.
-    static func postFullCommandV(key: CGKeyCode = CGKeyCode(kVK_ANSI_V), step: UInt64 = 10_000_000) async -> Bool {
-        guard let source = CGEventSource(stateID: .privateState) else { return false }
-        source.setLocalEventsFilterDuringSuppressionState(
+    /// `source` selects the event source (private-state today; the
+    /// experiment can switch to system-default/null, the Hex shape).
+    /// Every event carries the Oto synthetic marker
+    /// (`kCGEventSourceUserData`) so device trails distinguish Oto
+    /// keystrokes from hardware in logs.
+    nonisolated static let syntheticMarker: Int64 = 0x4F54_4F // "OTO"
+    static func postFullCommandV(
+        key: CGKeyCode = CGKeyCode(kVK_ANSI_V),
+        step: UInt64 = 10_000_000,
+        source: SyntheticEventSource = .privateState
+    ) async -> Bool {
+        let eventSource: CGEventSource?
+        switch source {
+        case .privateState:
+            guard let created = CGEventSource(stateID: .privateState) else { return false }
+            eventSource = created
+        case .systemDefault:
+            eventSource = nil
+        }
+        eventSource?.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitSystemDefinedEvents],
             state: .eventSuppressionStateSuppressionInterval
         )
@@ -101,12 +162,13 @@ struct InsertionEvents: Sendable {
         var posted = true
         func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) {
             guard let event = CGEvent(
-                keyboardEventSource: source, virtualKey: key, keyDown: down
+                keyboardEventSource: eventSource, virtualKey: key, keyDown: down
             ) else {
                 posted = false
                 return
             }
             event.flags = flags
+            event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
             event.post(tap: .cghidEventTap)
         }
         post(commandKey, down: true, flags: commandFlags)
@@ -222,12 +284,28 @@ final class RealTextInsertion: TextInserting {
             return await postPlacedText(text, pid: pid, saved: saved, receipt: receipt, context: .replace)
         }
     }
+    /// Plain selection replacement (E2 transforms): the caller's selection
+    /// is still selected, so a guarded paste overwrites exactly it. Gates,
+    /// tail, and restore discipline are the shared `insert` machinery; only
+    /// the failure words are selection-honest. No undo step (unlike
+    /// `replaceLast`) — native Cmd+Z in the target app is the undo path.
+    func replaceSelection(_ text: String, into target: TargetApplication) async -> InsertionResult {
+        switch await readyPID(into: target, context: .replaceSelection) {
+        case .refused(let result):
+            return result
+        case .ready(let pid):
+            let saved = PasteboardSnapshot.capture(pasteboard)
+            let receipt = placeOnClipboard(text)
+            return await postPlacedText(text, pid: pid, saved: saved, receipt: receipt, context: .replaceSelection)
+        }
+    }
     /// Post context: identical posting policy, but failure words must be
     /// honest about what already happened. A failed insert pasted nothing;
     /// a failed replace may already have undone the original.
     private enum PostContext {
         case insert
         case replace
+        case replaceSelection
     }
 
     /// Outcome of the shared pre-post gates.
@@ -253,6 +331,11 @@ final class RealTextInsertion: TextInserting {
                 return .refused(.recoverableFailure(reason:
                     "Accessibility permission is required to replace text. Nothing was changed — the original text stands."
                 ))
+            case .replaceSelection:
+                log.info("replaceSelection refused: accessibility untrusted, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "Accessibility permission is required to replace the selection. Nothing was changed — your text stands as it was."
+                ))
             }
         case .proceed:
             break
@@ -270,6 +353,11 @@ final class RealTextInsertion: TextInserting {
                 return .refused(.recoverableFailure(reason:
                     "No target app was captured. Nothing was changed — the original text stands."
                 ))
+            case .replaceSelection:
+                log.error("replaceSelection refused: no pid on target, clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "No target app was captured. Nothing was changed — your text stands as it was."
+                ))
             }
         }
 
@@ -284,6 +372,10 @@ final class RealTextInsertion: TextInserting {
             case .replace:
                 return .refused(.recoverableFailure(reason: focusFailureReason(switchedReason:
                     "The target app is no longer in front. Nothing was changed — the original text stands."
+                )))
+            case .replaceSelection:
+                return .refused(.recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app is no longer in front. Nothing was changed — your text stands as it was."
                 )))
             }
         }
@@ -307,6 +399,11 @@ final class RealTextInsertion: TextInserting {
                 log.info("replace refused: secure password field in target \(pid, privacy: .public), clipboard untouched")
                 return .refused(.recoverableFailure(reason:
                     "The focused field is a secure password field. Nothing was changed — the original text stands."
+                ))
+            case .replaceSelection:
+                log.info("replaceSelection refused: secure password field in target \(pid, privacy: .public), clipboard untouched")
+                return .refused(.recoverableFailure(reason:
+                    "The focused field is a secure password field. Nothing was changed — your text stands as it was."
                 ))
             }
         }
@@ -336,6 +433,10 @@ final class RealTextInsertion: TextInserting {
                 return .recoverableFailure(reason:
                     "The clipboard was unavailable. The replacement was not pasted — the original text stands."
                 )
+            case .replaceSelection:
+                return .recoverableFailure(reason:
+                    "The clipboard was unavailable. The replacement was not pasted — your text stands as it was."
+                )
             }
         }
 
@@ -350,6 +451,10 @@ final class RealTextInsertion: TextInserting {
             case .replace:
                 return .recoverableFailure(reason: focusFailureReason(switchedReason:
                     "The target app lost focus just before pasting. The replacement was not pasted — the original text stands."
+                ))
+            case .replaceSelection:
+                return .recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app lost focus just before pasting. The replacement was not pasted — your text stands as it was."
                 ))
             }
         }
@@ -366,6 +471,10 @@ final class RealTextInsertion: TextInserting {
                 return .recoverableFailure(reason:
                     "Accessibility permission is required to replace text. The replacement was not pasted — the original text stands."
                 )
+            case .replaceSelection:
+                return .recoverableFailure(reason:
+                    "Accessibility permission is required to replace the selection. The replacement was not pasted — your text stands as it was."
+                )
             }
         }
 
@@ -380,6 +489,10 @@ final class RealTextInsertion: TextInserting {
             case .replace:
                 return .recoverableFailure(reason:
                     "The keystroke could not be posted. The replacement was not pasted — the original text stands."
+                )
+            case .replaceSelection:
+                return .recoverableFailure(reason:
+                    "The keystroke could not be posted. The replacement was not pasted — your text stands as it was."
                 )
             }
         }

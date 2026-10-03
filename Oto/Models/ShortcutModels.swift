@@ -93,6 +93,11 @@ struct ShortcutTrigger: Equatable, Sendable, Codable {
     }
 
     static func defaultHoldToTalk() -> ShortcutTrigger {
+        // Factory default: Right Option. Paired with the Cmd-digit
+        // transform trio (different families ⇒ zero cross-fire, so factory
+        // defaults satisfy Rule B). Side-specific HID code keeps the treaty
+        // with left-side app shortcuts; double-tap still works (non-fn key).
+        // Stored configs never migrate silently (advisory only).
         ShortcutTrigger(
             kind: .modifierHold(keyCode: UInt16(kVK_RightOption)),
             interaction: .holdToTalk
@@ -130,20 +135,23 @@ enum ShortcutSlot: Equatable, Sendable, Codable, CaseIterable {
 }
 
 extension ShortcutTrigger.Kind {
-    /// Cross-slot conflict check. Same kind+codes = conflict. Asymmetric
-    /// pairs that resolve deterministically are NOT conflicts (documented,
-    /// never blocked):
-    /// - modifierHold-vs-combo sharing the modifier: the combo fires and the
-    ///   hold release is swallowed by `usedInCombination` (combo wins by
-    ///   construction).
-    /// - functionKey-vs-combo: separated by the bare-press `shouldFire` rule
-    ///   unless the combo IS that function key bare (same keyCode, no
-    ///   modifiers).
-    /// - modifierHold-vs-functionKey: disjoint detection paths, never collide.
+    /// Cross-purpose conflict check. Same kind+codes = conflict (Rule A).
+    /// PLUS same-modifier-family hold-vs-combo = conflict (Rule B): a hold
+    /// `begin` fires on modifier-down BEFORE any combo can complete, while
+    /// combination-use only swallows the release — so same-family bindings
+    /// across purposes double-fire (stranded micro-session + combo action),
+    /// never resolve. Family-level (left/right grouped: Carbon combos are
+    /// side-blind, so sides can't be distinguished honestly).
+    /// Deliberately NOT conflicts (documented, never blocked):
+    /// - sibling transform combos sharing a modifier with different digits
+    ///   (Opt+1 vs Opt+2: Carbon distinguishes by keyCode, no double-fire);
     /// - unassigned-vs-anything: an empty slot claims nothing.
+    /// - modifierHold-vs-functionKey: disjoint detection paths, never collide.
     /// Combo-vs-combo is deliberately conservative: the same keyCode blocks
     /// even with disjoint modifiers (saving near-identical shortcuts for
-    /// both modes is confusing UX either way).
+    /// different purposes is confusing UX either way).
+    /// Double-tap has no Kind and never participates: it derives from the
+    /// hold key and serves the same purpose (dictation), so it is exempt.
     nonisolated func conflictsWith(_ other: ShortcutTrigger.Kind) -> Bool {
         switch (self, other) {
         case (.unassigned, _), (_, .unassigned):
@@ -154,14 +162,47 @@ extension ShortcutTrigger.Kind {
             return !a.isDisjoint(with: b)
         case (.combo(_, let a), .combo(_, let b)):
             return a == b
-        case (.modifierHold, .combo), (.combo, .modifierHold):
-            return false
+        case (.modifierHold(let code), .combo(let modifiers, _)),
+             (.combo(let modifiers, _), .modifierHold(let code)):
+            return Self.holdCodeSharesComboFamily(holdCode: code, comboModifiers: modifiers)
         case (.modifierHold, .functionKey), (.functionKey, .modifierHold):
             return false
         case (.functionKey(let codes), .combo(let modifiers, let keyCode)),
              (.combo(let modifiers, let keyCode), .functionKey(let codes)):
             return modifiers == 0 && codes.contains(Int64(keyCode))
         }
+    }
+
+    /// Pure family test for Rule B: does the hold key's modifier family
+    /// appear in the combo's Carbon mask? fn holds map to nothing (fn is
+    /// not a combo modifier in practice) and never conflict with combos.
+    nonisolated static func holdCodeSharesComboFamily(holdCode: UInt16, comboModifiers: UInt32) -> Bool {
+        guard let flags = FlagsCaptureState.nsFlag(for: holdCode) else { return false }
+        let mask = flags.intersection([.command, .shift, .option, .control]).carbonMask
+        guard mask != 0 else { return false }
+        return (Int(comboModifiers) & mask) != 0
+    }
+
+    /// Display family name for the Rule B message ("Option"). Nil when the
+    /// hold key has no combo family (fn) or is untracked.
+    nonisolated static func familyName(forHoldCode holdCode: UInt16) -> String? {
+        let flags = FlagsCaptureState.nsFlag(for: holdCode)
+        if flags == .option { return "Option" }
+        if flags == .command { return "Command" }
+        if flags == .control { return "Control" }
+        if flags == .shift { return "Shift" }
+        return nil
+    }
+
+    /// Glyph for the family ("⌥"). Same nil rule as `familyName` — the two
+    /// are always read together by the refusal copy.
+    nonisolated static func familyGlyph(forHoldCode holdCode: UInt16) -> String? {
+        let flags = FlagsCaptureState.nsFlag(for: holdCode)
+        if flags == .option { return "⌥" }
+        if flags == .command { return "⌘" }
+        if flags == .control { return "⌃" }
+        if flags == .shift { return "⇧" }
+        return nil
     }
 }
 
@@ -479,5 +520,190 @@ struct ShortcutStaging: Equatable, Sendable {
         let other: ShortcutSlot = slot == .hold ? .handsFree : .hold
         guard !kind.conflictsWith(effectiveKind(for: other)) else { return .blocked }
         return .applied
+    }
+}
+
+/// Which purpose a shortcut serves (five slots). Display names feed the
+/// refusal copy — one source, never scattered strings. Double-tap has no
+/// entry: it derives from the hold key for the same purpose (dictation).
+enum ShortcutSlotID: Sendable, Equatable {
+    case hold
+    case handsFree
+    case transform(TransformPreset)
+
+    nonisolated var purposeName: String {
+        switch self {
+        case .hold: return "Push to talk"
+        case .handsFree: return "Hands-free"
+        case .transform(let preset): return preset.displayName
+        }
+    }
+}
+
+/// Refusal copy for the conflict policy (Rules A+B). Pure — unit-tested
+/// next to the rule, so wording changes are deliberate, never drift. The
+/// Rule B message differentiates sides: it names the exact held key
+/// (`Right ⌥`, never bare `⌥`) and teaches why — combos fire on either
+/// side, so sides can't be split honestly.
+enum ShortcutRefusalMessage {
+    nonisolated static func alreadyInUse(by purposeName: String) -> String {
+        "Already in use by \(purposeName) — pick a different one."
+    }
+
+    nonisolated static func tooSimilar(
+        to purposeName: String, heldChip: String, glyph: String, family: String
+    ) -> String {
+        "Too similar to your \(purposeName) shortcut (\(heldChip)) — \(glyph) shortcuts fire on either \(family) key and would trigger together. Pick a different one."
+    }
+
+    /// Rule-aware message for a refused pair: exact duplicates get
+    /// "already in use", same-family hold/combo gets the side-naming
+    /// "too similar".
+    nonisolated static func message(
+        refused: ShortcutTrigger.Kind, byExisting: ShortcutTrigger.Kind, purposeName: String
+    ) -> String {
+        switch (refused, byExisting) {
+        case (.modifierHold(let code), .combo), (.combo, .modifierHold(let code)):
+            if let family = ShortcutTrigger.Kind.familyName(forHoldCode: code),
+               let glyph = ShortcutTrigger.Kind.familyGlyph(forHoldCode: code)
+            {
+                return tooSimilar(
+                    to: purposeName,
+                    heldChip: KeyNames.holdChip(for: code),
+                    glyph: glyph, family: family
+                )
+            }
+            return alreadyInUse(by: purposeName)
+        default:
+            return alreadyInUse(by: purposeName)
+        }
+    }
+}
+
+/// The three transform shortcuts (E2): one re-recordable combo per preset.
+/// Persisted as one JSON blob (`app.Oto.transformShortcuts`); absent or
+/// corrupt ⇒ factory `Opt+1/2/3`. Stored triggers are Kinds (combos need no
+/// interaction mode — transforms fire, they never hold or toggle).
+struct TransformShortcuts: Equatable, Sendable, Codable {
+    var polish: ShortcutTrigger.Kind
+    var concise: ShortcutTrigger.Kind
+    var professional: ShortcutTrigger.Kind
+
+    nonisolated static func == (lhs: TransformShortcuts, rhs: TransformShortcuts) -> Bool {
+        lhs.polish == rhs.polish && lhs.concise == rhs.concise && lhs.professional == rhs.professional
+    }
+
+    nonisolated static func `default`() -> TransformShortcuts {
+        // Factory trio (moved Opt+digits → Cmd+digits per explicit request:
+        // Opt+digits don't fire on the user's machine. Global Cmd-digit
+        // hotkeys preempt per-app Tab switching while Oto runs — stated
+        // cost, each re-recordable. Paired with the Right-Option hold
+        // (different families ⇒ Rule B clean).
+        TransformShortcuts(
+            polish: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_1)),
+            concise: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_2)),
+            professional: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_3))
+        )
+    }
+
+    nonisolated func kind(for preset: TransformPreset) -> ShortcutTrigger.Kind {
+        switch preset {
+        case .polish: return polish
+        case .concise: return concise
+        case .professional: return professional
+        }
+    }
+
+    nonisolated mutating func set(_ kind: ShortcutTrigger.Kind, for preset: TransformPreset) {
+        switch preset {
+        case .polish: polish = kind
+        case .concise: concise = kind
+        case .professional: professional = kind
+        }
+    }
+
+    static let defaultsKey = "app.Oto.transformShortcuts"
+
+    private static let log = Logger(subsystem: "app.Oto", category: "shortcut")
+
+    static func load(from defaults: UserDefaults = .standard) -> TransformShortcuts {
+        guard let data = defaults.data(forKey: defaultsKey),
+              let decoded = try? JSONDecoder().decode(TransformShortcuts.self, from: data)
+        else { return .default() }
+        return decoded
+    }
+
+    func save(to defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        defaults.set(data, forKey: Self.defaultsKey)
+    }
+}
+
+/// Non-blocking load-time audit: every conflicting pair among the five live
+/// slots, for advisory display. Never auto-clears — data is preserved, the
+/// user decides. New saves are blocked by the dispatch gate; this names old
+/// sins (one matrix item covers an upgraded violating config).
+enum ShortcutAudit {
+    /// One message per conflicting slot (first conflict wins per slot).
+    nonisolated static func violations(
+        hold: ShortcutTrigger.Kind,
+        handsFree: ShortcutTrigger.Kind,
+        transforms: TransformShortcuts
+    ) -> [(slot: ShortcutSlotID, message: String)] {
+        let slots: [(ShortcutSlotID, ShortcutTrigger.Kind)] = [
+            (.hold, hold),
+            (.handsFree, handsFree),
+            (.transform(.polish), transforms.polish),
+            (.transform(.concise), transforms.concise),
+            (.transform(.professional), transforms.professional),
+        ]
+        var out: [(slot: ShortcutSlotID, message: String)] = []
+        for i in slots.indices {
+            for j in slots.indices where j != i {
+                if slots[i].1.conflictsWith(slots[j].1) {
+                    out.append((slots[i].0, ShortcutRefusalMessage.message(
+                        refused: slots[i].1, byExisting: slots[j].1,
+                        purposeName: slots[j].0.purposeName
+                    )))
+                    break
+                }
+            }
+        }
+        return out
+    }
+}
+
+/// Save-time gate for one transform shortcut: nil when savable, otherwise
+/// the refusal message naming the conflicting purpose. Pure — the dispatch
+/// gate and the Settings advisory render the same string from the same rule.
+enum TransformShortcutGate {
+    nonisolated static func advisory(
+        kind: ShortcutTrigger.Kind,
+        preset: TransformPreset,
+        transforms: TransformShortcuts,
+        hold: ShortcutTrigger.Kind,
+        handsFree: ShortcutTrigger.Kind
+    ) -> String? {
+        for other in TransformPreset.allCases where other != preset {
+            let existing = transforms.kind(for: other)
+            if kind.conflictsWith(existing) {
+                return ShortcutRefusalMessage.message(
+                    refused: kind, byExisting: existing, purposeName: other.displayName
+                )
+            }
+        }
+        if kind.conflictsWith(hold) {
+            return ShortcutRefusalMessage.message(
+                refused: kind, byExisting: hold,
+                purposeName: ShortcutSlotID.hold.purposeName
+            )
+        }
+        if kind.conflictsWith(handsFree) {
+            return ShortcutRefusalMessage.message(
+                refused: kind, byExisting: handsFree,
+                purposeName: ShortcutSlotID.handsFree.purposeName
+            )
+        }
+        return nil
     }
 }

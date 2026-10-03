@@ -18,6 +18,11 @@ protocol TextInserting: Sendable {
     /// inside a strict window (seconds after their own paste, zero
     /// intervening input) where the undo top is near-certainly theirs.
     func replaceLast(_ text: String, into target: TargetApplication) async -> InsertionResult
+    /// Selection replacement (E2 transforms): plain Cmd+V over the still-
+    /// selected range — no undo step (the live selection IS the target).
+    /// Same fail-closed contract as insert; failure reasons name the
+    /// selection so the caller can report honestly.
+    func replaceSelection(_ text: String, into target: TargetApplication) async -> InsertionResult
 }
 
 /// Recording fake for Phase 1 coordinator tests. Asserts which target the
@@ -62,6 +67,16 @@ actor FakeTextInsertion: TextInserting {
     func replaceLast(_ text: String, into target: TargetApplication) async -> InsertionResult {
         replaceCalls.append((text: text, target: target))
         return replaceResult
+    }
+
+    /// Outcome returned by `replaceSelection`.
+    var replaceSelectionResult: InsertionResult = .inserted
+
+    private(set) var replaceSelectionCalls: [(text: String, target: TargetApplication)] = []
+
+    func replaceSelection(_ text: String, into target: TargetApplication) async -> InsertionResult {
+        replaceSelectionCalls.append((text: text, target: target))
+        return replaceSelectionResult
     }
 
     /// Test-only outcome re-scripting mid-test (swap-then-revert-failure).

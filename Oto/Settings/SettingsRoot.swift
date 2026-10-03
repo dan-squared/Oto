@@ -65,6 +65,8 @@ struct SettingsRoot: View {
     /// Intelligence service (Slice A: Manual only — status + History clean
     /// up. Auto behaviors arrive behind the mode picker in Slices B/C).
     let polish: any PolishServing
+    /// E2 transform hotkeys (three re-recordable combos + conflict policy).
+    let transforms: TransformDispatch
 
     /// Panel size (+15% over the reference 660×500: room for Oto's recorder
     /// rows with air to spare). FIXED, not a minimum: the window is pinned
@@ -259,7 +261,7 @@ struct SettingsRoot: View {
                     case .privacy:
                         PrivacyPane(uiState: uiState)
                     case .intelligence:
-                        IntelligencePane(polish: polish)
+                        IntelligencePane(polish: polish, transforms: transforms)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

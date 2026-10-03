@@ -44,6 +44,19 @@ enum FlowBarState: Equatable, Sendable {
     case message
 }
 
+/// Pill text for live model work. Pure — unit-tested. One verb max, always:
+/// `Cleaning` for Auto Cleanup, the preset's pill verb for transforms
+/// (`Polishing` / `Shortening` / `Formalizing`). One glance means "the model
+/// is working" — never a sentence, never truncated.
+nonisolated func workPillText(_ work: WorkLabel) -> String {
+    switch work {
+    case .cleaningUp:
+        return "Cleaning"
+    case .preset(let preset):
+        return preset.pillVerb
+    }
+}
+
 /// Everything one poll snapshot needs: the case, intent identity, and
 /// derived display facts. Pure value; `project()` is the only producer.
 struct FlowBarProjection: Equatable, Sendable {
@@ -53,6 +66,7 @@ struct FlowBarProjection: Equatable, Sendable {
             && lhs.sessionID == rhs.sessionID
             && lhs.handsFreeCaption == rhs.handsFreeCaption
             && lhs.recoveryAvailable == rhs.recoveryAvailable
+            && lhs.workText == rhs.workText
     }
 
     let state: FlowBarState
@@ -62,6 +76,27 @@ struct FlowBarProjection: Equatable, Sendable {
     /// pill carries no words outside the transient auto-copy notice).
     let handsFreeCaption: Bool
     let recoveryAvailable: Bool
+    /// Live model-work text (`Cleaning up` / `Using <Preset>`), composed by
+    /// the controller from the work feed — never `project()`-derived. When
+    /// non-nil (and the state allows it) the pill renders the expanding work
+    /// visual instead of the state visual.
+    let workText: String?
+
+    /// Explicit memberwise init (the defaulted `workText` keeps `project()`
+    /// and existing constructions total without churn).
+    nonisolated init(
+        state: FlowBarState,
+        sessionID: UUID?,
+        handsFreeCaption: Bool,
+        recoveryAvailable: Bool,
+        workText: String? = nil
+    ) {
+        self.state = state
+        self.sessionID = sessionID
+        self.handsFreeCaption = handsFreeCaption
+        self.recoveryAvailable = recoveryAvailable
+        self.workText = workText
+    }
 
     /// Pure DictationState → projection. `nonisolated`: the controller
     /// calls it on poll results without actor hops (Swift 6 pattern).

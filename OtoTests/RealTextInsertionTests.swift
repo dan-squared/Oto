@@ -59,6 +59,7 @@ private func scriptedEvents(
         frontmostPID: frontmostPID,
         otoFrontmost: otoFrontmost,
         postPaste: { postedHID(); return true },
+        postCopy: { postedHID(); return true },
         postUndo: { postedHID(); return true },
         sleep: { _ in }
     )
@@ -707,5 +708,90 @@ struct RealTextInsertionTests {
         #expect(undo.count == 1)
         #expect(hid.count == 0)
         #expect(board.string(forType: .string) == "mine")
+    }
+
+    // MARK: - replaceSelection (E2 transforms): plain paste over the live
+    // selection — no undo step (unlike replaceLast). Same fail-closed
+    // gates; failure words are selection-honest ("stands as it was").
+
+    @Test func replaceSelectionUntrustedRefusesUntouched() async {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let before = board.changeCount
+        let hid = HookCount()
+        let events = scriptedEvents(trusted: false, postedHID: { hid.bump() })
+        let service = RealTextInsertion(
+            events: events, timings: fastTimings(), pasteboard: board
+        )
+        let result = await service.replaceSelection("new words", into: anyTarget())
+        guard case .recoverableFailure(let reason) = result else {
+            Issue.record("expected recoverableFailure, got \(result)")
+            return
+        }
+        #expect(reason.contains("stands as it was"))
+        #expect(board.changeCount == before)
+        #expect(hid.count == 0)
+    }
+
+    @Test func replaceSelectionSecureFieldRefusesUntouched() async {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let before = board.changeCount
+        let hid = HookCount()
+        let events = scriptedEvents(postedHID: { hid.bump() })
+        let service = RealTextInsertion(
+            events: events, timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .secureField)
+        )
+        let result = await service.replaceSelection("secret words", into: anyTarget())
+        guard case .recoverableFailure(let reason) = result else {
+            Issue.record("expected recoverableFailure, got \(result)")
+            return
+        }
+        #expect(reason.contains("password"))
+        #expect(board.changeCount == before)
+        #expect(hid.count == 0)
+    }
+
+    @Test func replaceSelectionFocusRaceRefusesUntouched() async {
+        // Frontmost left the target pre-post: the guarded tail refuses and
+        // restores on the spot — the replacement never lands elsewhere.
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let hid = HookCount()
+        let events = scriptedEvents(
+            frontmostPID: { 11111 },
+            postedHID: { hid.bump() }
+        )
+        let service = RealTextInsertion(
+            events: events, timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
+        )
+        let result = await service.replaceSelection("new words", into: anyTarget())
+        guard case .recoverableFailure(let reason) = result else {
+            Issue.record("expected recoverableFailure, got \(result)")
+            return
+        }
+        #expect(reason.contains("stands as it was"))
+        #expect(hid.count == 0)
+        #expect(board.string(forType: .string) == "mine")
+    }
+
+    @Test func replaceSelectionHappyPathPastesOnce() async {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let hid = HookCount()
+        let events = scriptedEvents(postedHID: { hid.bump() })
+        let service = RealTextInsertion(
+            events: events, timings: fastTimings(restore: 0), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
+        )
+        #expect(await service.replaceSelection("new words", into: anyTarget()) == .inserted)
+        #expect(hid.count == 1)
+        #expect(board.string(forType: .string) == "new words")
     }
 }

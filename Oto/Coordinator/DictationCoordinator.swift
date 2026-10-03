@@ -39,14 +39,10 @@ actor DictationCoordinator {
     private var currentSessionID: UUID?
     private var sessionContext: SessionContext?
     private var finishRequested = false
-    /// Slice B input clock: bumped (via the tap→dispatch wiring) for every
-    /// physical event. The upgrade race snapshots it at insertion; any bump
-    /// vetoes the swap. Fire-and-forget by design — only eventual
-    /// consistency at human-typing scale is required.
-    private var inputClock: UInt64 = 0
-    /// Swap window (Slice B): seconds after insertion during which polish
-    /// may swap in. Matrix-tuned starting value; widen only with evidence.
-    nonisolated static let upgradeWindowSeconds: Double = 2
+    /// Auto Cleanup bound (E1): seconds the pre-insertion polish race may
+    /// hold finalization before raw inserts. Matrix-tuned starting value;
+    /// missing it is invisible (raw stands), never mysterious.
+    nonisolated static let autoCleanupTimeout: Duration = .seconds(3)
     /// When the current session entered recording (silent-skip duration
     /// guard). Nil until the starting→recording transition; cleared on
     /// every begin so a stale instant can never green-light a new session.
@@ -75,22 +71,27 @@ actor DictationCoordinator {
     /// duck-off sessions behave exactly as before. Injected (protocol)
     /// so coordinator tests never touch the HAL.
     private let mediaDuck: (any MediaDucking)?
-    /// Slice B upgrade inputs. All nil in existing tests and when unwired —
-    /// every call site is optional, so pre-Slice-B sessions behave exactly
-    /// as before. `behaviorProvider` reads prefs per session (Settings flips
-    /// apply to the next dictation, no restart); `polish` streams cleanup.
+    /// E1 Auto Cleanup inputs. Nil in tests and when unwired — every call
+    /// site is optional, so sessions without them behave exactly as before.
+    /// `behaviorProvider` reads prefs per session (Settings flips apply to
+    /// the next dictation, no restart); `polish` streams cleanup.
     private let polish: (any PolishServing)?
-    private let behaviorProvider: (@Sendable () -> PolishBehavior)?
+    private let behaviorProvider: (@Sendable () -> CleanupBehavior)?
 
     /// Phase 1 observability: state transitions are the only visible trace
     /// of fake sessions (no Flow Bar yet). Watch in Console.app.
     private let log = Logger(subsystem: "app.Oto", category: "coordinator")
 
-    /// Last auto-polish available for Revert (Slice B beat). Set only on a
-    /// successful swap; cleared on next begin and on successful revert.
+    /// Last auto-cleanup available for Revert. Set only when a cleaned text
+    /// inserts; cleared on next begin and on successful revert.
     /// Reading it back on failure keeps Revert retryable; the raw always
     /// survives in History regardless.
     private(set) var lastPolish: LastPolish?
+
+    /// Live work feed for the pill (E1+E2): non-nil while Auto Cleanup
+    /// (`Cleaning up`) runs. The controller polls this next to its existing
+    /// `recoveryText()` read — dictation `state` never carries it.
+    private(set) var currentWork: WorkLabel?
 
     init(
         audio: any AudioCaptureServing,
@@ -102,7 +103,7 @@ actor DictationCoordinator {
         micDeniedOverride: (@Sendable () -> Bool)? = nil,
         mediaDuck: (any MediaDucking)? = nil,
         polish: (any PolishServing)? = nil,
-        behaviorProvider: (@Sendable () -> PolishBehavior)? = nil
+        behaviorProvider: (@Sendable () -> CleanupBehavior)? = nil
     ) {
         self.audio = audio
         self.speech = speech
@@ -122,14 +123,31 @@ actor DictationCoordinator {
         pipeline = TranscriptPipeline(dictionaryRules: rules)
     }
 
-    /// Slice B input-clock bump. Called (fire-and-forget) for every physical
-    /// tap event via the OtoApp wiring. Idempotent, order-free.
-    func noteInput() {
-        inputClock &+= 1
+    /// Current pill work feed (see `currentWork`). Nil when idle.
+    func workLabel() -> WorkLabel? { currentWork }
+
+    /// Cancels a FRESH hold micro-session only (transform combo-wins safety
+    /// net): hold interaction, still starting/recording, younger than the
+    /// bound. Everything else (hands-free, old, finalizing/inserting) is
+    /// untouched. Lossless by construction — pre-insertion cancel discards
+    /// nothing (no transcript exists yet beyond partial audio).
+    func cancelFreshHoldMicroSession(olderThan threshold: Duration = .seconds(1)) async {
+        guard let context = sessionContext,
+              context.interaction == .holdToTalk,
+              currentSessionID == context.id
+        else { return }
+        switch state {
+        case .starting, .recording:
+            break
+        default:
+            return
+        }
+        guard context.startedAt.duration(to: ContinuousClock().now) < threshold else { return }
+        await cancel(context.id)
     }
 
-    /// Slice B: Revert affordance for the menu (one-shot read per open, same
-    /// pattern as `recoveryText`). True while a swapped polish can be
+    /// Revert affordance for the menu (one-shot read per open, same
+    /// pattern as `recoveryText`). True while a cleaned insert can be
     /// reverted to the raw.
     func canRevertPolish() -> Bool { lastPolish != nil }
 
@@ -197,6 +215,7 @@ actor DictationCoordinator {
         // this point is the real services' responsibility (Phase 2);
         // fakes hold no resources.
         currentSessionID = nil
+        currentWork = nil
         state = .cancelled(context)
         log.info("cancelled \(sessionID.uuidString.prefix(8), privacy: .public)")
         await audio.cancel()
@@ -265,8 +284,10 @@ actor DictationCoordinator {
         recordingBeganAt = nil
         recoveryTranscript = nil
         lastPolish = nil
+        currentWork = nil
         state = .starting(context)
         log.info("begin \(context.id.uuidString.prefix(8), privacy: .public) mode=\(String(describing: interaction), privacy: .public) target=\(context.target.bundleIdentifier ?? "?", privacy: .public)")
+        prewarmForSession()
 
         Task { await self.runPreparation(sessionID: context.id) }
         return context.id
@@ -374,6 +395,17 @@ actor DictationCoordinator {
         await mediaDuck?.restore(sessionID: sessionID)
     }
 
+    /// E1 prewarm: the model warms while the user speaks (free seconds).
+    /// Gated on enabled + a real level + availability — all synchronous
+    /// property reads, never a download, never a prompt.
+    private func prewarmForSession() {
+        guard let polish, let behaviorProvider else { return }
+        let behavior = behaviorProvider()
+        guard behavior.enabled, behavior.level != .none else { return }
+        guard polish.availability() == .available else { return }
+        polish.prewarm(job: .cleanup(behavior.level))
+    }
+
     private func finalizeSession(sessionID: UUID, context: SessionContext) async {
         await audio.stop()
 
@@ -431,11 +463,26 @@ actor DictationCoordinator {
             return
         }
 
-        // Opt-in recall: final text only (never audio/partials/clipboard).
-        // The store itself no-ops when history is off. Recorded once here so
-        // inserted, target-gone, and insertion-failed finals are all kept.
+        // E1 Auto Cleanup: bounded pre-insertion race (Whisperflow shape).
+        // The winner inserts exactly once; timeout / error / empty /
+        // identical ⇒ raw inserts with zero ceremony. No swap, no window,
+        // no second write — a miss is invisible, never mysterious.
+        let (final, wasCleaned) = await cleanedText(clean, sessionID: sessionID)
+        guard currentSessionID == sessionID,
+              case .finalizing = state
+        else { return }
+
+        // Opt-in recall: final text + what was said (never audio/partials/
+        // clipboard). The store itself no-ops when history is off. Recorded
+        // once here so inserted, target-gone, and insertion-failed finals
+        // are all kept, each with its raw for Undo AI edit.
         if let history {
-            await history.record(finalText: clean, bundleID: context.target.bundleIdentifier)
+            await history.record(
+                finalText: final,
+                rawText: wasCleaned ? clean : nil,
+                wasCleaned: wasCleaned,
+                bundleID: context.target.bundleIdentifier
+            )
             // Suspension crossed actor isolation: a cancel may have won
             // while recording. Re-check identity before touching targets.
             guard currentSessionID == sessionID else { return }
@@ -456,7 +503,7 @@ actor DictationCoordinator {
         }
 
         state = .inserting(context)
-        let result = await inserter.insert(clean, into: context.target)
+        let result = await inserter.insert(final, into: context.target)
 
         guard currentSessionID == sessionID else { return }
         // Terminal first (cancel-wins over in-flight restore); the switch
@@ -466,76 +513,52 @@ actor DictationCoordinator {
         switch result {
         case .inserted:
             state = .completed(context)
-            log.info("completed, inserted \(clean.count, privacy: .public) chars into \(context.target.bundleIdentifier ?? "?", privacy: .public)")
-            // Detached by design: the race runs POST-terminal (insertion is
-            // done and reported) and must never hold finalization open —
-            // a parked stream (closed gate, slow model) would otherwise
-            // wedge finish(). State guards inside veto anything stale.
-            // Same unstructured-Task precedent as begin()'s runPreparation.
-            Task { await self.maybeUpgradePolished(clean: clean, context: context) }
+            log.info("completed, inserted \(final.count, privacy: .public) chars into \(context.target.bundleIdentifier ?? "?", privacy: .public)")
+            if wasCleaned {
+                lastPolish = LastPolish(raw: clean, polished: final, context: context, at: Date())
+            }
         case .recoverableFailure(let reason):
             // No false success: the transcript stays recoverable.
-            recoveryTranscript = Transcript(text: clean)
+            recoveryTranscript = Transcript(text: final)
             state = .failed(context, .insertionFailed(reason))
             log.info("failed insertion, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public) reason=\(reason, privacy: .public)")
         case .noEditableField:
             // Void-paste divert: focus with nowhere to paste. Same
             // recoverability as insertion failure, distinct case so the
             // catcher (and only the catcher) fires for it.
-            recoveryTranscript = Transcript(text: clean)
+            recoveryTranscript = Transcript(text: final)
             state = .failed(context, .noTextField)
             log.info("failed no-text-field, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
         }
     }
 
-    /// Slice B upgrade race: after a successful insert, polish the text and
-    /// swap it in — but ONLY while the strict window holds (no input since
-    /// insertion, same completed session, inside the time bound, target
-    /// still alive). Any violation cancels: raw stands, nothing is stored
-    /// anywhere, and the polished draft is dropped (raw is already in
-    /// History). Runs post-terminal: it never blocks insertion and can never
-    /// resurrect a superseded session (state guards on every step).
-    private func maybeUpgradePolished(clean: String, context: SessionContext) async {
-        guard let polish, let behaviorProvider else { return }
+    /// E1 Auto Cleanup race: polish the finalized text BEFORE insertion and
+    /// race it against `autoCleanupTimeout`. Returns the text to insert plus
+    /// whether it was rewritten. Fail-open everywhere: None / disabled /
+    /// unavailable / timeout / error / empty / identical ⇒ `(clean, false)`.
+    /// Runs inside finalization (structured, never detached — a parked
+    /// stream must never wedge finish): the timeout task bounds every path,
+    /// and the caller re-checks session identity before inserting.
+    /// `currentWork` feeds the pill for the race duration (cleared in defer
+    /// and in `cancel`, so no path strands the beat).
+    private func cleanedText(_ clean: String, sessionID: UUID) async -> (String, Bool) {
+        guard let polish, let behaviorProvider else { return (clean, false) }
         let behavior = behaviorProvider()
-        // Automatic falls back to manual until Slice C builds it — future
-        // values can never trigger unbuilt behavior.
-        guard behavior.enabled, behavior.mode == .upgrade else { return }
-        guard polish.availability() == .available else { return }
-        let clockAtInsert = inputClock
-        let insertedAt = Date()
-        var polished = ""
-        for await snapshot in polish.streamCleanup(clean) {
-            polished = snapshot
-            // Violation mid-stream: stop consuming immediately (the task
-            // ends here; nothing is published, nothing stored).
-            guard inputClock == clockAtInsert else { return }
-            guard Date().timeIntervalSince(insertedAt) <= Self.upgradeWindowSeconds else { return }
-            guard case .completed(let done) = state, done.id == context.id else { return }
+        guard behavior.enabled, behavior.level != .none else { return (clean, false) }
+        guard polish.availability() == .available else { return (clean, false) }
+        let job = PolishJob.cleanup(behavior.level)
+        currentWork = .cleaningUp
+        defer { currentWork = nil }
+        guard let polished = await racePolishText(
+            polish: polish, text: clean, job: job, timeout: Self.autoCleanupTimeout
+        ), polished != clean else {
+            return (clean, false)
         }
-        guard !polished.isEmpty, polished != clean else { return }
-        guard inputClock == clockAtInsert else { return }
-        guard Date().timeIntervalSince(insertedAt) <= Self.upgradeWindowSeconds else { return }
-        guard case .completed(let done) = state, done.id == context.id else { return }
-        // Fresh liveness: the app may have died while polishing.
-        guard await targetService.isAlive(context.target) else { return }
-        guard case .completed(let done2) = state, done2.id == context.id else { return }
-        switch await inserter.replaceLast(polished, into: context.target) {
-        case .inserted:
-            guard case .completed(let done3) = state, done3.id == context.id else { return }
-            lastPolish = LastPolish(raw: clean, polished: polished, context: context, at: Date())
-            log.info("upgraded to polished \(polished.count, privacy: .public) chars")
-        case .recoverableFailure(let reason):
-            // Raw stands in the field (and in History). The polished draft
-            // is dropped — a missed magic moment, never data loss.
-            log.info("upgrade swap refused (\(reason), privacy: .public); raw stands")
-        case .noEditableField:
-            log.info("upgrade swap refused (no editable field); raw stands")
-        }
+        return (polished, true)
     }
 
-    /// Slice B undo: re-paste the raw over the swapped polish. Idempotent —
-    /// safe to call repeatedly and safe when no swap happened. On success
+    /// E1 undo: re-paste the raw over the cleaned insert. Idempotent —
+    /// safe to call repeatedly and safe when no cleanup ran. On success
     /// the beat clears; on failure lastPolish is KEPT so Revert stays
     /// retryable (raw survives in History regardless).
     func revertLastPolish() async {
@@ -552,7 +575,7 @@ actor DictationCoordinator {
     }
 }
 
-/// One completed auto-polish available for Revert (Slice B beat).
+/// One completed auto-cleanup available for Revert.
 struct LastPolish: Sendable {
     var raw: String
     var polished: String

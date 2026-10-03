@@ -77,6 +77,26 @@ enum EditableFocus: Equatable, Sendable {
     nonisolated static func verdictForFocusError(_ error: AXError) -> EditableFocus {
         error == .noValue ? .noField : .unknown
     }
+
+    /// Selected-text probe resolution (canvas-editor fix): an element that
+    /// exposes selected text (or a selected range) is text-capable even
+    /// when its role read as non-text — canvas editors draw their own
+    /// caret under generic roles. Pure — unit-tested. Secure fields still
+    /// refuse (they expose selection too — refusal wins, pinned by test);
+    /// editable/unknown pass through untouched.
+    nonisolated static func resolveWithSelectionProbe(
+        verdict: EditableFocus, hasSelectedText: Bool
+    ) -> EditableFocus {
+        guard hasSelectedText else { return verdict }
+        switch verdict {
+        case .secureField:
+            return .secureField
+        case .noField:
+            return .unknown
+        case .editable, .unknown:
+            return verdict
+        }
+    }
 }
 
 /// Seam: the insertion path injects this; tests stub verdicts without AX.
@@ -144,6 +164,43 @@ enum TerminalEmulators: Sendable {
     }
 }
 
+/// Canvas editors whose steady state publishes no AX focus (the caret is
+/// drawn by the app, not the accessibility tree): a persistent void there
+/// is uninformative — proceed (legacy path) instead of diverting. Modeled
+/// exactly on `TerminalEmulators` (same shape, same fail-closed rules):
+/// secure fields still refuse everywhere, non-canvas voids still divert,
+/// dead pids (nil bundle) never proceed.
+enum CanvasEditors: Sendable {
+    nonisolated static let bundleIDs: Set<String> = [
+        "com.figma.Desktop",
+    ]
+
+    nonisolated static func isCanvas(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return bundleIDs.contains(bundleID)
+    }
+
+    /// Owning app's bundle ID for pid triage — shared with the terminal
+    /// precedent (`TerminalEmulators.bundleID(for:)`), same fail-closed
+    /// nil for dead pids.
+    nonisolated static func proceedsVoid(bundleID: String?) -> Bool {
+        isCanvas(bundleID: bundleID)
+    }
+
+    /// Canvas fallback applied to a classified verdict: a divert in a
+    /// canvas editor proceeds (legacy path) — every other verdict passes
+    /// through untouched, notably `.secureField` (refusal wins even on
+    /// canvas).
+    nonisolated static func fallback(
+        verdict: EditableFocus, bundleID: String?
+    ) -> EditableFocus {
+        guard verdict == .noField, isCanvas(bundleID: bundleID) else {
+            return verdict
+        }
+        return .unknown
+    }
+}
+
 struct LiveFocusCheck: FocusChecking {
     /// Overall budget for the bounded patience loop below. Past this the
     /// verdict is `.unknown` (legacy behavior), not a hang.
@@ -155,9 +212,11 @@ struct LiveFocusCheck: FocusChecking {
 
     /// Injectable reader for deterministic retry tests. Production uses the
     /// live system-wide read; tests script verdict sequences without AX.
-    var reader: @Sendable (pid_t) -> (verdict: EditableFocus, axError: AXError?)
+    /// Triple: verdict + raw error + selected-text presence (canvas-editor
+    /// probe — content never crosses, only the boolean).
+    var reader: @Sendable (pid_t) -> (verdict: EditableFocus, axError: AXError?, hasSelectedText: Bool)
 
-    init(reader: @Sendable @escaping (pid_t) -> (verdict: EditableFocus, axError: AXError?) = { LiveFocusCheck.liveRead(pid: $0) }) {
+    init(reader: @Sendable @escaping (pid_t) -> (verdict: EditableFocus, axError: AXError?, hasSelectedText: Bool) = { LiveFocusCheck.liveRead(pid: $0) }) {
         self.reader = reader
     }
 
@@ -177,15 +236,15 @@ struct LiveFocusCheck: FocusChecking {
 
     private nonisolated(unsafe) static let focusLog = Logger(subsystem: "app.Oto", category: "focus")
 
-    nonisolated static func logVerdict(pid: pid_t, verdict: EditableFocus, axError: AXError?, timedOut: Bool, attempt: Int? = nil) {
+    nonisolated static func logVerdict(pid: pid_t, verdict: EditableFocus, axError: AXError?, timedOut: Bool, selected: Bool = false, attempt: Int? = nil) {
         // Raw code, not the opaque struct description (which prints as
         // `Optional(__C.AXError)` and hides the value that decides the
         // sandbox-denial vs per-app-behavior question).
         let code = axError.map { String($0.rawValue) } ?? "nil"
         if let attempt {
-            focusLog.info("focus pid=\(pid, privacy: .public) attempt=\(attempt, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) timeout=\(timedOut, privacy: .public)")
+            focusLog.info("focus pid=\(pid, privacy: .public) attempt=\(attempt, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) sel=\(selected, privacy: .public) timeout=\(timedOut, privacy: .public)")
         } else {
-            focusLog.info("focus pid=\(pid, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) timeout=\(timedOut, privacy: .public)")
+            focusLog.info("focus pid=\(pid, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) sel=\(selected, privacy: .public) timeout=\(timedOut, privacy: .public)")
         }
     }
 
@@ -214,7 +273,7 @@ struct LiveFocusCheck: FocusChecking {
                 while !settled {
                     attempt += 1
                     let detail = reader(pid)
-                    Self.logVerdict(pid: pid, verdict: detail.verdict, axError: detail.axError, timedOut: false, attempt: attempt)
+                    Self.logVerdict(pid: pid, verdict: detail.verdict, axError: detail.axError, timedOut: false, selected: detail.hasSelectedText, attempt: attempt)
                     let transientVoid = detail.verdict == .noField
                         && detail.axError == .noValue
                         && attempt < Self.maxAttempts
@@ -251,49 +310,93 @@ struct LiveFocusCheck: FocusChecking {
         syncCheckDetail(pid: pid).verdict
     }
 
+    /// Selected-text probe (canvas-editor fix): true when the focused
+    /// element answers `AXSelectedText` or `AXSelectedTextRange` — the
+    /// Hex-context read, reused here as text-capability evidence. The value
+    /// is released unread (presence only — content never crosses); any
+    /// failure means "no signal", never error.
+    nonisolated static func selectedTextPresent(element: AXUIElement) -> Bool {
+        for attribute in [kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute] {
+            var value: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+            _ = value
+            if error == .success { return true }
+        }
+        return false
+    }
+
+    /// Single mapping funnel for both readers: probe upgrade, then canvas
+    /// fallback. Every return site in `liveRead`/`syncCheckDetail` funnels
+    /// here, so no path can bypass either rule. `element` is whatever
+    /// focused element is in hand (nil on void/error paths — no probe
+    /// without an element).
+    nonisolated static func finalize(
+        pid: pid_t,
+        verdict: EditableFocus,
+        axError: AXError?,
+        element: AXUIElement?
+    ) -> (verdict: EditableFocus, axError: AXError?, hasSelectedText: Bool) {
+        let selected = element.map(selectedTextPresent) ?? false
+        let probed = EditableFocus.resolveWithSelectionProbe(verdict: verdict, hasSelectedText: selected)
+        let bundleID = TerminalEmulators.bundleID(for: pid)
+        let out: EditableFocus
+        if axError == .noValue, CanvasEditors.proceedsVoid(bundleID: bundleID) {
+            out = .unknown
+        } else {
+            out = CanvasEditors.fallback(verdict: probed, bundleID: bundleID)
+        }
+        return (out, axError, selected)
+    }
+
     /// Live reader: system-wide focused element first (WindowServer-level
     /// focus, immune to stale per-app trees), ownership-verified by pid,
     /// with the legacy per-app read as fallback when system-wide errors
     /// non-noValue (preserving today's `.unknown` degrade path exactly).
     /// `noValue` is returned raw so the caller can retry transient voids.
-    nonisolated static func liveRead(pid: pid_t) -> (verdict: EditableFocus, axError: AXError?) {
+    /// Every exit funnels through `finalize` (probe + canvas rules).
+    nonisolated static func liveRead(pid: pid_t) -> (verdict: EditableFocus, axError: AXError?, hasSelectedText: Bool) {
         let wide = AXUIElementCreateSystemWide()
         var focused: CFTypeRef?
         let focusError = AXUIElementCopyAttributeValue(
             wide, kAXFocusedUIElementAttribute as CFString, &focused
         )
         guard focusError == .success else {
+            if focusError == .noValue,
+               TerminalEmulators.proceedsVoid(bundleID: TerminalEmulators.bundleID(for: pid))
+            {
+                return finalize(pid: pid, verdict: .unknown, axError: focusError, element: nil)
+            }
             if focusError == .noValue {
-                // Terminal void: emulators publish focus transiently, so a
-                // persistent void here is uninformative — proceed (secure
-                // gates, race guard, and clipboard restore still apply).
-                // Everywhere else: true void diverts.
-                if TerminalEmulators.proceedsVoid(bundleID: TerminalEmulators.bundleID(for: pid)) {
-                    return (.unknown, focusError)
-                }
-                return (.noField, focusError)
+                return finalize(
+                    pid: pid,
+                    verdict: EditableFocus.verdictForFocusError(focusError),
+                    axError: focusError,
+                    element: nil
+                )
             }
             return syncCheckDetail(pid: pid)
         }
         guard let raw = focused,
               CFGetTypeID(raw) == AXUIElementGetTypeID()
-        else { return (.unknown, nil) }
+        else { return finalize(pid: pid, verdict: .unknown, axError: nil, element: nil) }
         let element = unsafeDowncast(raw, to: AXUIElement.self)
         var owner: pid_t = 0
         guard AXUIElementGetPid(element, &owner) == .success else {
-            return (.unknown, nil)
+            return finalize(pid: pid, verdict: .unknown, axError: nil, element: nil)
         }
         guard owner == pid else {
             // Focus lives in another app: ambiguity here, not a void —
             // the frontmostPID race guard owns that failure with the
             // better message.
-            return (.unknown, nil)
+            return finalize(pid: pid, verdict: .unknown, axError: nil, element: nil)
         }
         var roleRaw: CFTypeRef?
         let roleError = AXUIElementCopyAttributeValue(
             element, kAXRoleAttribute as CFString, &roleRaw
         )
-        guard roleError == .success else { return (.unknown, roleError) }
+        guard roleError == .success else {
+            return finalize(pid: pid, verdict: .unknown, axError: roleError, element: element)
+        }
         let role = roleRaw as? String
         let verdict = TerminalEmulators.fallback(
             verdict: EditableFocus.classify(
@@ -301,7 +404,7 @@ struct LiveFocusCheck: FocusChecking {
             ),
             role: role, bundleID: TerminalEmulators.bundleID(for: pid)
         )
-        return (verdict, nil)
+        return finalize(pid: pid, verdict: verdict, axError: nil, element: element)
     }
 
     /// Secure-field subrole read, gated on text roles (the only ones it
@@ -320,10 +423,11 @@ struct LiveFocusCheck: FocusChecking {
     }
 
     /// Detail variant: identical verdict, plus the raw AXError for the
-    /// verdict log (unknown-cause diagnosis). v5: no-value IS the void
-    /// case (nothing focused); any other error is ambiguity (legacy
-    /// proceed). Decided here, where the AXError is still in hand.
-    nonisolated static func syncCheckDetail(pid: pid_t) -> (verdict: EditableFocus, axError: AXError?) {
+    /// verdict log (unknown-cause diagnosis) and the selected-text bit.
+    /// v5: no-value IS the void case (nothing focused); any other error is
+    /// ambiguity (legacy proceed). Decided here, where the AXError is still
+    /// in hand. Every exit funnels through `finalize` (probe + canvas).
+    nonisolated static func syncCheckDetail(pid: pid_t) -> (verdict: EditableFocus, axError: AXError?, hasSelectedText: Bool) {
         let app = AXUIElementCreateApplication(pid)
         var focused: CFTypeRef?
         let focusError = AXUIElementCopyAttributeValue(
@@ -333,13 +437,18 @@ struct LiveFocusCheck: FocusChecking {
             if focusError == .noValue,
                TerminalEmulators.proceedsVoid(bundleID: TerminalEmulators.bundleID(for: pid))
             {
-                return (.unknown, focusError)
+                return finalize(pid: pid, verdict: .unknown, axError: focusError, element: nil)
             }
-            return (EditableFocus.verdictForFocusError(focusError), focusError)
+            return finalize(
+                pid: pid,
+                verdict: EditableFocus.verdictForFocusError(focusError),
+                axError: focusError,
+                element: nil
+            )
         }
         guard let raw = focused,
             CFGetTypeID(raw) == AXUIElementGetTypeID()
-        else { return (.unknown, nil) }
+        else { return finalize(pid: pid, verdict: .unknown, axError: nil, element: nil) }
         // Safe: type ID verified above (RealTargetCapture.copyElement
         // precedent — conditional casts are trivially true for CF types,
         // unconditional `as` is unexpressible, so ID-gate + downcast).
@@ -348,7 +457,9 @@ struct LiveFocusCheck: FocusChecking {
         let roleError = AXUIElementCopyAttributeValue(
             element, kAXRoleAttribute as CFString, &roleRaw
         )
-        guard roleError == .success else { return (.unknown, roleError) }
+        guard roleError == .success else {
+            return finalize(pid: pid, verdict: .unknown, axError: roleError, element: element)
+        }
         let role = roleRaw as? String
         let verdict = TerminalEmulators.fallback(
             verdict: EditableFocus.classify(
@@ -356,6 +467,6 @@ struct LiveFocusCheck: FocusChecking {
             ),
             role: role, bundleID: TerminalEmulators.bundleID(for: pid)
         )
-        return (verdict, nil)
+        return finalize(pid: pid, verdict: verdict, axError: nil, element: element)
     }
 }

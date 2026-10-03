@@ -11,6 +11,7 @@
 //  phases — deterministic, no wall-clock in tests).
 //
 
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -83,6 +84,37 @@ enum VisualizerMath {
         case .inserting: 95.7
         case .message: 92.4
         }
+    }
+
+    // MARK: - Work pill (E2: expanding one-word capsule, no divider)
+
+    /// Work-pill chrome (pt). Layout: [padding][text][gap][spinner][padding].
+    /// The pill fits its text — the fixed table above never applies to work.
+    nonisolated static let workPadding: CGFloat = 8.25
+    nonisolated static let workSpinnerGap: CGFloat = 8
+    /// Text slack: the text cell needs a few points beyond raw measure or
+    /// it ellipsizes on exact fit. Counted in BOTH the width math and the
+    /// label layout (single source) — exact-fit truncation can never recur.
+    nonisolated static let workTextSlack: CGFloat = 6
+    nonisolated static let workMaxWidth: CGFloat = 260
+
+    /// Pill font for work text (matches the layer label).
+    nonisolated static var workFont: NSFont { .systemFont(ofSize: 12) }
+
+    /// Measured width of work text at the pill font. Pure over AppKit font
+    /// metrics (headless-safe: no window needed) — unit-tested.
+    nonisolated static func measureWorkText(_ text: String) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: workFont]).width
+    }
+
+    /// Dynamic work-pill width: measured text + slack + chrome, capped
+    /// above only. NO minimum: the pill hugs content exactly (a minimum
+    /// pads short labels with dead space — the reported defect — and the
+    /// pill is non-interactive, so no tap-target floor applies).
+    nonisolated static func workPillWidth(textWidth: CGFloat) -> CGFloat {
+        let chrome = workPadding * 2 + workSpinnerGap
+            + spinnerSize + workTextSlack
+        return min(workMaxWidth, ceil(textWidth) + chrome)
     }
 
     // MARK: - Idle sway (v6: "waves move a bit")

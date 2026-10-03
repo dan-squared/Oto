@@ -183,8 +183,10 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.configuration.handsFree == .unassignedHandsFree())
 
         // Same shortcut in both slots, staged explicitly: occupy
-        // hands-free with a combo, then refuse it in hold.
-        let mods = CarbonModifiers.command | CarbonModifiers.control
+        // hands-free with a combo from a DIFFERENT family than the hold
+        // (Rule B refuses same-family pairs), then refuse it in hold.
+        // (Factory hold is Right Option ⇒ stage a Command combo here.)
+        let mods = CarbonModifiers.command
         let staged = ShortcutTrigger(
             kind: combo(kVK_ANSI_G, modifiers: mods),
             interaction: .handsFree

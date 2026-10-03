@@ -320,7 +320,7 @@ struct ShortcutModal: View {
             set: { choice in
                 switch choice {
                 case .holdKey:
-                    stage(kind: .modifierHold(keyCode: UInt16(kVK_RightOption)), slot: slot)
+                    stage(kind: ShortcutTrigger.defaultHoldToTalk().kind, slot: slot)
                 case .dictationKey:
                     stage(kind: .functionKey(codes: [Int64(kVK_F5), 176]), slot: slot)
                 case .combo:
@@ -440,7 +440,7 @@ struct ShortcutModal: View {
         let result = slot == .hold ? preview.hold : preview.handsFree
         if result == .blocked {
             setMessage(
-                "Same as your \(otherTitle(for: slot)) shortcut — pick a different one or swap.",
+                "Already in use by \(otherTitle(for: slot)) — pick a different one or swap.",
                 slot: slot
             )
             setShowSwap(true, slot: slot)
@@ -474,7 +474,7 @@ struct ShortcutModal: View {
             )
             if result == .blocked {
                 setMessage(
-                    "Same as your \(otherTitle(for: .hold)) shortcut — pick a different one or swap.",
+                    "Already in use by \(otherTitle(for: .hold)) — pick a different one or swap.",
                     slot: .hold
                 )
                 setShowSwap(true, slot: .hold)
@@ -491,7 +491,7 @@ struct ShortcutModal: View {
             )
             if result == .blocked {
                 setMessage(
-                    "Same as your \(otherTitle(for: .handsFree)) shortcut — pick a different one or swap.",
+                    "Already in use by \(otherTitle(for: .handsFree)) — pick a different one or swap.",
                     slot: .handsFree
                 )
                 setShowSwap(true, slot: .handsFree)

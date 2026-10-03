@@ -579,12 +579,9 @@ final class ShortcutDispatch {
     /// what route(.begin) stores on a real key-down.
     func seedActiveSessionForTests(_ id: UUID) { activeSessionID = id }
 
-    /// Slice B wiring: every physical tap event (matched or not) pushes one
-    /// input-clock bump to the coordinator. Set once at composition.
-    func setInputClock(_ clock: @Sendable @escaping () -> Void) { hidMonitor.onAnyInput = clock }
-    func receiveEscapeForTests() { receiveEscape() }
     /// Test hook: drive a backend event for a slot without hardware.
     func receiveForTests(_ event: ShortcutEvent, from slot: ShortcutSlot) { receive(event, from: slot) }
+    func receiveEscapeForTests() { receiveEscape() }
     /// Test hook: deterministic time-injected variant (double-tap tests).
     func receiveForTests(_ event: ShortcutEvent, from slot: ShortcutSlot, at now: ContinuousClock.Instant) {
         receive(event, from: slot, at: now)

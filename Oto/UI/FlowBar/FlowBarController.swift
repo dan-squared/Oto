@@ -48,6 +48,10 @@ final class FlowBarController {
     let model: FlowBarModel
     private let log = Logger(subsystem: "app.Oto", category: "flowbar")
     private let coordinator: DictationCoordinator
+    /// E2 transform feed (nil in tests and when unwired — the coordinator
+    /// feed alone drives the cleanup beat). Optional so every existing
+    /// construction compiles untouched.
+    private let runner: TransformRunner?
     private let analyzer: AudioSpectrumAnalyzer
     private let box: SpectrumFeedBox
     /// Internal for headless transition tests (@testable).
@@ -81,6 +85,7 @@ final class FlowBarController {
     nonisolated static let overLimitDuration: TimeInterval = 2.5
 
     /// `pasteboard` is injectable so tests never touch the user's clipboard.
+    /// `runner` is optional (E2 transforms): nil in tests and pre-E2 hosts.
     init(
         coordinator: DictationCoordinator,
         analyzer: AudioSpectrumAnalyzer,
@@ -88,6 +93,7 @@ final class FlowBarController {
         modal: NoTargetModalController,
         permission: PermissionModalController,
         pasteboard: NSPasteboard = .general,
+        runner: TransformRunner? = nil,
         isMicDenied: @escaping () -> Bool = { PermissionsManager().microphoneStatus() == .denied }
     ) {
         self.coordinator = coordinator
@@ -96,6 +102,7 @@ final class FlowBarController {
         self.modal = modal
         self.permission = permission
         self.pasteboard = pasteboard
+        self.runner = runner
         self.isMicDenied = isMicDenied
         self.model = FlowBarModel()
     }
@@ -163,14 +170,31 @@ final class FlowBarController {
         model.motionFrozen = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         model.update(projection: baseProjection)
 
+        // E2 work feed, read BEFORE the state-change gate below: work
+        // appear/disappear must invalidate a pending hide exactly like a
+        // state change does (otherwise a second transform lands inside the
+        // previous melt and never paints). Recording/starting never show
+        // work (transforms are suspended while recording; cleanup never
+        // runs while recording).
+        let workText: String?
+        if Self.workAllows(state: state) {
+            if let runnerWork = await runner?.currentWorkLabel() {
+                workText = workPillText(runnerWork)
+            } else {
+                workText = await coordinator.workLabel().map(workPillText)
+            }
+        } else {
+            workText = nil
+        }
+
         // State change invalidates any pending fade-hide first — but ONLY
         // when the new target needs the panel. Hidden→hidden moves
         // (completed→idle) let the scheduled melt ride; cancelling there
         // would hide→reshow flicker on the very next poll (v6).
-        let stateKey = "\(state)-\(baseProjection.sessionID?.uuidString ?? "nil")"
+        let stateKey = "\(state)-\(baseProjection.sessionID?.uuidString ?? "nil")-work:\(workText ?? "-")"
         if stateKey != lastStateKey {
             lastStateKey = stateKey
-            if baseProjection.state != .hidden {
+            if baseProjection.state != .hidden || workText != nil {
                 if hideTask != nil, parkedForAdoption {
                     // Adoption: a new session landed inside the parked
                     // window (double-tap converts) — keep the live panel,
@@ -192,26 +216,47 @@ final class FlowBarController {
         // route above may have just armed it. Model keeps base truth
         // (failed/hidden); only pixels take the override - same panel,
         // same size, a re-render that never hide-shows.
-        let projection: FlowBarProjection
+        let routed: FlowBarProjection
         if baseProjection.state == .hidden,
            overLimitText != nil,
            let until = overLimitUntil,
            Date() < until
         {
-            projection = FlowBarProjection(
+            routed = FlowBarProjection(
                 state: .message, sessionID: nil,
                 handsFreeCaption: false,
                 recoveryAvailable: baseProjection.recoveryAvailable
             )
         } else {
-            projection = baseProjection
+            routed = baseProjection
         }
+        // E2 work beat: live model work overrides the state visual (same
+        // controller-latch pattern as the message above — the coordinator
+        // owns no pill state for this either). `workText` was read before
+        // the state-change gate so it participates in hide invalidation.
+        let projection = FlowBarProjection(
+            state: routed.state, sessionID: routed.sessionID,
+            handsFreeCaption: routed.handsFreeCaption,
+            recoveryAvailable: routed.recoveryAvailable,
+            workText: workText
+        )
         syncPermissionModal(state: state)
         await syncAnalyzer(state: state)
         syncPanel(state: state, projection: projection)
     }
 
     // MARK: - Analyzer arm/disarm (recording only)
+
+    /// Pure gate: work beats never render over recording/starting. Pinned
+    /// by test (projection-level, no window).
+    nonisolated static func workAllows(state: DictationState) -> Bool {
+        switch state {
+        case .starting, .recording:
+            return false
+        default:
+            return true
+        }
+    }
 
     private func syncAnalyzer(state: DictationState) async {
         let recording: Bool
@@ -231,8 +276,10 @@ final class FlowBarController {
     private func syncPanel(state: DictationState, projection: FlowBarProjection) {
         // v6 vanish path: no end-state pixels. The first hidden poll after a
         // visible state melts the loader straight out (generation-guarded);
-        // later hidden polls are no-ops.
-        if projection.state == .hidden {
+        // later hidden polls are no-ops. Live work with no dictation state
+        // skips this branch and takes the show path below — the pill is the
+        // transform's session.
+        if projection.state == .hidden && projection.workText == nil {
             // Drag owns the frame: cancel a pending melt instead of
             // scheduling one — the drop's next poll resumes normal logic.
             if panel?.isDragging == true {
@@ -306,8 +353,17 @@ final class FlowBarController {
             panel?.hide()
             return
         }
-        let width: CGFloat = VisualizerMath.panelWidth(for: projection.state)
-        guard projection.state != .hidden && width > 0 else {
+        let width: CGFloat
+        if let workText = projection.workText {
+            // Work pill fits its text (measured, clamped) — the fixed
+            // table never applies to work.
+            width = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(workText))
+        } else {
+            width = VisualizerMath.panelWidth(for: projection.state)
+        }
+        // Work may render with no dictation state at all (transforms run
+        // outside sessions — the pill is the session).
+        guard (projection.state != .hidden || projection.workText != nil) && width > 0 else {
             panel?.hide()
             return
         }
@@ -327,7 +383,11 @@ final class FlowBarController {
                 position: position
             )
         }
-        if let visual = PillVisual.forState(projection.state) {
+        // One visual per poll: live work wins over the state visual (same
+        // single render path — never a state render followed by a work
+        // render, which would flicker through two group fades).
+        let visual: PillVisual? = projection.workText != nil ? .work : PillVisual.forState(projection.state)
+        if let visual {
             // Vsync values loop owns bar transforms while bars are live;
             // the poll keeps group switching + geometry only (liveValues).
             let live = visual == .bars && !model.motionFrozen
@@ -335,8 +395,8 @@ final class FlowBarController {
             panel?.render(
                 visual: visual,
                 values: model.sample.values,
-                text: projection.state == .message ? overLimitText : nil,
-                centerText: projection.state == .message,
+                text: projection.workText ?? (projection.state == .message ? overLimitText : nil),
+                centerText: projection.workText == nil && projection.state == .message,
                 reduceMotion: model.motionFrozen,
                 animated: !shrink,
                 liveValues: live

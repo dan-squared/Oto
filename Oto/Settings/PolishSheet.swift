@@ -76,7 +76,7 @@ struct PolishSheet: View {
         .frame(minWidth: 420)
         .task {
             var got = false
-            for await snapshot in polish.streamCleanup(entry.finalText) {
+            for await snapshot in polish.streamCleanup(entry.finalText, job: .cleanup(.light)) {
                 draft = snapshot
                 got = true
             }

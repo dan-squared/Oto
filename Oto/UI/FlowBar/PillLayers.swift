@@ -26,6 +26,12 @@ enum PillVisual: Equatable {
     case dots
     case dotsSpinner
     case message
+    /// E2 live-model work: joint label + divider + spinner layout at a
+    /// measured dynamic width (`Cleanup` / preset name — one word max).
+    /// Transient working state (preparing/recording family) — controller-latched from
+    /// the work feed, never state-mapped (same as `.message`), never an
+    /// end-state or error pixel (v6/v7 rules).
+    case work
 
     /// Pill case → layer group. Nil renders nothing (hidden).
     /// v7: failures never reach the pill (concise menu status owns them).
@@ -207,10 +213,14 @@ final class PillContentView: NSView {
         for (i, dot) in chaseLayers.enumerated() {
             dot.position = CGPoint(x: dotsX + CGFloat(i) * VisualizerMath.chasePitch + VisualizerMath.chaseDot / 2, y: midY)
         }
-        spinner.setFrameOrigin(NSPoint(
-            x: dotsX + dotsBlock + 6.6,
-            y: midY - VisualizerMath.spinnerSize / 2
-        ))
+        // Work positions its own spinner in update() (text-measured geometry);
+        // the dots-block origin below never applies to it.
+        if currentVisual != .work {
+            spinner.setFrameOrigin(NSPoint(
+                x: dotsX + dotsBlock + 6.6,
+                y: midY - VisualizerMath.spinnerSize / 2
+            ))
+        }
 
         // Message label fills between padding.
         label.frame = CGRect(
@@ -268,7 +278,7 @@ final class PillContentView: NSView {
             startBreatheAnimation()
         case .dots, .dotsSpinner:
             startChaseAnimation()
-        case .message, .none:
+        case .message, .work, .none:
             break
         }
         motionVisual = visual
@@ -388,6 +398,30 @@ final class PillContentView: NSView {
             f.origin.x = centerText ? (currentWidth - f.size.width) / 2 : Self.padding
             f.origin.y = max(0, (h - f.size.height) / 2)
             label.frame = f
+        } else if currentVisual == .work {
+            // Joint layout: [padding][text][gap][spinner][padding], matching
+            // VisualizerMath.workPillWidth chrome (same slack — single
+            // source, exact-fit truncation can never recur).
+            if let text { label.stringValue = text }
+            label.alignment = .left
+            label.sizeToFit()
+            let h = VisualizerMath.pillHeight
+            let measured = ceil(VisualizerMath.measureWorkText(label.stringValue))
+                + VisualizerMath.workTextSlack
+            let chromeTail = VisualizerMath.workPadding
+                + VisualizerMath.workSpinnerGap
+                + VisualizerMath.spinnerSize
+                + VisualizerMath.workPadding
+            let labelW = min(measured, max(0, currentWidth - chromeTail))
+            let labelH = min(label.frame.size.height, h)
+            label.frame = CGRect(
+                x: VisualizerMath.workPadding, y: max(0, (h - labelH) / 2),
+                width: labelW, height: labelH
+            )
+            spinner.setFrameOrigin(NSPoint(
+                x: VisualizerMath.workPadding + labelW + VisualizerMath.workSpinnerGap,
+                y: h / 2 - VisualizerMath.spinnerSize / 2
+            ))
         }
         if reduceMotion {
             // Frozen: statics only, no animations (Reduce Motion contract).
@@ -437,9 +471,9 @@ final class PillContentView: NSView {
         } else {
             ensureMotion(for: currentVisual)
         }
-        if currentVisual == .dotsSpinner, !reduceMotion { spinner.startAnimation(nil) }
+        if currentVisual == .dotsSpinner || currentVisual == .work, !reduceMotion { spinner.startAnimation(nil) }
         else { spinner.stopAnimation(nil) }
-        spinner.isHidden = reduceMotion || currentVisual != .dotsSpinner
+        spinner.isHidden = reduceMotion || (currentVisual != .dotsSpinner && currentVisual != .work)
     }
 
     /// Vsync values path (display link owns delivery): instant 1:1 sets,
@@ -472,8 +506,8 @@ final class PillContentView: NSView {
         let dotsOn = visual == .dots || visual == .dotsSpinner
         chaseLayers.forEach { $0.opacity = dotsOn ? $0.opacity : 0 }
         CATransaction.commit()
-        label.isHidden = visual != .message
-        if visual != .dotsSpinner { spinner.stopAnimation(nil); spinner.isHidden = true }
+        label.isHidden = visual != .message && visual != .work
+        if visual != .dotsSpinner && visual != .work { spinner.stopAnimation(nil); spinner.isHidden = true }
     }
 
     // MARK: - Drag and snap (Phase 8)
@@ -511,6 +545,12 @@ final class PillContentView: NSView {
 
     func barOpacity(_ i: Int) -> Float { barLayers[i].opacity }
     func dotOpacity() -> Float { recordDot.opacity }
+    /// Work joint-layout frames (label, spinner) for the frame-containment
+    /// test: the spinner must sit snug to the right edge (no dead space
+    /// beyond padding) with the full label left of it.
+    func workLayoutFrames() -> (label: CGRect, spinner: CGRect) {
+        (label.frame, spinner.frame)
+    }
     func chaseOpacity(_ i: Int) -> Float { chaseLayers[i].opacity }
     func barScaleY(_ i: Int) -> CGFloat { barLayers[i].transform.m22 }
     func spinnerHidden() -> Bool { spinner.isHidden }

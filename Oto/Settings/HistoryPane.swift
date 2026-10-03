@@ -75,6 +75,9 @@ struct HistoryPane: View {
                                 if polishActionVisible(availability: polishAvailability, enabled: intelligenceEnabled) {
                                     OtoQuick("Clean up") { polishEntry = entry }
                                 }
+                                if entry.wasCleaned, entry.rawText != nil {
+                                    OtoQuick("Undo AI edit") { undoCleanup(entry) }
+                                }
                                 OtoQuick("Delete", tint: .red) {
                                     Task { await history.remove(id: entry.id) }
                                 }
@@ -160,5 +163,13 @@ struct HistoryPane: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.finalText, forType: .string)
         feedback = "Copied — paste with ⌘V."
+    }
+
+    /// Undo AI edit (E1): restores the raw wording on a cleaned entry.
+    private func undoCleanup(_ entry: HistoryEntry) {
+        Task {
+            await history.undoCleanup(id: entry.id)
+            feedback = "Original wording restored."
+        }
     }
 }
