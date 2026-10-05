@@ -193,4 +193,56 @@ struct PillLayersTests {
         pill.show(visual: .message, animated: false)
         #expect(pill.spinnerHidden())
     }
+
+    @Test func workVerbShimmers() {
+        // Shine sweep on the work verb: bright overlay duplicates the base
+        // text+frame, base dims, wave installed — and repolls never restart
+        // it mid-flight.
+        let text = "Formalizing"
+        let width = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(text))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: 26.4))
+        pill.show(visual: .work)
+        pill.layout(width: width)
+        pill.update(values: [], text: text, centerText: false, reduceMotion: false)
+        #expect(pill.shineHasAnimation())
+        #expect(pill.shineOverlayText() == text)
+        #expect(!pill.shineOverlayHidden())
+        #expect(pill.shineOverlayFrame() == pill.workLayoutFrames().label)
+        #expect(pill.shineGradientIsHorizontal())
+        #expect(pill.shineSweepIsLinear())
+        #expect(abs(pill.shineBaseAlpha() - VisualizerMath.shineBaseAlpha) < 0.001)
+        // Repoll with identical content: still exactly the installed wave.
+        pill.update(values: [], text: text, centerText: false, reduceMotion: false)
+        #expect(pill.shineHasAnimation())
+        #expect(pill.shineOverlayText() == text)
+    }
+
+    @Test func leavingWorkKillsShine() {
+        // Leaving .work tears down the sweep AND restores the base label to
+        // full white (the Copied notice shares the label — it must never
+        // inherit the dim).
+        let text = "Polishing"
+        let width = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(text))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: 26.4))
+        pill.show(visual: .work)
+        pill.layout(width: width)
+        pill.update(values: [], text: text, centerText: false, reduceMotion: false)
+        #expect(pill.shineHasAnimation())
+        pill.show(visual: .message, animated: false)
+        pill.layout(width: 165)
+        pill.update(values: [], text: "No audio heard.", centerText: false, reduceMotion: false)
+        #expect(!pill.shineHasAnimation())
+        #expect(pill.shineOverlayHidden())
+        #expect(abs(pill.shineBaseAlpha() - 1.0) < 0.001)
+    }
+
+    @Test func messageNeverShimmers() {
+        // The Copied notice is a confirmation, not working state — no sweep.
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: 165, height: 26.4))
+        pill.show(visual: .message)
+        pill.layout(width: 165)
+        pill.update(values: [], text: "No audio heard.", centerText: false, reduceMotion: false)
+        #expect(!pill.shineHasAnimation())
+        #expect(pill.shineOverlayHidden())
+    }
 }

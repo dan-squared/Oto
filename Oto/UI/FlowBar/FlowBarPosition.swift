@@ -18,6 +18,11 @@ enum FlowBarPosition: String, Sendable, Hashable {
     case bottom
 
     nonisolated static let defaultsKey = "app.Oto.flowBarPosition"
+    /// Fresh-install slot (user asked: Top). Single source of truth for
+    /// BOTH readers — the `current()` fallbacks below AND the Settings
+    /// selector's `@AppStorage` default — so the two can never disagree
+    /// on a fresh profile again (they did: Top vs Bottom).
+    nonisolated static let freshDefault: FlowBarPosition = .top
     nonisolated static let topMargin: CGFloat = 12
     nonisolated static let bottomMargin: CGFloat = 28
     /// Drop-glide length (s). The land tick uses the SAME constant — the
@@ -27,12 +32,12 @@ enum FlowBarPosition: String, Sendable, Hashable {
     /// inside this window stays silent — no machine-gun (v8b).
     nonisolated static let tickRefractory: Duration = .milliseconds(100)
 
-    /// Default: absent key means Top (user asked). Stored choices win —
-    /// a dragged-to-bottom pill is never overridden. Unknown strings
-    /// fail safe to Top.
+    /// Default: absent key means `freshDefault` (Top, user asked). Stored
+    /// choices win — a dragged-to-bottom pill is never overridden.
+    /// Unknown strings fail safe to `freshDefault`.
     nonisolated static func current(defaults: UserDefaults = .standard) -> FlowBarPosition {
-        guard let raw = defaults.object(forKey: defaultsKey) as? String else { return .top }
-        return FlowBarPosition(rawValue: raw) ?? .top
+        guard let raw = defaults.object(forKey: defaultsKey) as? String else { return .freshDefault }
+        return FlowBarPosition(rawValue: raw) ?? .freshDefault
     }
 
     nonisolated static func save(_ position: FlowBarPosition, defaults: UserDefaults = .standard) {

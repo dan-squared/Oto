@@ -17,6 +17,17 @@
 import AppKit
 import QuartzCore
 
+/// Display-only work-verb label: a stock `NSTextField` label that is also
+/// mouse-transparent. The shine overlay sits topmost over the base label;
+/// returning nil from hit-testing lets every press fall through to the
+/// base label / content view beneath, so the pill's press-drag grab works
+/// starting on shimmering text exactly as it does on plain text. (Drag is
+/// owned by `PillContentView.mouseDown`, the pill carries no buttons, and
+/// the overlay is AX-hidden — nothing needs events on it, ever.)
+private final class ShineLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Which layer group is visible. Maps 1:1 from FlowBarState (+ notice).
 /// v6: no stagnant dots at either end — preparing renders bars (waves from
 /// frame one), completion renders nothing (vanish path). Dots exist only
@@ -72,6 +83,17 @@ final class PillContentView: NSView {
     /// the default appearance resolution can leave it dark-on-dark.
     private let spinner = NSProgressIndicator()
     private let label = NSTextField(labelWithString: "")
+    /// Shine-sweep overlay (work verbs only): full-bright duplicate of
+    /// `label` — same construction, so text rendering and mouse-event
+    /// behavior are identical by construction. Display-only: AX-hidden
+    /// (the base label stays the single AX source) and alive only while
+    /// the `.work` visual is up. A `CAGradientLayer` bright window masks
+    /// it (see `shineMask`); the mask's position sweeps on the render
+    /// server — zero per-frame MainActor work.
+    private let shineLabel = ShineLabel(labelWithString: "")
+    private let shineMask = CAGradientLayer()
+    private var shineOn = false
+    private var shineInstalledWidth: CGFloat = 0
     private var currentWidth: CGFloat = 0
     private var currentVisual: PillVisual?
     /// Render-server motion state (v5): the chase glide and the red-dot
@@ -92,6 +114,17 @@ final class PillContentView: NSView {
     nonisolated static let chaseKey = "oto.chase"
     nonisolated static let breatheKey = "oto.breathe"
     nonisolated static let swayKey = "oto.sway"
+    /// Shine-sweep animation key (work verbs). Same render-server discipline
+    /// as the chase/breathe/sway keys above — install-guarded, never poked
+    /// per frame.
+    nonisolated static let shineKey = "oto.shine"
+    /// Sweep pacing: explicit linear. Duration math (travel/velocity)
+    /// promises constant velocity, which only holds with linear pacing —
+    /// never rely on the framework default. Shared instance (effectively
+    /// immutable after creation; MainActor-confined like its owning view,
+    /// since CAMediaTimingFunction is not Sendable) so tests can pin
+    /// identity, not just behavior.
+    static let shinePacing = CAMediaTimingFunction(name: .linear)
     /// One chase cycle: 9 dots at ~6.7 dots/s (the old tick feel, gliding).
     nonisolated static let chaseCycle: Double = 1.35
 
@@ -157,6 +190,23 @@ final class PillContentView: NSView {
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         addSubview(label)
+
+        shineLabel.textColor = .white
+        // Single-sourced with measurement (measureWorkText uses workFont):
+        // a future size change moves base, overlay, and metrics together,
+        // so the shine can never sit 1px off the glyphs.
+        shineLabel.font = VisualizerMath.workFont
+        shineLabel.lineBreakMode = .byTruncatingTail
+        shineLabel.maximumNumberOfLines = 1
+        // Explicit layer: the mask below needs a host layer even before
+        // first paint (subviews of a layer-backed view normally get one,
+        // but this is load-bearing — never implicit).
+        shineLabel.wantsLayer = true
+        // Display-only duplicate: never an AX element, never a drag or
+        // click target beyond what the base label already is.
+        shineLabel.setAccessibilityElement(false)
+        shineLabel.isHidden = true
+        addSubview(shineLabel)
 
         showOnly(nil)
     }
@@ -246,6 +296,9 @@ final class PillContentView: NSView {
             let keepWave = animated && isChase(currentVisual) && isChase(visual)
             if !keepWave { stopMotionAnimations() }
             showOnly(visual, animated: animated)
+            // Shine lives and dies with the work visual only (a sweep over
+            // the Copied notice would teach "working" for a confirmation).
+            if visual != .work { removeShine() }
             currentVisual = visual
         }
         ensureMotion(for: visual)
@@ -257,7 +310,10 @@ final class PillContentView: NSView {
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
-        if newWindow == nil { stopMotionAnimations() }
+        if newWindow == nil {
+            stopMotionAnimations()
+            removeShine()
+        }
     }
 
     // MARK: - Render-server motion (v5: true GPU, zero per-frame CPU)
@@ -371,6 +427,80 @@ final class PillContentView: NSView {
         swayOn = false
     }
 
+    // MARK: - Work shimmer (traveling shine on the work verb)
+
+    /// Installs the shine sweep over the current label content. Idempotent:
+    /// repolls with identical text+frame are free — the wave is never
+    /// restarted mid-flight (same discipline as `ensureMotion`). A text or
+    /// width change reinstalls from scratch (rare: the work verb is fixed
+    /// per run). Per explicit product direction (2026-10-05) this installs
+    /// regardless of Reduce Motion; content accessibility is unchanged.
+    private func installShine() {
+        let text = label.stringValue
+        let frame = label.frame
+        guard !text.isEmpty, frame.width > 0, frame.height > 0 else { return }
+        if shineOn, shineLabel.stringValue == text, shineInstalledWidth == frame.width {
+            shineLabel.isHidden = false
+            return
+        }
+        // (Re)install: kill the old sweep first so a text change never
+        // stacks two waves.
+        shineMask.removeAnimation(forKey: Self.shineKey)
+        shineLabel.stringValue = text
+        shineLabel.frame = frame
+        shineLabel.isHidden = false
+        label.textColor = NSColor.white.withAlphaComponent(VisualizerMath.shineBaseAlpha)
+        // Bright window: soft band `band` wide at the gradient center.
+        // The mask is oversized (label + one band each side) so the sweep
+        // starts/ends fully off-text — no edge pops, ever. Direction is
+        // EXPLICITLY horizontal: CAGradientLayer defaults to vertical
+        // (top-to-bottom), which renders as a static stripe through the
+        // letters and ignores the X sweep entirely (seen on device).
+        let band = VisualizerMath.shineBandWidth(forLabelWidth: frame.width)
+        let travelW = frame.width + 2 * band
+        let halfFraction = (band / 2) / travelW
+        shineMask.colors = [
+            NSColor.clear.cgColor, NSColor.white.cgColor,
+            NSColor.white.cgColor, NSColor.clear.cgColor,
+        ]
+        shineMask.startPoint = CGPoint(x: 0, y: 0.5)
+        shineMask.endPoint = CGPoint(x: 1, y: 0.5)
+        shineMask.locations = [
+            NSNumber(value: 0.5 - halfFraction), NSNumber(value: 0.5),
+            NSNumber(value: 0.5), NSNumber(value: 0.5 + halfFraction),
+        ]
+        shineMask.bounds = CGRect(x: 0, y: 0, width: travelW, height: frame.height)
+        // Band center == mask x by construction (band sits at the gradient
+        // center): sweep the center from fully-left to fully-right.
+        let anim = CABasicAnimation(keyPath: "position.x")
+        anim.fromValue = -band
+        anim.toValue = frame.width + band
+        anim.duration = VisualizerMath.shineDuration(forLabelWidth: frame.width)
+        anim.timingFunction = Self.shinePacing
+        anim.repeatCount = .infinity
+        anim.isRemovedOnCompletion = false
+        shineMask.position = CGPoint(x: frame.width + band, y: frame.height / 2)
+        shineLabel.layer?.mask = shineMask
+        shineMask.add(anim, forKey: Self.shineKey)
+        shineOn = true
+        shineInstalledWidth = frame.width
+    }
+
+    /// Tears down the sweep and restores the base label to full white.
+    /// Safe when absent (guard) — called on every visual switch out of
+    /// `.work` and on window teardown. Deliberately NOT called from
+    /// `stopMotionAnimations()`: that funnel also runs per-poll under
+    /// Reduce Motion, which would restart the wave 6.7×/s.
+    private func removeShine() {
+        guard shineOn else { return }
+        shineMask.removeAnimation(forKey: Self.shineKey)
+        shineLabel.layer?.mask = nil
+        shineLabel.isHidden = true
+        label.textColor = .white
+        shineOn = false
+        shineInstalledWidth = 0
+    }
+
     /// Per-data-push values (voice clock, ≤30 Hz). Touches ONLY data-driven
     /// properties: bar scales + label text. Chase/breathe live on the render
     /// server (see above) and are never poked here — data rate and motion
@@ -474,6 +604,13 @@ final class PillContentView: NSView {
         if currentVisual == .dotsSpinner || currentVisual == .work, !reduceMotion { spinner.startAnimation(nil) }
         else { spinner.stopAnimation(nil) }
         spinner.isHidden = reduceMotion || (currentVisual != .dotsSpinner && currentVisual != .work)
+        // Shine sweep on the work verb (render-server wave; idempotent
+        // across repolls — see installShine). Deliberately outside the
+        // Reduce Motion gate per product direction (2026-10-05): whenever
+        // the work visual is up, the verb shimmers.
+        if currentVisual == .work {
+            installShine()
+        }
     }
 
     /// Vsync values path (display link owns delivery): instant 1:1 sets,
@@ -507,6 +644,9 @@ final class PillContentView: NSView {
         chaseLayers.forEach { $0.opacity = dotsOn ? $0.opacity : 0 }
         CATransaction.commit()
         label.isHidden = visual != .message && visual != .work
+        // Shine overlay tracks the base label's visibility exactly (the
+        // sweep itself is installed/torn down separately).
+        shineLabel.isHidden = visual != .work
         if visual != .dotsSpinner && visual != .work { spinner.stopAnimation(nil); spinner.isHidden = true }
     }
 
@@ -557,6 +697,28 @@ final class PillContentView: NSView {
     func labelText() -> String { label.stringValue }
     func chaseHasAnimation() -> Bool {
         chaseLayers.allSatisfy { $0.animation(forKey: Self.chaseKey) != nil }
+    }
+    /// Shine-sweep model values (headless-assertable like the chase hooks):
+    /// sweep installed, overlay content/visibility/geometry, base dim.
+    func shineHasAnimation() -> Bool {
+        shineMask.animation(forKey: Self.shineKey) != nil
+    }
+    func shineOverlayText() -> String { shineLabel.stringValue }
+    func shineOverlayHidden() -> Bool { shineLabel.isHidden }
+    func shineOverlayFrame() -> CGRect { shineLabel.frame }
+    func shineBaseAlpha() -> CGFloat { label.textColor?.alphaComponent ?? -1 }
+    /// Gradient sweep direction: the band must travel horizontally. This
+    /// pins the exact bug class that animation-existence checks cannot see
+    /// (a vertical gradient renders a static stripe and ignores the sweep).
+    func shineGradientIsHorizontal() -> Bool {
+        shineMask.startPoint == CGPoint(x: 0, y: 0.5)
+            && shineMask.endPoint == CGPoint(x: 1, y: 0.5)
+    }
+    /// Sweep pacing pin: the installed wave must carry the shared linear
+    /// pacing (identity — same object, not merely equal behavior), or the
+    /// constant-velocity promise in VisualizerMath silently breaks.
+    func shineSweepIsLinear() -> Bool {
+        (shineMask.animation(forKey: Self.shineKey) as? CABasicAnimation)?.timingFunction === Self.shinePacing
     }
     func chaseAnimationCount() -> Int {
         chaseLayers.filter { $0.animation(forKey: Self.chaseKey) != nil }.count

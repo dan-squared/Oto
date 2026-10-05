@@ -43,7 +43,9 @@ struct GeneralPane: View {
     @State private var loginError: String?
     @State private var showInDock = DockVisibility.isShown()
     @State private var dockError: String?
-    @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .bottom
+    // Default is the shared freshDefault (Top) — the same constant
+    // current() falls back to, so a fresh profile shows the truth.
+    @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .freshDefault
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {

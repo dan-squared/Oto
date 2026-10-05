@@ -67,7 +67,9 @@ struct FlowBarPositionTests {
         let (defaults, suite) = scratchDefaults()
         defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         // Absent key → Top (user asked). Stored choices always win — a
-        // dragged-to-bottom pill is never overridden.
+        // dragged-to-bottom pill is never overridden. freshDefault is the
+        // single source the Settings selector's @AppStorage default reads.
+        #expect(FlowBarPosition.freshDefault == .top)
         #expect(FlowBarPosition.current(defaults: defaults) == .top)
         FlowBarPosition.save(.top, defaults: defaults)
         #expect(FlowBarPosition.current(defaults: defaults) == .top)

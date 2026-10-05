@@ -117,6 +117,37 @@ enum VisualizerMath {
         return min(workMaxWidth, ceil(textWidth) + chrome)
     }
 
+    // MARK: - Work shimmer (traveling shine on the work verb)
+
+    /// Base text dim while the shine sweeps (screenshot style): the word
+    /// stays legible, the band reads premium. Restored to full white the
+    /// moment shimmer leaves. Starting value — eyes judge on device.
+    nonisolated static let shineBaseAlpha: CGFloat = 0.45
+    /// Shine velocity (pt/s). Duration scales with travel (below), so every
+    /// verb sweeps at identical physics — Cleaning and Formalizing differ
+    /// in time, never in speed.
+    nonisolated static let shineVelocity: CGFloat = 100
+    /// Bright-band floor (pt): narrow verbs still get a real sweep, never
+    /// a sliver. Wider verbs scale the band with the word.
+    nonisolated static let shineMinBand: CGFloat = 28
+
+    /// Bright-band width for a label width. Pure — unit-tested.
+    nonisolated static func shineBandWidth(forLabelWidth w: CGFloat) -> CGFloat {
+        max(shineMinBand, w * 0.5)
+    }
+
+    /// Full sweep travel: the band starts fully left of the text and ends
+    /// fully right, so it never pops at the edges. Pure — unit-tested.
+    nonisolated static func shineTravel(forLabelWidth w: CGFloat) -> CGFloat {
+        w + 2 * shineBandWidth(forLabelWidth: w)
+    }
+
+    /// Sweep duration for a label width (travel / velocity). Pure —
+    /// unit-tested (constant velocity across verbs, not constant time).
+    nonisolated static func shineDuration(forLabelWidth w: CGFloat) -> Double {
+        Double(shineTravel(forLabelWidth: w) / shineVelocity)
+    }
+
     // MARK: - Idle sway (v6: "waves move a bit")
 
     /// Voice-silence gate: display levels below this mean no voice, so the
