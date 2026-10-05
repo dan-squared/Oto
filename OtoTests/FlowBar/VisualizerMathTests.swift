@@ -183,4 +183,24 @@ struct VisualizerMathTests {
         #expect(floor < Double(VisualizerMath.swayThreshold))
         #expect(Double(VisualizerMath.swayThreshold) < 0.6)
     }
+
+    @Test func shineScalesWithWidthAtConstantVelocity() {
+        // Narrow verbs still get a real sweep (floor); wider verbs scale
+        // the band. Duration is travel/velocity — constant physics for
+        // Cleaning..Formalizing, never constant time.
+        let narrow = VisualizerMath.shineBandWidth(forLabelWidth: 20)
+        #expect(narrow == VisualizerMath.shineMinBand)
+        let wide = VisualizerMath.shineBandWidth(forLabelWidth: 120)
+        #expect(wide == 60)
+        #expect(VisualizerMath.shineTravel(forLabelWidth: 60)
+            == 60 + 2 * VisualizerMath.shineBandWidth(forLabelWidth: 60))
+        let d60 = VisualizerMath.shineDuration(forLabelWidth: 60)
+        let d120 = VisualizerMath.shineDuration(forLabelWidth: 120)
+        #expect(d120 > d60)
+        // Constant velocity: duration/travel identical across widths.
+        let v60 = 60 + 2 * VisualizerMath.shineBandWidth(forLabelWidth: 60)
+        let v120 = 120 + 2 * VisualizerMath.shineBandWidth(forLabelWidth: 120)
+        #expect(abs(d60 / Double(v60) - d120 / Double(v120)) < 0.000_001)
+        #expect(VisualizerMath.shineBaseAlpha == 0.45)
+    }
 }

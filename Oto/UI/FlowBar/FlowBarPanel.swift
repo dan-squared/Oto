@@ -29,6 +29,11 @@ final class FlowBarPanel {
     /// single-screen sign-off covers fallbacks only.
     private(set) var lastStep = 0
     private(set) var currentWidth: CGFloat = 0
+    /// Slot the panel frame currently sits in. Set in `setFrame` (the
+    /// single funnel every geometry path routes through), cleared with
+    /// the other pins on hide. Lets `show()` detect a Settings flip at
+    /// constant width — `resize` alone is width-gated and would swallow it.
+    private var currentSlot: FlowBarPosition?
     /// Vsync values-link state (fluid waves). Nil unless bars are live.
     private var valuesLink: CADisplayLink?
     private var liveSource: FlowBarModel?
@@ -144,6 +149,15 @@ final class FlowBarPanel {
     /// Settings moves the live pill (Phase 8).
     func show(sessionID: UUID?, displayID: CGDirectDisplayID?, width: CGFloat, position: FlowBarPosition) {
         if sessionID == pinnedSessionID, pinnedScreen != nil {
+            // Setting flip while visible: resize() is width-gated, so a
+            // slot change at constant width needs the explicit re-slot.
+            // When the width moves too, resize() lands the slot itself —
+            // one setFrame runs per poll, never two overlapping glides.
+            // (Controller skips show() entirely mid-drag, so the finger
+            // can never fight this.)
+            if position != currentSlot, width == currentWidth {
+                moveToSlot(position)
+            }
             resize(to: width, position: position)
             return
         }
@@ -239,6 +253,7 @@ final class FlowBarPanel {
         content.alphaValue = 1
         pinnedSessionID = nil
         pinnedScreen = nil
+        currentSlot = nil
     }
 
     func hide() {
@@ -248,6 +263,7 @@ final class FlowBarPanel {
         panel.orderOut(nil)
         pinnedSessionID = nil
         pinnedScreen = nil
+        currentSlot = nil
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -266,6 +282,7 @@ final class FlowBarPanel {
 
     private func setFrame(for width: CGFloat, on screen: NSScreen, position: FlowBarPosition, animated: Bool) {
         let frame = FlowBarPosition.frame(width: width, on: screen.visibleFrame, position: position)
+        currentSlot = position
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 // Liquid-quick (v6, v8b): easeOut over snapDuration — the
