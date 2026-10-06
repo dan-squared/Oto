@@ -262,17 +262,63 @@ struct ShortcutConfiguration: Equatable, Sendable, Codable {
 }
 
 /// Two live shortcut slots with fixed modes: hold drives beginHold/finish,
-/// hands-free drives toggleHandsFree. One global `enabled` (per-slot enable
-/// deferred — no product ask, doubles calibration/test surface). Today's
-/// two presets become the two factory defaults, so a fresh install behaves
-/// exactly like the old single-slot default + the Dictation-key preset.
+/// hands-free drives toggleHandsFree. Each slot has its own enable flag:
+/// clearing the optional hands-free slot must never kill push-to-talk
+/// (the old global boolean did exactly that). Today's two presets become
+/// the two factory defaults, so a fresh install behaves exactly like the
+/// old single-slot default + the Dictation-key preset.
 struct DualShortcutConfiguration: Equatable, Sendable, Codable {
     var hold: ShortcutTrigger
     var handsFree: ShortcutTrigger
-    var enabled: Bool
+    var holdEnabled: Bool
+    var handsFreeEnabled: Bool
 
     nonisolated static func == (lhs: DualShortcutConfiguration, rhs: DualShortcutConfiguration) -> Bool {
-        lhs.hold == rhs.hold && lhs.handsFree == rhs.handsFree && lhs.enabled == rhs.enabled
+        lhs.hold == rhs.hold && lhs.handsFree == rhs.handsFree
+            && lhs.holdEnabled == rhs.holdEnabled && lhs.handsFreeEnabled == rhs.handsFreeEnabled
+    }
+
+    /// Persisted keys. `enabled` is the retired global: read-only legacy
+    /// input (absent in new blobs, never written), mapped below.
+    private enum CodingKeys: String, CodingKey {
+        case hold
+        case handsFree
+        case holdEnabled
+        case handsFreeEnabled
+        case enabled
+    }
+
+    init(
+        hold: ShortcutTrigger,
+        handsFree: ShortcutTrigger,
+        holdEnabled: Bool = true,
+        handsFreeEnabled: Bool = true
+    ) {
+        self.hold = hold
+        self.handsFree = handsFree
+        self.holdEnabled = holdEnabled
+        self.handsFreeEnabled = handsFreeEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hold = try container.decode(ShortcutTrigger.self, forKey: .hold)
+        handsFree = try container.decode(ShortcutTrigger.self, forKey: .handsFree)
+        // Tolerant upgrade: pre-slot blobs carry neither flag (both on),
+        // global-era blobs carry `enabled` (off means both off).
+        let legacyEnabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        holdEnabled = try container.decodeIfPresent(Bool.self, forKey: .holdEnabled)
+            ?? legacyEnabled ?? true
+        handsFreeEnabled = try container.decodeIfPresent(Bool.self, forKey: .handsFreeEnabled)
+            ?? legacyEnabled ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(hold, forKey: .hold)
+        try container.encode(handsFree, forKey: .handsFree)
+        try container.encode(holdEnabled, forKey: .holdEnabled)
+        try container.encode(handsFreeEnabled, forKey: .handsFreeEnabled)
     }
 
     static let defaultsKey = "app.Oto.dualShortcutConfiguration"
@@ -283,7 +329,8 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
         DualShortcutConfiguration(
             hold: .defaultHoldToTalk(),
             handsFree: .unassignedHandsFree(),
-            enabled: true
+            holdEnabled: true,
+            handsFreeEnabled: true
         )
     }
 
@@ -324,7 +371,8 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
               let old = try? JSONDecoder().decode(ShortcutConfiguration.self, from: data)
         else { return nil }
         var config = DualShortcutConfiguration.default()
-        config.enabled = old.enabled
+        config.holdEnabled = old.enabled
+        config.handsFreeEnabled = old.enabled
         switch old.trigger.interaction {
         case .holdToTalk:
             config.hold = old.trigger.withInteraction(.holdToTalk)
@@ -503,12 +551,12 @@ struct ShortcutStaging: Equatable, Sendable {
 
     /// Done-gate preview without touching dispatch: each staged slot rated
     /// against the OTHER slot's effective value (staged if present, else
-    /// live). A staged clear disables globally rather than saving.
-    func donePreview() -> (hold: TriggerUpdateResult, handsFree: TriggerUpdateResult, disablesGlobally: Bool) {
+    /// live). Staged clears preview separately via `isClearedStaged(for:)`:
+    /// a clear disables only its own slot, never the other.
+    func donePreview() -> (hold: TriggerUpdateResult, handsFree: TriggerUpdateResult) {
         (
             hold: preview(slot: .hold),
-            handsFree: preview(slot: .handsFree),
-            disablesGlobally: stagedHoldCleared || stagedHandsFreeCleared
+            handsFree: preview(slot: .handsFree)
         )
     }
 

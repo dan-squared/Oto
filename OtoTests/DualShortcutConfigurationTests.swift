@@ -25,7 +25,8 @@ struct DualShortcutConfigurationTests {
         let config = DualShortcutConfiguration.default()
         #expect(config.hold == .defaultHoldToTalk())
         #expect(config.handsFree == .unassignedHandsFree())
-        #expect(config.enabled == true)
+        #expect(config.holdEnabled == true)
+        #expect(config.handsFreeEnabled == true)
         // Fixed modes from birth: no slot can imply the wrong gesture.
         #expect(config.hold.interaction == .holdToTalk)
         #expect(config.handsFree.interaction == .handsFree)
@@ -45,7 +46,8 @@ struct DualShortcutConfigurationTests {
                 interaction: .holdToTalk
             ),
             handsFree: .dictationKeyHandsFree(),
-            enabled: false
+            holdEnabled: false,
+            handsFreeEnabled: false
         )
         original.save(to: defaults)
         #expect(DualShortcutConfiguration.load(from: defaults) == original)
@@ -78,7 +80,8 @@ struct DualShortcutConfigurationTests {
         #expect(migrated.hold == old.trigger)
         #expect(migrated.hold.interaction == .holdToTalk)
         #expect(migrated.handsFree == .unassignedHandsFree())
-        #expect(migrated.enabled == false)
+        #expect(migrated.holdEnabled == false)
+        #expect(migrated.handsFreeEnabled == false)
         // Old key left in place, still decodable as the old type.
         #expect(ShortcutConfiguration.load(from: defaults) == old)
     }
@@ -99,7 +102,8 @@ struct DualShortcutConfigurationTests {
         #expect(migrated.handsFree.kind == old.trigger.kind)
         #expect(migrated.handsFree.interaction == .handsFree)
         #expect(migrated.hold == .defaultHoldToTalk())
-        #expect(migrated.enabled == true)
+        #expect(migrated.holdEnabled == true)
+        #expect(migrated.handsFreeEnabled == true)
         #expect(ShortcutConfiguration.load(from: defaults) == old)
     }
 
@@ -289,7 +293,8 @@ struct DualShortcutConfigurationTests {
         let original = DualShortcutConfiguration(
             hold: .defaultHoldToTalk(),
             handsFree: .unassignedHandsFree(),
-            enabled: true
+            holdEnabled: true,
+            handsFreeEnabled: true
         )
         original.save(to: defaults)
         #expect(DualShortcutConfiguration.load(from: defaults) == original)
@@ -344,7 +349,8 @@ struct DualShortcutConfigurationTests {
         let migrated = DualShortcutConfiguration.load(from: defaults)
         #expect(migrated.handsFree == .unassignedHandsFree())
         #expect(migrated.hold == .defaultHoldToTalk())
-        #expect(migrated.enabled == true)
+        #expect(migrated.holdEnabled == true)
+        #expect(migrated.handsFreeEnabled == true)
     }
 
     @Test func storedFnHandsFreeNormalizesOnce() {
@@ -356,7 +362,8 @@ struct DualShortcutConfigurationTests {
                 kind: .modifierHold(keyCode: UInt16(kVK_Function)),
                 interaction: .handsFree
             ),
-            enabled: true
+            holdEnabled: true,
+            handsFreeEnabled: true
         )
         stored.save(to: defaults)
 
@@ -365,5 +372,83 @@ struct DualShortcutConfigurationTests {
         #expect(loaded.hold == .defaultHoldToTalk())
         // Saved back: stable, no migration loop.
         #expect(DualShortcutConfiguration.load(from: defaults) == loaded)
+    }
+
+    // MARK: - Global-era blob matrix (retired `enabled` key)
+
+    /// A global-era blob carries hold/handsFree plus the retired `enabled`
+    /// key and neither per-slot flag. Built by stripping a real encoding
+    /// (never hand-written trigger JSON), so the shape is exact.
+    private func globalEraData(enabled: Bool?) throws -> Data {
+        let blob = try JSONEncoder().encode(DualShortcutConfiguration.default())
+        var dict = try JSONSerialization.jsonObject(with: blob) as! [String: Any]
+        dict.removeValue(forKey: "holdEnabled")
+        dict.removeValue(forKey: "handsFreeEnabled")
+        dict.removeValue(forKey: "enabled")
+        if let enabled { dict["enabled"] = enabled }
+        return try JSONSerialization.data(withJSONObject: dict)
+    }
+
+    @Test func globalOffMapsToBothOff() throws {
+        let (defaults, suite) = ephemeralDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try globalEraData(enabled: false), forKey: DualShortcutConfiguration.defaultsKey)
+        let loaded = DualShortcutConfiguration.load(from: defaults)
+        #expect(loaded.holdEnabled == false)
+        #expect(loaded.handsFreeEnabled == false)
+        #expect(loaded.hold == .defaultHoldToTalk())
+    }
+
+    @Test func globalOnMapsToBothOn() throws {
+        let (defaults, suite) = ephemeralDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try globalEraData(enabled: true), forKey: DualShortcutConfiguration.defaultsKey)
+        let loaded = DualShortcutConfiguration.load(from: defaults)
+        #expect(loaded.holdEnabled == true)
+        #expect(loaded.handsFreeEnabled == true)
+    }
+
+    @Test func preSlotBlobDefaultsBothOn() throws {
+        let (defaults, suite) = ephemeralDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try globalEraData(enabled: nil), forKey: DualShortcutConfiguration.defaultsKey)
+        let loaded = DualShortcutConfiguration.load(from: defaults)
+        #expect(loaded.holdEnabled == true)
+        #expect(loaded.handsFreeEnabled == true)
+    }
+
+    @Test func perSlotFlagsWinOverLegacyGlobal() throws {
+        // Cannot arise from new code (legacy key never written), but the
+        // tolerant decode must prefer the precise flags if both appear.
+        let (defaults, suite) = ephemeralDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let blob = try JSONEncoder().encode(DualShortcutConfiguration(
+            hold: .defaultHoldToTalk(),
+            handsFree: .unassignedHandsFree(),
+            holdEnabled: false,
+            handsFreeEnabled: true
+        ))
+        var dict = try JSONSerialization.jsonObject(with: blob) as! [String: Any]
+        dict["enabled"] = true
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: dict),
+            forKey: DualShortcutConfiguration.defaultsKey
+        )
+        let loaded = DualShortcutConfiguration.load(from: defaults)
+        #expect(loaded.holdEnabled == false)
+        #expect(loaded.handsFreeEnabled == true)
+    }
+
+    @Test func legacyGlobalKeyIsNeverWritten() throws {
+        let blob = try JSONEncoder().encode(DualShortcutConfiguration(
+            hold: .defaultHoldToTalk(),
+            handsFree: .unassignedHandsFree(),
+            holdEnabled: false,
+            handsFreeEnabled: true
+        ))
+        let dict = try JSONSerialization.jsonObject(with: blob) as! [String: Any]
+        #expect(dict["enabled"] == nil)
+        #expect(dict["holdEnabled"] as? Bool == false)
+        #expect(dict["handsFreeEnabled"] as? Bool == true)
     }
 }

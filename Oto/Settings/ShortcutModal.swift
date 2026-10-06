@@ -74,7 +74,7 @@ struct KeycapField: View {
             }
             .buttonStyle(OtoBounce())
             .disabled(disabled)
-            .help("Clear (shortcuts turn off when you press Done)")
+            .help(trashHelp)
         }
         .modifier(recorder)
     }
@@ -212,7 +212,7 @@ struct ShortcutModal: View {
                 isRecording: recording,
                 disabled: otherRecording,
                 emptyPlaceholder: slot == .handsFree ? "Click to add a shortcut…" : "Click to record…",
-                trashHelp: isEmpty ? "Nothing assigned" : "Clear (shortcuts turn off when you press Done)",
+                trashHelp: isEmpty ? "Nothing assigned" : "Clear this shortcut (turns off on Done)",
                 onArm: {
                     // Toggle: clicking an armed field disarms it, so a
                     // recording can never get stuck with no way out
@@ -248,6 +248,14 @@ struct ShortcutModal: View {
                 // The opt-in toggle is empty: double-tap of the hold key
                 // is the always-on path, no setup needed.
                 Text("Double-tap \(KeyNames.shortLabel(for: staging.effectiveKind(for: .hold))) anytime — no setup needed.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(OtoPalette.muted)
+            }
+
+            if slot == .hold, isEmpty, message(for: slot) == nil {
+                // Live hold with no binding (only reachable via Swap with
+                // the empty slot): named guidance instead of a dead row.
+                Text("Push to talk has no shortcut — record one to dictate.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(OtoPalette.muted)
             }
@@ -398,7 +406,13 @@ struct ShortcutModal: View {
             staging.stagedHandsFreeCleared = true
         }
         setShowSwap(false, slot: slot)
-        setMessage("Cleared — shortcuts turn off for both when you press Done.", slot: slot)
+        // Per-slot effect, named: clearing hands-free must never read
+        // as killing push-to-talk (the old global-off message did).
+        if slot == .hold {
+            setMessage("Cleared — Push to talk turns off when you press Done. Record a shortcut to dictate.", slot: slot)
+        } else {
+            setMessage("Cleared — Hands-free turns off when you press Done.", slot: slot)
+        }
     }
 
     private func capture(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict], slot: ShortcutSlot) {
@@ -500,9 +514,13 @@ struct ShortcutModal: View {
                 setShowSwap(false, slot: .handsFree)
             }
         }
-        // Clears land last: an explicit staged clear wins over F1 re-enable.
-        if staging.stagedHoldCleared || staging.stagedHandsFreeCleared {
-            dispatch.setEnabled(false)
+        // Clears land last per slot: an explicit staged clear wins over
+        // the save-time re-enable above (same slot never carries both).
+        if staging.stagedHoldCleared {
+            dispatch.setSlotEnabled(false, for: .hold)
+        }
+        if staging.stagedHandsFreeCleared {
+            dispatch.setSlotEnabled(false, for: .handsFree)
         }
         staging = ShortcutStaging(live: dispatch.configuration)
         if !showSwapHold && !showSwapHandsFree {
@@ -511,8 +529,7 @@ struct ShortcutModal: View {
     }
 
     private func resetToDefaults() {
-        _ = dispatch.updateHoldTrigger(.defaultHoldToTalk())
-        _ = dispatch.updateHandsFreeTrigger(.unassignedHandsFree())
+        dispatch.resetToDefaults()
         staging = ShortcutStaging(live: dispatch.configuration)
         clearMessages()
         refreshFnGuidance()
