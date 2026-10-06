@@ -22,7 +22,6 @@ struct OtoMenuBarView: View {
 
     @State private var status = "idle — no session yet"
     @State private var recoveryAvailable = false
-    @State private var revertAvailable = false
     @State private var feedback: String?
     @State private var escapeUnavailable = false
 
@@ -38,7 +37,6 @@ struct OtoMenuBarView: View {
                 escapeUnavailable = !dispatch.isEscapeCancelAvailable
                 status = await coordinator.lastSessionSummary()
                 recoveryAvailable = await coordinator.recoveryText() != nil
-                revertAvailable = await coordinator.canRevertPolish()
             }
 
         // Escape rides the HID tap (needs Accessibility); combo triggers
@@ -55,14 +53,26 @@ struct OtoMenuBarView: View {
         if recoveryAvailable {
             Button("Copy recovery transcript") {
                 Task {
-                    if let text = await coordinator.recoveryText() {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(text, forType: .string)
-                        feedback = "Recovery transcript copied — paste with ⌘V."
-                    } else {
+                    guard let text = await coordinator.recoveryText() else {
                         recoveryAvailable = false
                         feedback = nil
+                        return
                     }
+                    // Overwrite guard (clipboard discipline): explicit click,
+                    // so a brief modal confirm is standard behavior — the
+                    // focus defense covers uninvited UI, not this.
+                    if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
+                        let alert = NSAlert()
+                        alert.messageText = "Replace clipboard contents?"
+                        alert.informativeText = "The clipboard holds text Oto didn't place."
+                        alert.addButton(withTitle: "Replace")
+                        alert.addButton(withTitle: "Cancel")
+                        guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
+                    feedback = "Recovery transcript copied — paste with ⌘V."
                 }
             }
             Button("Retry paste to frontmost app") {
@@ -84,23 +94,8 @@ struct OtoMenuBarView: View {
             Divider()
         }
 
-        // Slice B undo: a swapped polish can be reverted to the raw wording.
-        // Shown only while revertable — same no-dead-buttons rule as
-        // recovery above. The pill stays out of this by house rule (v6/v7:
-        // no end-state pixels, errors never touch the pill).
-        if revertAvailable {
-            Button("Revert to original wording") {
-                Task {
-                    await coordinator.revertLastPolish()
-                    revertAvailable = await coordinator.canRevertPolish()
-                    feedback = revertAvailable
-                        ? "Revert failed — try again, or copy the original from History."
-                        : "Original wording restored."
-                }
-            }
-            Divider()
-        }
-
+        // Slice B undo: REMOVED (2026-10-06) — the OS owns undo; History's
+        // Undo AI edit + Copy is the single raw-recovery path.
         Button("Show onboarding…") {
             onboarding.show()
         }

@@ -93,3 +93,33 @@ struct InsertionDecisionTests {
             currentChangeCount: 7, currentMarker: nil))
     }
 }
+
+struct ClipboardOverwriteGuardTests {
+    private func scratchBoard() -> NSPasteboard {
+        NSPasteboard(name: NSPasteboard.Name("oto-guard-\(UUID().uuidString)"))
+    }
+
+    @Test func emptyBoardNeverConfirms() {
+        // Fresh boards (and boards Oto just cleared) write direct.
+        #expect(!ClipboardOverwriteGuard.shouldConfirm(board: scratchBoard()))
+    }
+
+    @Test func foreignContentConfirms() {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("hunter2", forType: .string)
+        #expect(ClipboardOverwriteGuard.shouldConfirm(board: board))
+    }
+
+    @Test func otoMarkedSkipsConfirm() {
+        // Oto-to-Oto overwrites stay frictionless: every manual Oto write
+        // marks the board, and a user copy clears all types (marker with
+        // it), re-arming the guard.
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("oto words", forType: .string)
+        ClipboardOverwriteGuard.markAsOto(board)
+        #expect(!ClipboardOverwriteGuard.shouldConfirm(board: board))
+        #expect(board.string(forType: .string) == "oto words")
+    }
+}

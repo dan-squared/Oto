@@ -206,4 +206,26 @@ struct NoTargetModalTests {
         try? await Task.sleep(for: .milliseconds(400))
         #expect(modal.copied == false)
     }
+
+    @Test func copyPastesFullTextPastTheDisplayCap() {
+        // P0: the card shows 50 words but Copy must paste everything.
+        // 60 words through BOTH entries (plain show + pill morph).
+        let words = (1...60).map { "w\($0)" }
+        let full = words.joined(separator: " ")
+        for show in [false, true] {
+            let board = NSPasteboard(name: NSPasteboard.Name("oto-catcher-\(UUID().uuidString)"))
+            let modal = NoTargetModalController()
+            if show {
+                modal.show(text: full, displayID: nil, reduceMotion: true)
+            } else {
+                modal.showFromPill(
+                    pillFrame: NSRect(x: 100, y: 100, width: 92.4, height: 26.4),
+                    text: full, displayID: nil, reduceMotion: true
+                )
+            }
+            #expect(CatcherText.wordCount(modal.text) == CatcherText.wordLimit)
+            modal.copy(pasteboard: board)
+            #expect(board.string(forType: .string) == full)
+        }
+    }
 }

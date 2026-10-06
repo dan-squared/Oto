@@ -100,6 +100,10 @@ final class NoTargetModalController {
     nonisolated static let morphDuration = 0.18
 
     private(set) var text = ""
+    /// Full transcript behind the display-capped `text` above. Copy
+    /// pastes this (never the capped string) — the card pixels stay
+    /// capped, recovery never truncates.
+    private(set) var fullText = ""
     private(set) var copied = false
     /// Live card height for the SwiftUI view frame. Set on every show
     /// BEFORE refreshContent, so content and panel never disagree (a stale
@@ -146,12 +150,21 @@ final class NoTargetModalController {
         }
     }
 
+    /// Stores a transcript for display AND recovery: `text` stays the
+    /// capped pixels (card height, logs), `fullText` keeps everything for
+    /// Copy. Both entry points (`show`, `showFromPill`) funnel here so the
+    /// morph path can never stay lossy while the plain path is fixed.
+    private func store(_ text: String) {
+        fullText = text
+        self.text = CatcherText.displayWords(text)
+    }
+
     func show(
         text: String,
         displayID: CGDirectDisplayID?,
         reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     ) {
-        self.text = CatcherText.displayWords(text)
+        store(text)
         copied = false
         // Invalidate any pending auto-close: a re-show owns a fresh second.
         copyGeneration += 1
@@ -212,7 +225,7 @@ final class NoTargetModalController {
         position: FlowBarPosition = FlowBarPosition.current(),
         reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     ) {
-        self.text = CatcherText.displayWords(text)
+        store(text)
         copied = false
         // Invalidate any pending auto-close: a re-show owns a fresh second.
         copyGeneration += 1
@@ -340,8 +353,15 @@ final class NoTargetModalController {
     /// the close instead of double-hiding or stranding Copied lit.
     private var copyGeneration = 0
     func copy(pasteboard: NSPasteboard = .general) {
+        // Full transcript, never the capped display string (P0: long
+        // dictations lost every word past 50 on Copy). Fallback guards a
+        // copy-before-show that cannot happen through current callers.
+        // Marks the placement (overwrite guard for the next manual write).
+        // Confirm-vs-write lives with the caller (SwiftUI dialog), so this
+        // stays unit-testable with scratch boards and never blocks.
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        pasteboard.setString(fullText.isEmpty ? text : fullText, forType: .string)
+        ClipboardOverwriteGuard.markAsOto(pasteboard)
         copied = true
         copyGeneration += 1
         let generation = copyGeneration
@@ -357,6 +377,9 @@ final class NoTargetModalController {
 struct NoTargetModalView: View {
     let controller: NoTargetModalController
     @Environment(\.colorScheme) private var scheme
+    /// Overwrite confirm (clipboard discipline): only armed when the
+    /// general board holds non-Oto content; Oto/empty boards copy direct.
+    @State private var confirmOverwrite = false
 
     var body: some View {
         // v6 surface: two stacked zones — words, then a bottom-pinned
@@ -392,9 +415,22 @@ struct NoTargetModalView: View {
                             controller.hide()
                         }
                         OtoPill(controller.copied ? "Copied" : "Copy", filled: true, large: true) {
-                            controller.copy()
+                            if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
+                                confirmOverwrite = true
+                            } else {
+                                controller.copy()
+                            }
                         }
                         .disabled(controller.copied)
+                        .confirmationDialog(
+                            "Replace clipboard contents?",
+                            isPresented: $confirmOverwrite
+                        ) {
+                            Button("Replace") { controller.copy() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("The clipboard holds text Oto didn't place.")
+                        }
                     }
                     .frame(minHeight: 52)
                     .padding(.top, 18)

@@ -18,15 +18,19 @@ import SwiftUI
 
 @Observable @MainActor
 final class SettingsUIState {
-    // Speech (moved verbatim from DictationPane).
-    var readinessText = "Checking…"
+    // Speech readiness display (locale tags stay plain strings — display
+    // only, no logic).
     var languageText = "—"
     var prepareFeedback: String?
     var isPreparing = false
-    // Permissions (moved verbatim from the panes).
-    var micText = "Checking…"
+    // Permissions (typed stored state; nil = not yet read, the honest
+    // "Checking…"). Display strings are computed below in exactly one
+    // place, so producers and consumers can never disagree on a literal
+    // again — typo'd states are unrepresentable, not silent.
+    var micPermission: PermissionsManager.MicrophoneStatus?
     var axTrusted = false
-    var speechText = "Checking…"
+    var speechPermission: SFSpeechRecognizerAuthorizationStatus?
+    var speechReadiness: SpeechReadiness?
     // Mic devices (moved verbatim from DictationPane).
     var inputDevices: [AudioInputDevice] = []
     var defaultInputUID: String?
@@ -59,25 +63,9 @@ final class SettingsUIState {
     }
 
     func refreshPermissions() {
-        switch permissions.microphoneStatus() {
-        case .granted:
-            micText = "Allowed"
-        case .denied:
-            micText = "Denied"
-        case .notDetermined:
-            micText = "Not asked yet"
-        }
+        micPermission = permissions.microphoneStatus()
         axTrusted = AXIsProcessTrusted()
-        switch permissions.speechStatus() {
-        case .authorized:
-            speechText = "Allowed"
-        case .denied, .restricted:
-            speechText = "Not allowed"
-        case .notDetermined:
-            speechText = "Not asked yet"
-        @unknown default:
-            speechText = "Unknown"
-        }
+        speechPermission = permissions.speechStatus()
     }
 
     func refreshMicrophones() {
@@ -95,7 +83,7 @@ final class SettingsUIState {
         } else {
             languageText = Locale.current.identifier(.bcp47)
         }
-        readinessText = report.readiness.errorDescription ?? "Ready"
+        speechReadiness = report.readiness
     }
 
     func runPrepare() async {
@@ -130,9 +118,36 @@ final class SettingsUIState {
         withAnimation(OtoMotion.settle) { columnVisibility = next }
     }
 
-    // MARK: - Derived (pure over stored strings — unit-tested)
+    // MARK: - Derived (pure over typed state — unit-tested)
 
-    var micAllowed: Bool { micText == "Allowed" }
+    /// Display strings, derived in exactly one place with byte-identical
+    /// copy. Views read these (unchanged call sites); logic below reads
+    /// the typed state. Nil stored state renders the honest pendings.
+    var micText: String {
+        switch micPermission {
+        case .granted: "Allowed"
+        case .denied: "Denied"
+        case .notDetermined: "Not asked yet"
+        case nil: "Checking…"
+        }
+    }
+
+    var speechText: String {
+        switch speechPermission {
+        case .authorized: "Allowed"
+        case .denied, .restricted: "Not allowed"
+        case .notDetermined: "Not asked yet"
+        case nil: "Checking…"
+        @unknown default: "Unknown"
+        }
+    }
+
+    var readinessText: String {
+        guard let readiness = speechReadiness else { return "Checking…" }
+        return readiness.errorDescription ?? "Ready"
+    }
+
+    var micAllowed: Bool { micPermission == .granted }
 
     /// True while the sidebar column is on screen. Pure over the stored
     /// visibility, so it is unit-tested; membership is equality because
@@ -140,24 +155,27 @@ final class SettingsUIState {
     var sidebarVisible: Bool { columnVisibility != .detailOnly }
 
     var micTone: OtoStatus.Tone {
-        micAllowed ? .ok : (micText == "Not asked yet" ? .idle : .warn)
+        micAllowed ? .ok : (micPermission == .notDetermined ? .idle : .warn)
     }
 
     var micDeniedGuidance: String? {
-        micAllowed || micText == "Not asked yet"
+        micAllowed || micPermission == .notDetermined
             ? nil
             : "Allow it in System Settings → Privacy & Security → Microphone."
     }
 
     var speechTone: OtoStatus.Tone {
-        switch speechText {
-        case "Allowed": .ok
-        case "Not asked yet", "Checking…", "Unknown": .idle
-        default: .warn
+        switch speechPermission {
+        case .authorized: .ok
+        case .notDetermined, nil: .idle
+        case .denied, .restricted: .warn
+        @unknown default: .idle
         }
     }
 
-    var speechReady: Bool { readinessText == "Ready" }
+    /// Typed end-to-end: no dependency on Apple wording (the old compare
+    /// read `errorDescription ?? "Ready"` output as a string).
+    var speechReady: Bool { speechReadiness == .ready }
 
     var currentInputName: String {
         inputDevices.first(where: { $0.uid == defaultInputUID })?.name ?? "System default"

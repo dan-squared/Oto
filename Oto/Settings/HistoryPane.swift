@@ -18,6 +18,9 @@ struct HistoryPane: View {
     /// off hides every Clean up button — no dead controls.
     @AppStorage(IntelligenceSettings.enabledKey) private var intelligenceEnabled = true
     @State private var showClearConfirm = false
+    @State private var showDisableConfirm = false
+    @State private var confirmCopyOverwrite = false
+    @State private var pendingCopyEntry: HistoryEntry?
     @State private var feedback: String?
     @State private var historyPage = 1
     /// Unknown until appear (then read once): unknown ⇒ hidden, so the
@@ -31,9 +34,12 @@ struct HistoryPane: View {
             OtoCard {
                 OtoLine(
                     "Remember transcripts",
-                    "On this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Off stops new saves; nothing is ever uploaded."
+                    "On this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Off stops new saves; existing entries stay until cleared; nothing is ever uploaded."
                 ) {
-                    OtoSwitch(on: $historyEnabled)
+                    OtoSwitch(on: Binding(
+                        get: { historyEnabled },
+                        set: { setHistoryEnabled($0) }
+                    ))
                 }
             }
 
@@ -157,11 +163,66 @@ struct HistoryPane: View {
         } message: {
             Text("This removes every remembered transcript on this Mac. Cannot be undone.")
         }
+        .confirmationDialog(
+            "Replace clipboard contents?",
+            isPresented: $confirmCopyOverwrite,
+            titleVisibility: .visible
+        ) {
+            Button("Replace") {
+                if let entry = pendingCopyEntry { writeEntry(entry) }
+                pendingCopyEntry = nil
+            }
+            Button("Cancel", role: .cancel) { pendingCopyEntry = nil }
+        } message: {
+            Text("The clipboard holds text Oto didn't place.")
+        }
+        .confirmationDialog(
+            "Turn off History?",
+            isPresented: $showDisableConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete \(history.entries.count) entries", role: .destructive) {
+                Task { await history.clearAll() }
+                historyEnabled = false
+                historyPage = 1
+            }
+            Button("Turn off, keep entries") {
+                historyEnabled = false
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Off stops new saves. Existing entries stay on this Mac until cleared.")
+        }
+    }
+
+    /// History toggle with disable disclosure (retention honesty):
+    /// turning off with entries on file asks first — off stops new
+    /// saves but never deletes, and the panic-toggle must say so.
+    /// Empty store flips directly, no dialog.
+    private func setHistoryEnabled(_ new: Bool) {
+        if !new, !history.entries.isEmpty {
+            showDisableConfirm = true
+            return
+        }
+        historyEnabled = new
     }
 
     private func copyEntry(_ entry: HistoryEntry) {
+        // Overwrite guard (clipboard discipline): foreign content confirms,
+        // empty/Oto boards write direct. Marker set on every Oto write so
+        // Oto-to-Oto copies stay frictionless.
+        if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
+            pendingCopyEntry = entry
+            confirmCopyOverwrite = true
+            return
+        }
+        writeEntry(entry)
+    }
+
+    private func writeEntry(_ entry: HistoryEntry) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.finalText, forType: .string)
+        ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
         feedback = "Copied — paste with ⌘V."
     }
 

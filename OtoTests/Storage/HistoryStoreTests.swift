@@ -86,6 +86,18 @@ struct HistoryStoreTests {
         #expect(store.entries.isEmpty)
     }
 
+    @Test func disablingKeepsEntriesForTheDialog() async {
+        // Phase 10: setEnabled(false) never deletes — the History pane's
+        // disable-confirm dialog owns deletion explicitly. Pinning this
+        // so a future "cleanup" can't silently fold deletion in here.
+        let (store, _) = makeStore()
+        store.setEnabled(true)
+        await store.record(finalText: "kept", bundleID: nil)
+        store.setEnabled(false)
+        #expect(store.entries.count == 1)
+        #expect(store.entries[0].finalText == "kept")
+    }
+
     @Test func entryKeysPinned() throws {
         // Adding a stored key is a privacy decision. This test fails the
         // moment a new key appears — audio/partials/clipboard keys can never

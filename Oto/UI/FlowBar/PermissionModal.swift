@@ -226,7 +226,8 @@ final class PermissionModalController {
     nonisolated static let height: CGFloat = PermissionCardView.height
     /// Visible window: long enough to read + reach the button (macOS banner
     /// persistence class), short enough to never linger. Then fades out.
-    nonisolated static let visibleDuration: Double = 5.0
+    /// 10 s per explicit product direction (5 s missed too many glances).
+    nonisolated static let visibleDuration: Double = 10.0
 
     private var panel: NSPanel?
     private var contentWidth: CGFloat = 0
@@ -264,7 +265,7 @@ final class PermissionModalController {
         let frame = FlowBarPosition.frame(
             width: contentWidth, height: Self.height, on: screen.visibleFrame, position: position
         )
-        // A fresh show supersedes any pending fade: full 5s, never truncated.
+        // A fresh show supersedes any pending fade: full 10s, never truncated.
         showGeneration += 1
         let generation = showGeneration
         hideTask?.cancel()

@@ -171,6 +171,44 @@ struct MediaDuckTests {
         #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
     }
 
+    @Test func failedRestoreAdoptsNextDuck() async {
+        // Stuck-muted fix: a restore that fails keeps its retry data, but
+        // the dead owner's slot must transfer — otherwise every later
+        // session ducks nothing while the HAL sits at 0, and their
+        // restores are rejected as foreign. Only relaunch recovered.
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        let a = UUID()
+        await duck.duck(sessionID: a)
+        #expect(hal.setCalls.count == 1)
+        #expect(hal.setCalls[0].volume == 0.0)
+        await duck.restore(sessionID: a)
+        hal.stubNoVolumeControl() // device gone: the parked restore fails
+        try? await Task.sleep(for: .milliseconds(350))
+        // Slot kept (retry data survives), volume untouched since the duck.
+        #expect(hal.setCalls.count == 1)
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
+        let b = UUID()
+        await duck.duck(sessionID: b)
+        // Adopted, not re-muted: zero HAL contact, still silent (correct —
+        // B is recording), flag still set throughout.
+        #expect(hal.setCalls.count == 1)
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
+        // Heal the HAL; B's restore parks, then lands the saved level.
+        hal.stub(volume: 0.0, device: 70, controlled: [70])
+        await duck.restore(sessionID: b)
+        try? await Task.sleep(for: .milliseconds(350))
+        #expect(hal.setCalls.count == 2)
+        #expect(hal.setCalls[1].volume == 0.5)
+        #expect(hal.setCalls[1].device == 70)
+        #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
+        // Slot cleared: a fresh session ducks normally again.
+        await duck.duck(sessionID: UUID())
+        #expect(hal.setCalls.count == 3)
+        #expect(hal.setCalls[2].volume == 0.0)
+    }
+
     @Test func foreignRestoreDuringLiveDuckIsNoop() async {
         // A foreign restore is a no-op and never parks: the live slot and
         // flag are untouched.

@@ -127,36 +127,18 @@ struct DictationCoordinatorTests {
         _ = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
     }
 
-    private func waitForPolish(
-        _ coordinator: DictationCoordinator,
-        timeout: Duration = .seconds(5)
-    ) async -> LastPolish? {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if let last = await coordinator.lastPolish { return last }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        return await coordinator.lastPolish
-    }
-
     @Test func cleanupInsertsPolishedOnce() async {
         // E1: the winner inserts exactly once — no swap, no second write.
+        // (Terminal state is reached only after insertion, so the insert
+        // assertions below already prove the race resolved.)
         let (coordinator, inserter, polish) = makeCleanupSUT()
         await runCompletedSession(coordinator)
-        guard let last = await waitForPolish(coordinator) else {
-            Issue.record("expected a cleaned insert")
-            return
-        }
-        #expect(last.raw == "hello oto")
-        #expect(last.polished == "Hello oto.")
         let inserts = await inserter.calls
         #expect(inserts.count == 1)
         #expect(inserts.first?.text == "Hello oto.")
         #expect(await inserter.replaceCalls.count == 0)
         #expect(polish.prompts == ["hello oto"])
         #expect(polish.jobs == [.cleanup(.light)])
-        #expect(await coordinator.canRevertPolish())
         #expect(await coordinator.workLabel() == nil)
     }
 
@@ -165,12 +147,10 @@ struct DictationCoordinatorTests {
             behavior: CleanupBehavior(enabled: true, level: .none)
         )
         await runCompletedSession(coordinator)
-        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
         #expect(await inserter.replaceCalls.count == 0)
         #expect(polish.prompts.isEmpty)
         let inserts = await inserter.calls
         #expect(inserts.first?.text == "hello oto")
-        #expect(!(await coordinator.canRevertPolish()))
     }
 
     @Test func offNeverCleans() async {
@@ -178,10 +158,8 @@ struct DictationCoordinatorTests {
             behavior: CleanupBehavior(enabled: false, level: .light)
         )
         await runCompletedSession(coordinator)
-        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
         #expect(await inserter.replaceCalls.count == 0)
         #expect(polish.prompts.isEmpty)
-        #expect(!(await coordinator.canRevertPolish()))
     }
 
     @Test func unavailableInsertsRaw() async {
@@ -189,27 +167,23 @@ struct DictationCoordinatorTests {
             polishAvailable: .unavailable(copy: "nope")
         )
         await runCompletedSession(coordinator)
-        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
         #expect(await inserter.replaceCalls.count == 0)
         #expect(polish.prompts.isEmpty)
     }
 
     @Test func identicalPolishStaysRaw() async {
-        // Rewritten-but-identical: nothing to undo, no Revert beat.
+        // Rewritten-but-identical inserts raw; nothing stored for undo.
         let (coordinator, inserter, _) = makeCleanupSUT(chunks: ["hello oto"])
         await runCompletedSession(coordinator)
-        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
         let inserts = await inserter.calls
         #expect(inserts.count == 1)
         #expect(inserts.first?.text == "hello oto")
-        #expect(!(await coordinator.canRevertPolish()))
     }
 
     @Test func cleanupErrorInsertsRaw() async {
         let (coordinator, inserter, polish) = makeCleanupSUT()
         polish.shouldError = true
         await runCompletedSession(coordinator)
-        #expect(await waitForPolish(coordinator, timeout: .milliseconds(200)) == nil)
         let inserts = await inserter.calls
         #expect(inserts.first?.text == "hello oto")
     }
@@ -220,7 +194,6 @@ struct DictationCoordinatorTests {
         let (coordinator, inserter, polish) = makeCleanupSUT()
         await polish.streamGate.setOpen(false)
         await runCompletedSession(coordinator)
-        #expect(await waitForPolish(coordinator, timeout: .milliseconds(500)) == nil)
         #expect(await inserter.replaceCalls.count == 0)
         let inserts = await inserter.calls
         #expect(inserts.count == 1)
@@ -252,47 +225,10 @@ struct DictationCoordinatorTests {
         await polish.streamGate.setOpen(true)
     }
 
-    @Test func revertRestoresRaw() async {
-        let (coordinator, inserter, _) = makeCleanupSUT()
-        await runCompletedSession(coordinator)
-        guard await waitForPolish(coordinator) != nil else {
-            Issue.record("expected a cleaned insert")
-            return
-        }
-        await coordinator.revertLastPolish()
-        let replaces = await inserter.replaceCalls
-        // No swap anymore: the only replaceLast is the Revert itself.
-        #expect(replaces.count == 1)
-        #expect(replaces.last?.text == "hello oto")
-        #expect(await coordinator.canRevertPolish() == false)
-        #expect(await coordinator.lastPolish == nil)
-    }
-
-    @Test func revertFailureKeepsBeat() async {
-        let (coordinator, inserter, _) = makeCleanupSUT()
-        await runCompletedSession(coordinator)
-        guard await waitForPolish(coordinator) != nil else {
-            Issue.record("expected a cleaned insert")
-            return
-        }
-        await inserter.setReplaceResult(.recoverableFailure(reason: "nope"))
-        await coordinator.revertLastPolish()
-        // Beat stays retryable; raw survives in History regardless.
-        #expect(await coordinator.canRevertPolish())
-        #expect(await coordinator.lastPolish != nil)
-    }
-
-    @Test func beatClearsOnNextBegin() async {
-        let (coordinator, _, _) = makeCleanupSUT()
-        await runCompletedSession(coordinator)
-        guard await waitForPolish(coordinator) != nil else {
-            Issue.record("expected a cleaned insert")
-            return
-        }
-        _ = await coordinator.beginHold()
-        #expect(await coordinator.lastPolish == nil)
-        #expect(await coordinator.canRevertPolish() == false)
-    }
+    // Revert path removed (2026-10-06): the OS owns undo; History's Undo
+    // AI edit + Copy is the single raw-recovery path. The replaceCalls
+    // assertions above pin the residual invariant — the coordinator never
+    // calls replaceLast.
 
     @Test func cleanupPrefsReadPerSession() {
         // Absent keys ⇒ shipped defaults (enabled + None: exact words until
@@ -950,6 +886,48 @@ struct DictationCoordinatorTests {
             Issue.record("expected cancelled, got \(terminal)")
             return
         }
+    }
+
+    @Test func cancelTeardownHoldsNextPreparation() async {
+        // Stuck-states fix: a cancel's shared-service teardown in flight
+        // must complete before the next session prepares — otherwise the
+        // stale teardown kills the new session's engine (dead mic under a
+        // live recording pill). Teardown parked on the audio-cancel gate.
+        let sut = makeSUT()
+        await sut.audio.cancelGate.setOpen(false)
+        guard let idA = await sut.coordinator.beginHold() else {
+            Issue.record("beginHold refused")
+            return
+        }
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        Task { await sut.coordinator.cancel(idA) }
+        _ = await waitFor(sut.coordinator, { if case .cancelled = $0 { return true }; return false })
+        await waitForCondition { await sut.audio.cancelCalls == 1 }
+        guard let idB = await sut.coordinator.beginHold() else {
+            await sut.audio.cancelGate.setOpen(true)
+            Issue.record("second beginHold refused")
+            return
+        }
+        // Preparation must wait out the parked teardown: still starting
+        // after a beat that would otherwise reach recording.
+        try? await Task.sleep(for: .milliseconds(100))
+        let mid = await sut.coordinator.state
+        if case .recording = mid {
+            Issue.record("next session prepared atop in-flight teardown")
+        }
+        await sut.audio.cancelGate.setOpen(true)
+        _ = await waitFor(sut.coordinator, { if case .recording = $0 { return true }; return false })
+        await sut.coordinator.finish(idB)
+        let terminal = await waitFor(sut.coordinator, { $0.isTerminal && $0 != .idle })
+        guard case .completed = terminal else {
+            Issue.record("expected completed, got \(terminal)")
+            return
+        }
+        let inserts = await sut.inserter.calls
+        #expect(inserts.count == 1)
+        #expect(inserts.first?.text == "hello oto")
+        #expect(await sut.audio.startCalls == 2)
+        #expect(await sut.audio.cancelCalls == 1)
     }
 
     @Test func audioStartThrowFailsWithoutSpeech() async {

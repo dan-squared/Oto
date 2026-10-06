@@ -234,7 +234,8 @@ struct RealTextInsertionTests {
                 otoFrontmost: { true },
                 postedHID: { hid.bump() }
             ),
-            timings: fastTimings(), pasteboard: board
+            timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
         )
         let result = await service.insert("dictated", into: anyTarget())
         guard case .recoverableFailure(let reason) = result else {
@@ -253,7 +254,8 @@ struct RealTextInsertionTests {
         let hid = HookCount()
         let service = RealTextInsertion(
             events: scriptedEvents(postedHID: { hid.bump() }),
-            timings: fastTimings(restore: 300_000_000), pasteboard: board
+            timings: fastTimings(restore: 300_000_000), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
         )
         let result = await service.insert("dictated", into: anyTarget())
         #expect(result == .inserted)
@@ -276,7 +278,8 @@ struct RealTextInsertionTests {
                 frontmostPID: { 11111 },
                 postedHID: { hid.bump() }
             ),
-            timings: fastTimings(), pasteboard: board
+            timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
         )
         let result = await service.insert("dictated", into: anyTarget())
         guard case .recoverableFailure(let reason) = result else {
@@ -431,7 +434,8 @@ struct RealTextInsertionTests {
         board.clearContents()
         board.setString("mine", forType: .string)
         let service = RealTextInsertion(
-            events: scriptedEvents(), timings: fastTimings(), pasteboard: board
+            events: scriptedEvents(), timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
         )
         _ = await service.insert("dictated", into: anyTarget())
         // Restore runs on a bounded Task; poll briefly (test-only wait).
@@ -451,7 +455,8 @@ struct RealTextInsertionTests {
         board.clearContents()
         board.setString("mine", forType: .string)
         let service = RealTextInsertion(
-            events: scriptedEvents(), timings: fastTimings(), pasteboard: board
+            events: scriptedEvents(), timings: fastTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
         )
         _ = await service.insert("dictated", into: anyTarget())
         // The person copies before our restore lands: theirs must survive.

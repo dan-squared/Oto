@@ -362,7 +362,7 @@ struct OnboardingView: View {
                     icon: "mic",
                     title: "Microphone",
                     status: micStatusText,
-                    actionTitle: uiState.micText == "Allowed" ? nil : "Allow microphone access",
+                    actionTitle: uiState.micAllowed ? nil : "Allow microphone access",
                     action: {
                         Task {
                             _ = await uiState.ensureMicrophoneGrant()
@@ -397,7 +397,7 @@ struct OnboardingView: View {
     /// Onboarding's mic-denied copy keeps its guidance suffix; the shared
     /// model carries the bare status ("Denied") for the panes.
     private var micStatusText: String {
-        uiState.micText == "Denied" ? "Denied — allow it in System Settings." : uiState.micText
+        uiState.micPermission == .denied ? "Denied — allow it in System Settings." : uiState.micText
     }
 
     private func permissionRow(icon: String, title: String, status: String, actionTitle: String?, action: @escaping () -> Void) -> some View {
@@ -418,6 +418,10 @@ struct OnboardingView: View {
             if let actionTitle {
                 OtoBig(actionTitle, act: action)
             } else if status == "Allowed" {
+                // Intentional display-string compare (not typed state): the
+                // strings are derived in exactly one tested place
+                // (SettingsUIState), and threading a Bool through would
+                // churn all three call sites for zero behavior change.
                 Image(systemName: "checkmark")
                     .font(.system(size: 14))
                     .foregroundStyle(OtoPalette.ink)

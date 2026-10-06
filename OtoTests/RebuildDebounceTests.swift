@@ -115,4 +115,44 @@ struct RebuildDebounceTests {
         capture.resetSessionPeak()
         #expect(await capture.sessionPeakAmplitude() == 0)
     }
+
+    private func pcm16Buffer(frames: Int = 4096, fill: Int16 = 0) -> AVAudioPCMBuffer? {
+        // Non-float hardware path (some USB/BT devices): same stride
+        // discipline, normalized to the float 0..1 range the silence
+        // threshold is defined in.
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16, sampleRate: 16_000,
+            channels: 1, interleaved: false
+        ), let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)
+        ), let channel = buffer.int16ChannelData?[0] else { return nil }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        memset(channel, 0, frames * MemoryLayout<Int16>.size)
+        if fill != 0 {
+            for f in 0..<frames { channel[f] = fill }
+        }
+        return buffer
+    }
+
+    @Test func int16ToneNotesNormalizedPeak() async {
+        // Half-scale int16 reads back ~0.5 — a voiced non-float session
+        // must never score the permanent silence that eats transcripts.
+        guard let loud = pcm16Buffer(fill: 16384) else {
+            Issue.record("could not build a test buffer")
+            return
+        }
+        let capture = await MainActor.run { AppleAudioCapture() }
+        capture.noteBufferPeak(loud)
+        #expect(await capture.sessionPeakAmplitude() == 0.5)
+    }
+
+    @Test func int16SilenceNotesZeroPeak() async {
+        guard let silent = pcm16Buffer() else {
+            Issue.record("could not build a test buffer")
+            return
+        }
+        let capture = await MainActor.run { AppleAudioCapture() }
+        capture.noteBufferPeak(silent)
+        #expect(await capture.sessionPeakAmplitude() == 0)
+    }
 }
