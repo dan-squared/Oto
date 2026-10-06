@@ -14,6 +14,8 @@ struct SnippetsPane: View {
 
     @State private var editingSnippet: Snippet?
     @State private var addingSnippet = false
+    @State private var confirmCopyOverwrite = false
+    @State private var pendingCopySnippet: Snippet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -79,11 +81,35 @@ struct SnippetsPane: View {
                 editingSnippet = nil
             }
         }
+        .confirmationDialog(
+            "Replace clipboard contents?",
+            isPresented: $confirmCopyOverwrite,
+            titleVisibility: .visible
+        ) {
+            Button("Replace") {
+                if let snippet = pendingCopySnippet { writeSnippet(snippet) }
+                pendingCopySnippet = nil
+            }
+            Button("Cancel", role: .cancel) { pendingCopySnippet = nil }
+        } message: {
+            Text("The clipboard holds text Oto didn't place.")
+        }
     }
 
     private func copySnippet(_ snippet: Snippet) {
+        // Overwrite guard (clipboard discipline): foreign content confirms.
+        if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
+            pendingCopySnippet = snippet
+            confirmCopyOverwrite = true
+            return
+        }
+        writeSnippet(snippet)
+    }
+
+    private func writeSnippet(_ snippet: Snippet) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet.expansion, forType: .string)
+        ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
     }
 }
 
@@ -99,6 +125,7 @@ private struct SnippetEditor: View {
     @State private var scopeGlobal = true
     @State private var bundleID = ""
     @State private var error: String?
+    @State private var confirmCopyOverwrite = false
 
     var body: some View {
         Form {
@@ -130,6 +157,16 @@ private struct SnippetEditor: View {
         .formStyle(.grouped)
         .frame(minWidth: 420, minHeight: 360)
         .onAppear { seed() }
+        .confirmationDialog(
+            "Replace clipboard contents?",
+            isPresented: $confirmCopyOverwrite,
+            titleVisibility: .visible
+        ) {
+            Button("Replace") { writeDraft() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The clipboard holds text Oto didn't place.")
+        }
     }
 
     private func seed() {
@@ -142,8 +179,23 @@ private struct SnippetEditor: View {
     }
 
     private func copyDraft() {
+        // Empty drafts refuse with guidance (writing "" would destroy the
+        // clipboard for nothing). Otherwise the overwrite guard decides.
+        guard !expansion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            error = "Enter the text to insert before copying."
+            return
+        }
+        if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
+            confirmCopyOverwrite = true
+            return
+        }
+        writeDraft()
+    }
+
+    private func writeDraft() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(expansion, forType: .string)
+        ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
     }
 
     private func save() {

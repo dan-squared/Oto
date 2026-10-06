@@ -180,6 +180,17 @@ final class MediaDuck: MediaDucking {
             log.info("restore absorbed (adopted)")
             return
         }
+        if let holder = duckedSessionID, holder != sessionID {
+            // Stale owner (its restore failed and kept the slot — the only
+            // way a different session arrives here under one-live-session):
+            // adopt without touching the volume (already 0 from the dead
+            // session's duck). savedVolume/Device/flag stay: they describe
+            // the pre-duck level THIS session must restore. A future
+            // multi-session design must revisit this branch.
+            duckedSessionID = sessionID
+            log.info("duck adopted stale slot \(holder.uuidString.prefix(8), privacy: .public)")
+            return
+        }
         guard duckedSessionID == nil else { return }
         guard let current = hal.currentVolume() else {
             log.info("duck skipped — no vmvc control on default output")

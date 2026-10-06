@@ -39,6 +39,15 @@ actor DictationCoordinator {
     private var currentSessionID: UUID?
     private var sessionContext: SessionContext?
     private var finishRequested = false
+    /// Teardown serialization (stuck-states fix): cancel flips terminal
+    /// state synchronously (responsive UI), but the shared-service
+    /// teardown runs here, chained behind any prior teardown. A next
+    /// session's preparation awaits the chain first, so a stale cancel
+    /// can never kill the new session's engine/analyzer/relay. Chained
+    /// tasks run to completion even after supersession; teardown work
+    /// never re-enters the coordinator, so the wait is one-directional
+    /// (no deadlock by construction).
+    private var teardownTask: Task<Void, Never>?
     /// Auto Cleanup bound (E1): seconds the pre-insertion polish race may
     /// hold finalization before raw inserts. Matrix-tuned starting value;
     /// missing it is invisible (raw stands), never mysterious.
@@ -81,12 +90,6 @@ actor DictationCoordinator {
     /// Phase 1 observability: state transitions are the only visible trace
     /// of fake sessions (no Flow Bar yet). Watch in Console.app.
     private let log = Logger(subsystem: "app.Oto", category: "coordinator")
-
-    /// Last auto-cleanup available for Revert. Set only when a cleaned text
-    /// inserts; cleared on next begin and on successful revert.
-    /// Reading it back on failure keeps Revert retryable; the raw always
-    /// survives in History regardless.
-    private(set) var lastPolish: LastPolish?
 
     /// Live work feed for the pill (E1+E2): non-nil while Auto Cleanup
     /// (`Cleaning up`) runs. The controller polls this next to its existing
@@ -145,11 +148,6 @@ actor DictationCoordinator {
         guard context.startedAt.duration(to: ContinuousClock().now) < threshold else { return }
         await cancel(context.id)
     }
-
-    /// Revert affordance for the menu (one-shot read per open, same
-    /// pattern as `recoveryText`). True while a cleaned insert can be
-    /// reverted to the raw.
-    func canRevertPolish() -> Bool { lastPolish != nil }
 
     // MARK: - Intents
 
@@ -211,16 +209,26 @@ actor DictationCoordinator {
 
         // Invalidate first: any suspended work re-checks this and
         // discards its result instead of touching state or inserting.
-        // Note: teardown of an in-flight `start` that completes after
-        // this point is the real services' responsibility (Phase 2);
-        // fakes hold no resources.
+        // Shared-service teardown sequences behind any prior teardown
+        // (never interleaved with a next session's start — see
+        // teardownTask) AND still settles before cancel returns, so
+        // post-cancel service state reads deterministically. State
+        // already reads terminal above, so the UI stays responsive
+        // while the awaits below settle.
         currentSessionID = nil
         currentWork = nil
         state = .cancelled(context)
         log.info("cancelled \(sessionID.uuidString.prefix(8), privacy: .public)")
-        await audio.cancel()
-        await speech.cancel()
-        await restoreMedia(sessionID: sessionID)
+        let prior = teardownTask
+        let current = Task { [weak self] in
+            await prior?.value
+            guard let self else { return }
+            await self.audio.cancel()
+            await self.speech.cancel()
+            await self.restoreMedia(sessionID: sessionID)
+        }
+        teardownTask = current
+        await current.value
     }
 
     /// One-line human-readable summary of the current/terminal state, for
@@ -283,7 +291,6 @@ actor DictationCoordinator {
         finishRequested = false
         recordingBeganAt = nil
         recoveryTranscript = nil
-        lastPolish = nil
         currentWork = nil
         state = .starting(context)
         log.info("begin \(context.id.uuidString.prefix(8), privacy: .public) mode=\(String(describing: interaction), privacy: .public) target=\(context.target.bundleIdentifier ?? "?", privacy: .public)")
@@ -294,6 +301,18 @@ actor DictationCoordinator {
     }
 
     private func runPreparation(sessionID: UUID) async {
+        guard currentSessionID == sessionID,
+              let context = sessionContext,
+              context.id == sessionID
+        else { return }
+
+        // Stuck-states fix: never prepare atop an in-flight teardown — a
+        // stale cancel's engine-drop would kill this session's fresh
+        // engine. The captured handle is this session's predecessor (a
+        // newer teardown implies a newer cancel, which fails the re-check
+        // below). Cancel may win during the wait, so re-guard identity
+        // before touching services.
+        await teardownTask?.value
         guard currentSessionID == sessionID,
               let context = sessionContext,
               context.id == sessionID
@@ -514,9 +533,6 @@ actor DictationCoordinator {
         case .inserted:
             state = .completed(context)
             log.info("completed, inserted \(final.count, privacy: .public) chars into \(context.target.bundleIdentifier ?? "?", privacy: .public)")
-            if wasCleaned {
-                lastPolish = LastPolish(raw: clean, polished: final, context: context, at: Date())
-            }
         case .recoverableFailure(let reason):
             // No false success: the transcript stays recoverable.
             recoveryTranscript = Transcript(text: final)
@@ -556,29 +572,4 @@ actor DictationCoordinator {
         }
         return (polished, true)
     }
-
-    /// E1 undo: re-paste the raw over the cleaned insert. Idempotent —
-    /// safe to call repeatedly and safe when no cleanup ran. On success
-    /// the beat clears; on failure lastPolish is KEPT so Revert stays
-    /// retryable (raw survives in History regardless).
-    func revertLastPolish() async {
-        guard let last = lastPolish else { return }
-        switch await inserter.replaceLast(last.raw, into: last.context.target) {
-        case .inserted:
-            lastPolish = nil
-            log.info("reverted to raw")
-        case .recoverableFailure(let reason):
-            log.info("revert refused (\(reason), privacy: .public); keeping Revert available")
-        case .noEditableField:
-            log.info("revert refused (no editable field); keeping Revert available")
-        }
-    }
-}
-
-/// One completed auto-cleanup available for Revert.
-struct LastPolish: Sendable {
-    var raw: String
-    var polished: String
-    var context: SessionContext
-    var at: Date
 }

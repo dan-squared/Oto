@@ -17,6 +17,11 @@ struct IntelligencePane: View {
 
     @AppStorage(CleanupSettings.enabledKey) private var enabled = true
     @AppStorage(CleanupSettings.levelKey) private var levelRaw = CleanupLevel.none.rawValue
+    /// History switch mirror (same key as HistoryPane): the Auto Cleanup
+    /// footnote below must not promise raw-word recovery while History is
+    /// off — with History off, cleaned wording inserts and the original
+    /// exists nowhere.
+    @AppStorage("app.Oto.historyEnabled") private var historyEnabled = false
     @State private var availability: PolishAvailability = .available
     @State private var shortcuts = TransformShortcuts.default()
     @State private var audit: [(slot: ShortcutSlotID, message: String)] = []
@@ -55,7 +60,7 @@ struct IntelligencePane: View {
                     Text("Auto Cleanup")
                         .font(.system(size: 13))
                         .foregroundStyle(OtoPalette.ink)
-                    Text("Applies to every dictation. Your original words are never lost — Undo AI edit in History.")
+                    Text(cleanupFooting(historyEnabled: historyEnabled))
                         .font(.system(size: 11.5))
                         .foregroundStyle(OtoPalette.muted)
                     HStack(spacing: 8) {
@@ -335,4 +340,15 @@ struct IntelligencePane: View {
         if case .unavailable(let copy) = availability { return copy }
         return enabled ? nil : "Turned off — turn it on to use cleanup."
     }
+}
+
+/// Auto Cleanup footnote, conditional on History (clipboard honesty):
+/// the "never lost" promise holds only while History keeps the raw
+/// wording — with History off, cleaned text inserts and the original
+/// exists nowhere. Pure — unit-tested.
+nonisolated func cleanupFooting(historyEnabled: Bool) -> String {
+    if historyEnabled {
+        return "Applies to every dictation. Your original words are never lost — Undo AI edit in History."
+    }
+    return "Applies to every dictation. Your original words are only kept while History is on — turn it on in History to keep originals."
 }

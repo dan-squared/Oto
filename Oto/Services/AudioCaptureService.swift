@@ -37,6 +37,30 @@ actor FakeAudioCapture: AudioCaptureServing {
     private(set) var stopCalls = 0
     private(set) var cancelCalls = 0
 
+    /// Test-only teardown suspension (cancel-race ordering): while closed,
+    /// `cancel()` parks until opened, holding the coordinator's teardown
+    /// chain. Open by default; production never closes it. Mirrors
+    /// `FakePolishService.StreamGate`.
+    actor CancelGate {
+        private var open = true
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func setOpen(_ open: Bool) {
+            waiters.forEach { $0.resume() }
+            waiters = []
+            self.open = open
+        }
+
+        func waitIfClosed() async {
+            guard !open else { return }
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+    }
+
+    let cancelGate = CancelGate()
+
     init(startError: (any Error)? = nil, stubPeak: Float = 1.0) {
         self.startError = startError
         self.stubPeak = stubPeak
@@ -55,6 +79,7 @@ actor FakeAudioCapture: AudioCaptureServing {
 
     func cancel() async {
         cancelCalls += 1
+        await cancelGate.waitIfClosed()
     }
 
     func sessionPeakAmplitude() async -> Float { stubPeak }

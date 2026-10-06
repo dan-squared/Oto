@@ -92,19 +92,38 @@ actor AppleAudioCapture: AudioCaptureServing {
 
     /// Realtime-safe peak note (tap thread only touches the lock + Float).
     /// Stride-4 scan of every channel: ~1k samples per 4096-frame buffer,
-    /// microseconds — no conversion, no allocation, no logging.
+    /// microseconds — no conversion, no allocation, no logging. Float taps
+    /// scan natively; int16 taps (some USB/BT hardware) scan normalized
+    /// to 0..1 so the silence threshold means the same thing — a non-float
+    /// tap otherwise scores permanent silence and eats voiced sessions.
+    /// int32/exotic formats stay unscored (documented gap).
     nonisolated func noteBufferPeak(_ buffer: AVAudioPCMBuffer) {
-        guard let channels = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
         guard frames > 0, channelCount > 0 else { return }
         var peak: Float = 0
-        for ch in 0..<channelCount {
-            var f = 0
-            while f < frames {
-                peak = max(peak, abs(channels[ch][f]))
-                f += 4
+        if let channels = buffer.floatChannelData {
+            for ch in 0..<channelCount {
+                var f = 0
+                while f < frames {
+                    peak = max(peak, abs(channels[ch][f]))
+                    f += 4
+                }
             }
+        } else if buffer.format.commonFormat == .pcmFormatInt16,
+                  let channels = buffer.int16ChannelData
+        {
+            for ch in 0..<channelCount {
+                var f = 0
+                while f < frames {
+                    // Float-first: abs(Int16.min) overflows; normalized to
+                    // the float 0..1 range the threshold is defined in.
+                    peak = max(peak, abs(Float(channels[ch][f])) / 32768)
+                    f += 4
+                }
+            }
+        } else {
+            return
         }
         guard peak > 0 else { return }
         peakLock.lock()

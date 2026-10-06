@@ -30,6 +30,31 @@ struct PasteboardReceipt: Equatable, Sendable {
     }
 }
 
+/// Confirm-before-overwrite for MANUAL clipboard writes (menu recovery
+/// Copy, catcher Copy, history Copy, snippet Copy expansion, polish sheet
+/// Keep/Original): Oto's insertion path already snapshots + receipts, but
+/// these surfaces used to clearContents() blind. Pure over an injected
+/// board, so tests use scratch boards and never touch `.general`.
+enum ClipboardOverwriteGuard {
+    /// True iff the board holds user content Oto didn't place: non-empty
+    /// string with no Oto marker. Empty boards and Oto's own placements
+    /// write with zero friction. Marker presence ⟺ Oto was the last
+    /// writer (any user copy clears all types including the marker).
+    nonisolated static func shouldConfirm(board: NSPasteboard) -> Bool {
+        guard let current = board.string(forType: .string), !current.isEmpty else { return false }
+        return board.string(forType: PasteboardReceipt.markerType) == nil
+    }
+
+    /// Marks a manual Oto placement so the next manual write skips the
+    /// confirm (Oto-to-Oto overwrites need no friction). The marker is an
+    /// inert extra type: insertion receipts pair marker UUIDs they create
+    /// themselves, so a manual marker can never read as owned there, and
+    /// the next placement overwrites it.
+    nonisolated static func markAsOto(_ board: NSPasteboard) {
+        board.setString(UUID().uuidString, forType: PasteboardReceipt.markerType)
+    }
+}
+
 /// Full-fidelity clipboard snapshot: every type of every item, in order.
 /// Pattern follows the Yap reference (`PasteboardSnapshot`, MIT) as Oto-owned
 /// code. Pure over an injected pasteboard, so tests use a scratch board and
