@@ -4,7 +4,8 @@
 //
 //  Dual live slots through the real dispatch + coordinator (no hardware):
 //  slot routing, cross-mode no-ops, the save gate (.blocked keeps the old
-//  trigger), Delete→global-off, and the F1 re-enable pin. Backend events are
+//  trigger), per-slot clears (clearing one slot never kills the other),
+//  and the fresh-capture re-enable pin. Backend events are
 //  driven via the `receiveForTests` hook; real registration inside
 //  `updateSlot` runs the production path (distinctive test-only combos,
 //  RAII-unregistered on deinit).
@@ -200,29 +201,69 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.configuration.hold == .defaultHoldToTalk())
     }
 
-    // MARK: - Delete globally off, fresh capture re-enables (F1)
+    // MARK: - Per-slot enable (clear kills only its slot)
 
-    @Test func deleteDisablesGloballyAndFreshCaptureReEnables() {
+    @Test func clearDisablesOnlyItsSlotAndFreshCaptureReEnables() {
         let (coordinator, _) = makeCoordinator()
         let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
         defer { cleanDualKey() }
 
-        dispatch.setEnabled(false)
-        #expect(dispatch.configuration.enabled == false)
-        #expect(dispatch.calibrationHold == .untested)
+        // Clearing hands-free must never kill push-to-talk (the old
+        // global boolean did exactly that).
+        dispatch.setSlotEnabled(false, for: .handsFree)
+        #expect(dispatch.configuration.handsFreeEnabled == false)
+        #expect(dispatch.configuration.holdEnabled == true)
+        #expect(dispatch.slotEnabled(.hold) == true)
+        #expect(dispatch.slotEnabled(.handsFree) == false)
+        // Off slot reads as off, never as broken; the live slot keeps
+        // whatever live value the machine has (never notSet).
         #expect(dispatch.calibrationHandsFree == .notSet)
+        #expect(dispatch.calibrationHold != .notSet)
 
-        // A fresh explicit assignment is intent to have shortcuts on.
+        // A fresh explicit assignment re-enables its own slot only.
         let mods = CarbonModifiers.command | CarbonModifiers.control
-        let first = ShortcutTrigger(kind: combo(kVK_ANSI_G, modifiers: mods), interaction: .holdToTalk)
-        #expect(dispatch.updateHoldTrigger(first) == .applied)
-        #expect(dispatch.configuration.enabled == true)
-        #expect(dispatch.configuration.hold.kind == first.kind)
+        let free = ShortcutTrigger(kind: combo(kVK_ANSI_H, modifiers: mods), interaction: .handsFree)
+        #expect(dispatch.updateHandsFreeTrigger(free) == .applied)
+        #expect(dispatch.configuration.handsFreeEnabled == true)
+        #expect(dispatch.configuration.holdEnabled == true)
+        #expect(dispatch.configuration.handsFree.kind == free.kind)
 
-        let second = ShortcutTrigger(kind: combo(kVK_ANSI_H, modifiers: mods), interaction: .handsFree)
-        #expect(dispatch.updateHandsFreeTrigger(second) == .applied)
-        #expect(dispatch.configuration.enabled == true)
-        #expect(dispatch.configuration.handsFree.kind == second.kind)
+        // Mirror: hold off leaves hands-free alone, and a fresh hold
+        // capture re-enables hold.
+        dispatch.setSlotEnabled(false, for: .hold)
+        #expect(dispatch.configuration.holdEnabled == false)
+        #expect(dispatch.configuration.handsFreeEnabled == true)
+        #expect(dispatch.calibrationHold == .notSet)
+        let hold = ShortcutTrigger(kind: combo(kVK_ANSI_G, modifiers: mods), interaction: .holdToTalk)
+        #expect(dispatch.updateHoldTrigger(hold) == .applied)
+        #expect(dispatch.configuration.holdEnabled == true)
+        #expect(dispatch.configuration.hold.kind == hold.kind)
+    }
+
+    @Test func disabledSlotReadsNotSetWhileOtherSlotStaysLive() {
+        // Gating level (no modal): hold off with an assigned hands-free
+        // on — hold reports notSet, hands-free never reads as off.
+        // Distinctive J/K combos avoid the G/H users elsewhere in this file.
+        let mods = CarbonModifiers.command | CarbonModifiers.control
+        var config = DualShortcutConfiguration.default()
+        config.handsFree = ShortcutTrigger(
+            kind: combo(kVK_ANSI_J, modifiers: mods), interaction: .handsFree
+        )
+        config.holdEnabled = false
+        let (coordinator, _) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: config)
+        defer { cleanDualKey() }
+        dispatch.start()
+        #expect(dispatch.slotEnabled(.hold) == false)
+        #expect(dispatch.slotEnabled(.handsFree) == true)
+        #expect(dispatch.calibrationHold == .notSet)
+        #expect(dispatch.calibrationHandsFree != .notSet)
+
+        // Mirror flip: hands-free off, hold live.
+        dispatch.setSlotEnabled(true, for: .hold)
+        dispatch.setSlotEnabled(false, for: .handsFree)
+        #expect(dispatch.calibrationHandsFree == .notSet)
+        #expect(dispatch.calibrationHold != .notSet)
     }
 
     // MARK: - Suspend
@@ -246,7 +287,7 @@ struct ShortcutDispatchDualTests {
 
     // MARK: - Swap
 
-    @Test func swapExchangesSlotsAndEnables() {
+    @Test func swapExchangesTriggersAndPreservesFlags() {
         let (coordinator, _) = makeCoordinator()
         let mods = CarbonModifiers.command | CarbonModifiers.control
         let holdCombo = ShortcutTrigger(kind: combo(kVK_ANSI_G, modifiers: mods), interaction: .holdToTalk)
@@ -262,7 +303,8 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.configuration.hold.interaction == .holdToTalk)
         #expect(dispatch.configuration.handsFree.kind == holdCombo.kind)
         #expect(dispatch.configuration.handsFree.interaction == .handsFree)
-        #expect(dispatch.configuration.enabled == true)
+        #expect(dispatch.configuration.holdEnabled == true)
+        #expect(dispatch.configuration.handsFreeEnabled == true)
 
         // Swap twice round-trips.
         dispatch.swapHoldAndHandsFree()
@@ -270,17 +312,35 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.configuration.handsFree == freeCombo)
     }
 
-    @Test func swapReEnablesFromDisabled() {
+    @Test func swapPreservesDisabledSlot() {
+        // Swapping keys must never silently turn a way to talk on or off:
+        // flags stay with their slots, only triggers exchange.
         let (coordinator, _) = makeCoordinator()
         let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
         defer { cleanDualKey() }
 
-        dispatch.setEnabled(false)
-        #expect(dispatch.configuration.enabled == false)
+        dispatch.setSlotEnabled(false, for: .handsFree)
+        #expect(dispatch.configuration.handsFreeEnabled == false)
         dispatch.swapHoldAndHandsFree()
-        #expect(dispatch.configuration.enabled == true)
+        #expect(dispatch.configuration.holdEnabled == true)
+        #expect(dispatch.configuration.handsFreeEnabled == false)
         #expect(dispatch.configuration.hold == .unassignedHandsFree().withInteraction(.holdToTalk))
         #expect(dispatch.configuration.handsFree == .defaultHoldToTalk().withInteraction(.handsFree))
+    }
+
+    @Test func resetRestoresFactoryTriggersWithBothSlotsOn() {
+        let (coordinator, _) = makeCoordinator()
+        let mods = CarbonModifiers.command | CarbonModifiers.control
+        var config = DualShortcutConfiguration.default()
+        config.hold = ShortcutTrigger(kind: combo(kVK_ANSI_G, modifiers: mods), interaction: .holdToTalk)
+        config.holdEnabled = false
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: config)
+        defer { cleanDualKey() }
+
+        dispatch.resetToDefaults()
+        #expect(dispatch.configuration == .default())
+        #expect(dispatch.configuration.holdEnabled == true)
+        #expect(dispatch.configuration.handsFreeEnabled == true)
     }
 
     // MARK: - Unassigned slot
@@ -450,7 +510,8 @@ struct ShortcutDispatchDualTests {
                 interaction: .holdToTalk
             ),
             handsFree: .dictationKeyHandsFree(),
-            enabled: true
+            holdEnabled: true,
+            handsFreeEnabled: true
         )
     }
 

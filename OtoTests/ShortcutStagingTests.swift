@@ -28,7 +28,6 @@ struct ShortcutStagingTests {
         let preview = staging.donePreview()
         #expect(preview.hold == .unchanged)
         #expect(preview.handsFree == .unchanged)
-        #expect(preview.disablesGlobally == false)
     }
 
     @Test func distinctStagedKindPreviewsApplied() {
@@ -55,17 +54,20 @@ struct ShortcutStagingTests {
         #expect(staging.donePreview().hold == .unchanged)
     }
 
-    @Test func stagedClearDisablesGlobally() {
+    @Test func stagedClearIsPerSlotAndNeverBlocks() {
         var staging = ShortcutStaging(live: .default())
         staging.stagedHoldCleared = true
         #expect(staging.hasChanges == true)
         #expect(staging.isClearedStaged(for: .hold) == true)
         #expect(staging.isClearedStaged(for: .handsFree) == false)
+        // Clearing never conflicts and never touches either slot's
+        // kind preview: the stored trigger is kept, only liveness
+        // changes on Done (the other slot is entirely unaffected).
         let preview = staging.donePreview()
-        #expect(preview.disablesGlobally == true)
         #expect(preview.hold == .unchanged)
-        // Clearing never conflicts: the stored trigger is kept.
+        #expect(preview.handsFree == .unchanged)
         #expect(staging.effectiveKind(for: .hold) == DualShortcutConfiguration.default().hold.kind)
+        #expect(staging.effectiveKind(for: .handsFree) == DualShortcutConfiguration.default().handsFree.kind)
     }
 
     @Test func clearStagedResetsEverything() {
@@ -74,6 +76,9 @@ struct ShortcutStagingTests {
         staging.stagedHandsFreeCleared = true
         staging.clearStaged()
         #expect(staging.hasChanges == false)
-        #expect(staging.donePreview().disablesGlobally == false)
+        #expect(staging.isClearedStaged(for: .hold) == false)
+        #expect(staging.isClearedStaged(for: .handsFree) == false)
+        #expect(staging.donePreview().hold == .unchanged)
+        #expect(staging.donePreview().handsFree == .unchanged)
     }
 }

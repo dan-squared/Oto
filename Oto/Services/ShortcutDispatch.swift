@@ -115,22 +115,33 @@ final class ShortcutDispatch {
 
     // MARK: - Lifecycle
 
+    /// Per-slot liveness: a cleared slot is off for that slot only —
+    /// clearing hands-free must never kill push-to-talk (the old global
+    /// boolean did exactly that).
+    func slotEnabled(_ slot: ShortcutSlot) -> Bool {
+        slot == .hold ? configuration.holdEnabled : configuration.handsFreeEnabled
+    }
+
     /// (Re)register backends for the current configuration. Unregisters
     /// first: re-registering can never leave a stale callback behind
     /// (10_NEXT_STEP §1 acceptance).
     func start() {
         stop()
-        guard configuration.enabled, !isSuspended else {
+        guard configuration.holdEnabled || configuration.handsFreeEnabled, !isSuspended else {
             updateCalibrationForAvailability()
             return
         }
         var holdSlots: [UInt16: ShortcutSlot] = [:]
         var functionSlots: [Int64: ShortcutSlot] = [:]
-        configureSlot(trigger: configuration.hold, slot: .hold, holdSlots: &holdSlots, functionSlots: &functionSlots)
-        configureSlot(
-            trigger: configuration.handsFree, slot: .handsFree,
-            holdSlots: &holdSlots, functionSlots: &functionSlots
-        )
+        if slotEnabled(.hold) {
+            configureSlot(trigger: configuration.hold, slot: .hold, holdSlots: &holdSlots, functionSlots: &functionSlots)
+        }
+        if slotEnabled(.handsFree) {
+            configureSlot(
+                trigger: configuration.handsFree, slot: .handsFree,
+                holdSlots: &holdSlots, functionSlots: &functionSlots
+            )
+        }
         // One shared HID tap for both slots + one shared Escape observation.
         hidMonitor.configure(holdSlots: holdSlots, functionSlots: functionSlots, escapeObserved: true)
         // HID-kind slots need a live tap; combo slots already reported above.
@@ -237,9 +248,9 @@ final class ShortcutDispatch {
     /// conflicts with the OTHER slot is refused without saving (preset picks
     /// route through here too — no bypass), otherwise cancel the active
     /// session, save, reset that slot's calibration, and re-register.
-    /// Any successful save re-enables globally (F1: today's Delete is a
-    /// one-way door — `updateTrigger` never re-enabled — so a fresh explicit
-    /// assignment is intent to have shortcuts on).
+    /// Any successful save re-enables its own slot (F1 per-slot: today's
+    /// Delete is a one-way door per slot — a fresh explicit assignment is
+    /// intent to have that slot on).
     private func updateSlot(_ trigger: ShortcutTrigger, slot: ShortcutSlot) -> TriggerUpdateResult {
         let fixed = trigger.withInteraction(slot == .hold ? .holdToTalk : .handsFree)
         let current = slot == .hold ? configuration.hold : configuration.handsFree
@@ -255,20 +266,28 @@ final class ShortcutDispatch {
         cancelActiveSession()
         if slot == .hold {
             configuration.hold = fixed
+            configuration.holdEnabled = true
         } else {
             configuration.handsFree = fixed
+            configuration.handsFreeEnabled = true
         }
-        configuration.enabled = true
         resetCalibration(for: slot)
         start()
         return .applied
     }
 
-    func setEnabled(_ enabled: Bool) {
+    /// Per-slot enable (replaces the retired global `setEnabled`): turning
+    /// a slot off cancels the active session first (a live hold must not
+    /// outlive its slot), then updates, recalibrates, and re-registers.
+    func setSlotEnabled(_ enabled: Bool, for slot: ShortcutSlot) {
         if !enabled {
             cancelActiveSession()
         }
-        configuration.enabled = enabled
+        if slot == .hold {
+            configuration.holdEnabled = enabled
+        } else {
+            configuration.handsFreeEnabled = enabled
+        }
         resetCalibration()
         start()
     }
@@ -277,16 +296,29 @@ final class ShortcutDispatch {
     /// Always safe without gating: the kind *pair* is unchanged, only the
     /// assignment flips, so no new conflict can exist by construction.
     /// Stored interactions are re-enforced (belt-and-braces over the
-    /// migration-time enforcement).
+    /// migration-time enforcement). Enable flags stay with their slots:
+    /// swapping keys must never silently turn a way to talk on or off.
     func swapHoldAndHandsFree() {
         cancelActiveSession()
         let oldHold = configuration.hold
         configuration.hold = configuration.handsFree.withInteraction(.holdToTalk)
         configuration.handsFree = oldHold.withInteraction(.handsFree)
-        configuration.enabled = true
         resetCalibration()
         start()
         log.info("shortcuts swapped between slots")
+    }
+
+    /// Reset both slots to factory triggers with both slots on: the
+    /// modal's Reset. One cancel, one save, one registration — not a
+    /// pair of gated saves (factory values satisfy the policy by test,
+    /// so no gate is needed, and unchanged-slot saves would skip the
+    /// flag restore).
+    func resetToDefaults() {
+        cancelActiveSession()
+        configuration = DualShortcutConfiguration.default()
+        resetCalibration()
+        start()
+        log.info("shortcuts reset to defaults")
     }
 
     // MARK: - Calibration
@@ -375,8 +407,18 @@ final class ShortcutDispatch {
     }
 
     private func updateCalibrationForAvailability() {
-        guard configuration.enabled, !isSuspended else { return }
+        // No both-off early return: the loop maps disabled slots to
+        // notSet, so an off slot reads as off (never stale untested).
+        // Suspended is the only skip: a transient teardown, not a state.
+        guard !isSuspended else { return }
         for slot in ShortcutSlot.allCases {
+            // Disabled slots report notSet (set by reset/start paths),
+            // never availability states — an off slot has nothing to
+            // receive, and must never read as broken.
+            if !slotEnabled(slot) {
+                setCalibration(.notSet, for: slot)
+                continue
+            }
             // Unassigned slots report notSet (set by reset/start paths),
             // never availability states — there is nothing to receive.
             if case .unassigned = trigger(for: slot).kind {
@@ -489,7 +531,7 @@ final class ShortcutDispatch {
                 // (Reconfig/teardown disarms via stop(); suspend/Escape too.)
                 guard self.fnHold.shouldConfirm(at: ContinuousClock().now),
                       self.isFnHold,
-                      self.configuration.enabled, !self.isSuspended
+                      self.slotEnabled(.hold), !self.isSuspended
                 else { return }
                 // fn+key/mouse while held is a system gesture (fn+arrows,
                 // fn+click): committing would hijack it. The HID layer
