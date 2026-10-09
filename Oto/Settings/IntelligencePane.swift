@@ -107,6 +107,8 @@ struct IntelligencePane: View {
                         }
                         .disabled(recording != nil)
                     }
+                    // Reset restores the four shortcuts; the custom name +
+                    // instruction are yours and stay untouched.
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)

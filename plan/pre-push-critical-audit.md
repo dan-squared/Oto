@@ -155,6 +155,25 @@ binding for both the post context and the copy.
   PlistBuddy — fine, but brittle if they rebrand; prefer a comment
   noting the source).
 
+## 7. Resolutions, §3–§5 (2026-10-09, unpushed)
+
+- §3.4: Reset-scope line added in the Transforms card ("Reset restores
+  the four shortcuts; the custom name + instruction stay untouched").
+- Mic row reshaped to the single-slot contract (button only while
+  notDetermined, else status pill) + onboarding mic/speech rows:
+  action only while notDetermined, denied gets guidance (onboarding
+  `permissionRow` gained a guidance slot). The clutter complaint now
+  holds nowhere.
+- §5 privacy: `customPromptNeverReachesLogs` source-scan tripwire added
+  (`PolishServiceTests`); verified zero hits in-tree.
+- §5 Dia ID: source comment added (PlistBuddy, this Mac, 2026-10-09).
+- §4 language mode: Swift 6.4 toolchain pinned at language mode 6.0 is
+  deliberate (strict concurrency complete does the work); recorded here
+  as the permanent note — revisit only for a named 6.4 feature.
+- No-code acceptances stand: §2.5, §2.6, §3.1–3.3, §3.5, live-only
+  matrices (retry dialog, speech Allow, Fill removal sanity, Docs
+  canvas, non-Figma canvas divert, Dia void card).
+
 ## 6. What is solid (don't touch)
 
 - Crash fix shape (`nonisolated` request callbacks) — correct executor

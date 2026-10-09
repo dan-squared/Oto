@@ -362,7 +362,7 @@ struct OnboardingView: View {
                     icon: "mic",
                     title: "Microphone",
                     status: micStatusText,
-                    actionTitle: uiState.micAllowed ? nil : "Allow microphone access",
+                    actionTitle: uiState.micPermission == .notDetermined ? "Allow microphone access" : nil,
                     action: {
                         Task {
                             _ = await uiState.ensureMicrophoneGrant()

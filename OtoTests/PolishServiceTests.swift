@@ -175,6 +175,25 @@ struct PolishServiceTests {
         #expect(LivePolishService.options(for: String(repeating: "a", count: 5000)).maximumResponseTokens == 512)
     }
 
+    @Test func customPromptNeverReachesLogs() throws {
+        // Structural pin: the user's instruction must not appear in any
+        // log line. Scans the service source (located relative to this
+        // file) for prompt-content interpolation in logs — a tripwire, not
+        // a parser: any hit fails for human review, never auto-fixed.
+        let thisFile = URL(fileURLWithPath: #filePath)
+        let sourceURL = thisFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Oto/Services/WritingPolishService.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        for line in source.components(separatedBy: "\n") {
+            let lower = line.lowercased()
+            if lower.contains("log.") && (lower.contains("instruction") || lower.contains("customprompt") || lower.contains("prompt")) {
+                Issue.record("possible prompt content in logs: \(line)")
+            }
+        }
+    }
+
     @Test func manualFlowNeverWritesHistory() async {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

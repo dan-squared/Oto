@@ -18,6 +18,9 @@ import Testing
 struct FocusProbeTests {
     @Test func probeUpgradesVoidRolesNeverSecure() {
         let figma: String? = "com.figma.Desktop"
+        // Dia's ID read from /Applications/Dia.app via PlistBuddy on this
+        // Mac (2026-10-09) — never hardcoded from memory; re-verify if Dia
+        // rebrands.
         let dia: String? = "company.thebrowser.dia"
         let chrome: String? = "com.google.Chrome"
         // No signal: verdict stands (today's behavior, byte-identical).

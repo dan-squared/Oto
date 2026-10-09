@@ -18,17 +18,19 @@ struct MicStatusRow: View {
     let title: String
 
     var body: some View {
+        // One trailing slot, always exactly one control (same contract as
+        // the speech row): the Allow button sits IN the status slot while
+        // a prompt exists; otherwise the status pill.
         OtoLine(title, uiState.micDeniedGuidance) {
-            VStack(alignment: .trailing, spacing: 8) {
-                OtoStatus(text: uiState.micText, tone: uiState.micTone)
-                if !uiState.micAllowed {
-                    OtoBig("Allow microphone access") {
-                        Task {
-                            _ = await uiState.ensureMicrophoneGrant()
-                            uiState.refreshPermissions()
-                        }
+            if uiState.micPermission == .notDetermined {
+                OtoBig("Allow microphone access") {
+                    Task {
+                        _ = await uiState.ensureMicrophoneGrant()
+                        uiState.refreshPermissions()
                     }
                 }
+            } else {
+                OtoStatus(text: uiState.micText, tone: uiState.micTone)
             }
         }
     }
