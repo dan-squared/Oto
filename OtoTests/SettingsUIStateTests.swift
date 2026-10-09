@@ -58,14 +58,12 @@ struct SettingsUIStateTests {
         state.speechPermission = .authorized
         #expect(state.speechText == "Allowed")
         #expect(state.speechTone == .ok)
-        #expect(state.speechAllowed == true)
         state.speechPermission = .notDetermined
         #expect(state.speechText == "Not asked yet")
         #expect(state.speechTone == .idle)
         state.speechPermission = .denied
         #expect(state.speechText == "Not allowed")
         #expect(state.speechTone == .warn)
-        #expect(state.speechAllowed == false)
         #expect(state.speechDeniedGuidance != nil)
         state.speechPermission = .notDetermined
         #expect(state.speechDeniedGuidance == nil)

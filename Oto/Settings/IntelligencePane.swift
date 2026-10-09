@@ -148,7 +148,9 @@ struct IntelligencePane: View {
                     .accessibilityLabel("Custom transform instruction")
                     .onChange(of: customInstruction) { _, _ in scheduleCustomSave() }
                 if customInstruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Write your instruction — ⌘4 stays idle until you do.")
+                    // Names the LIVE shortcut, never a hardcoded ⌘4: the
+                    // guidance must survive a re-record.
+                    Text("Write your instruction — \(transformShortcutLabel(kind: kind)) stays idle until you do.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(OtoPalette.muted)
                 }

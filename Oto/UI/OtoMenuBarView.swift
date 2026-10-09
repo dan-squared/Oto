@@ -99,9 +99,15 @@ struct OtoMenuBarView: View {
                         alert.addButton(withTitle: "Cancel")
                         guard alert.runModal() == .alertFirstButtonReturn else { return }
                     }
+                    // Re-read AFTER the confirm: the dialog takes real time
+                    // and the user may have switched apps during it. The
+                    // post targets frontmost-at-post, so the copy must name
+                    // that same app — never the pre-dialog one.
+                    let postFront = NSWorkspace.shared.frontmostApplication
+                    let postFrontID = postFront?.bundleIdentifier
                     switch await inserter.retryPostToFrontmost(text) {
                     case .posted:
-                        let name = front?.localizedName ?? frontID ?? "the frontmost app"
+                        let name = postFront?.localizedName ?? postFrontID ?? "the frontmost app"
                         feedback = "Posted to \(name) — check it."
                     case .refusedNoAccessibility:
                         feedback = "Retry failed — Accessibility permission is off."

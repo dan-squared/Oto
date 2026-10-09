@@ -279,7 +279,7 @@ struct LiveFocusCheck: FocusChecking {
                 while !settled {
                     attempt += 1
                     let detail = reader(pid)
-                    Self.logVerdict(pid: pid, verdict: detail.verdict, axError: detail.axError, timedOut: false, selected: detail.hasSelectedText, attempt: attempt)
+                    Self.logVerdict(pid: pid, verdict: detail.verdict, axError: detail.axError, timedOut: false, selected: detail.hasSelectedText, attempt: attempt, bundleID: TerminalEmulators.bundleID(for: pid))
                     let transientVoid = detail.verdict == .noField
                         && detail.axError == .noValue
                         && attempt < Self.maxAttempts
@@ -301,7 +301,7 @@ struct LiveFocusCheck: FocusChecking {
                 // If the timer wins, it logs + resumes; a late worker
                 // detail line may follow, which reads chronologically.
                 if gate.claim() {
-                    Self.logVerdict(pid: pid, verdict: .unknown, axError: nil, timedOut: true)
+                    Self.logVerdict(pid: pid, verdict: .unknown, axError: nil, timedOut: true, bundleID: TerminalEmulators.bundleID(for: pid))
                     continuation.resume(returning: .unknown)
                 }
             }

@@ -156,9 +156,6 @@ final class SettingsUIState {
 
     var micAllowed: Bool { micPermission == .granted }
 
-    /// Authorized-only gate for the Allow buttons (mirrors micAllowed).
-    var speechAllowed: Bool { speechPermission == .authorized }
-
     /// True while the sidebar column is on screen. Pure over the stored
     /// visibility, so it is unit-tested; membership is equality because
     /// NavigationSplitViewVisibility is not an OptionSet.

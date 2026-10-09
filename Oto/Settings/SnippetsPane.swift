@@ -139,16 +139,10 @@ private struct SnippetEditor: View {
                 }
                 .pickerStyle(.segmented)
                 if !scopeGlobal {
+                    // Manual bundle ID only (see DictionaryPane: a Fill
+                    // button would capture Oto itself).
                     TextField("App bundle ID", text: $bundleID)
                         .font(.caption)
-                    // Frontmost Fill (mirrors the dictionary editor):
-                    // manual field stays for the rest.
-                    Button("Use frontmost app") {
-                        if let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
-                            bundleID = id
-                        }
-                    }
-                    .font(.caption)
                 }
             }
             if let error {
