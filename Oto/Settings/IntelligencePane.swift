@@ -27,6 +27,11 @@ struct IntelligencePane: View {
     @State private var audit: [(slot: ShortcutSlotID, message: String)] = []
     @State private var recording: TransformPreset?
     @State private var messages: [TransformPreset: String] = [:]
+    /// Custom prompt editors (Phase 9): mirrors of the UserDefaults store,
+    /// loaded in refreshTransforms, saved debounced (never per keystroke).
+    @State private var customName = ""
+    @State private var customInstruction = ""
+    @State private var customSaveTask: Task<Void, Never>?
 
     /// Bound through the raw string so a future value stored by a newer
     /// build never crashes this one — unknown reads as None (fail-safe:
@@ -102,6 +107,8 @@ struct IntelligencePane: View {
                         }
                         .disabled(recording != nil)
                     }
+                    // Reset restores the four shortcuts; the custom name +
+                    // instruction are yours and stay untouched.
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
@@ -130,6 +137,26 @@ struct IntelligencePane: View {
         let isRecording = recording == preset
         let othersRecording = recording != nil && !isRecording
         return VStack(alignment: .leading, spacing: 6) {
+            // Custom editors (Phase 9): name + instruction above the chip.
+            // Fixed presets show title/tagline only — one branch, same row.
+            if preset == .custom {
+                TextField("Name (e.g. Bullets)", text: $customName)
+                    .font(.system(size: 13))
+                    .accessibilityLabel("Custom transform name")
+                    .onChange(of: customName) { _, _ in scheduleCustomSave() }
+                TextEditor(text: $customInstruction)
+                    .font(.system(size: 12))
+                    .frame(minHeight: 56)
+                    .accessibilityLabel("Custom transform instruction")
+                    .onChange(of: customInstruction) { _, _ in scheduleCustomSave() }
+                if customInstruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    // Names the LIVE shortcut, never a hardcoded ⌘4: the
+                    // guidance must survive a re-record.
+                    Text("Write your instruction — \(transformShortcutLabel(kind: kind)) stays idle until you do.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(OtoPalette.muted)
+                }
+            }
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(preset.displayName)
@@ -287,6 +314,25 @@ struct IntelligencePane: View {
         audit = ShortcutAudit.violations(
             hold: kinds.hold, handsFree: kinds.handsFree, transforms: shortcuts
         )
+        // Custom editors mirror the store (typing never triggers a
+        // refresh, so this cannot clobber in-flight edits).
+        let custom = CustomPrompt.load()
+        customName = custom.name
+        customInstruction = custom.instruction
+    }
+
+    /// Debounced custom-prompt save: 0.5s after the last keystroke.
+    /// Sanitizes on write only — the fields never yank in-flight text.
+    private func scheduleCustomSave() {
+        customSaveTask?.cancel()
+        customSaveTask = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            CustomPrompt(
+                name: CustomPrompt.sanitizeName(customName),
+                instruction: CustomPrompt.sanitizeInstruction(customInstruction)
+            ).save()
+        }
     }
 
     /// One selectable cleanup card (title + one-line description).

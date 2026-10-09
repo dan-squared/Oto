@@ -347,7 +347,7 @@ final class NoTargetModalController {
     var isVisible: Bool { panel?.isVisible ?? false }
 
     /// Manual Copy primitive (same pasteboard discipline as history Copy).
-    /// Shows Copied for 1s, then auto-closes: the user pressed Copy
+    /// Shows Copied briefly, then auto-closes: the user pressed Copy
     /// because the transcript is going somewhere now. Generation-guarded
     /// (audit): a second Copy (or a re-show) inside the window restarts
     /// the close instead of double-hiding or stranding Copied lit.
@@ -363,10 +363,21 @@ final class NoTargetModalController {
         pasteboard.setString(fullText.isEmpty ? text : fullText, forType: .string)
         ClipboardOverwriteGuard.markAsOto(pasteboard)
         copied = true
+        // VoiceOver announcement: the panel is never key (focus-steal
+        // defense), so VO users get the confirmation announced instead of
+        // finding it. Posted on the app element — no focus change.
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                NSAccessibility.NotificationUserInfoKey.announcement: "Copied recovery transcript",
+                NSAccessibility.NotificationUserInfoKey.priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
         copyGeneration += 1
         let generation = copyGeneration
         Task {
-            try? await Task.sleep(for: .milliseconds(300))
+            try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled, generation == self.copyGeneration else { return }
             self.copied = false
             self.hide()
@@ -406,6 +417,7 @@ struct NoTargetModalView: View {
                             Text(controller.text)
                                 .font(.title3)
                                 .foregroundStyle(palette.transcript)
+                                .accessibilityHint("Recovery transcript. Copy pastes the full text.")
                         }
                     }
                     Spacer(minLength: 0)

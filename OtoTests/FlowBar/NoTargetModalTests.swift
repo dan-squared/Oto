@@ -188,7 +188,7 @@ struct NoTargetModalTests {
         modal.copy(pasteboard: board)
         #expect(modal.copied == true)
         #expect(board.string(forType: .string) == "kept words")
-        try? await Task.sleep(for: .milliseconds(500))
+        try? await Task.sleep(for: .milliseconds(700))
         #expect(modal.copied == false)
     }
 
@@ -200,7 +200,7 @@ struct NoTargetModalTests {
         try? await Task.sleep(for: .milliseconds(150))
         modal.copy(pasteboard: board)
         // Stale timer must not clear the live Copied: still lit at +350
-        // (close lands at re-copy + 300).
+        // (close lands at re-copy + 500).
         try? await Task.sleep(for: .milliseconds(200))
         #expect(modal.copied == true)
         try? await Task.sleep(for: .milliseconds(400))

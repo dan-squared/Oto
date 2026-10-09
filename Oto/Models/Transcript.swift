@@ -28,6 +28,18 @@ struct Transcript: Equatable, Sendable {
     var isEmpty: Bool { cleaned.isEmpty }
 }
 
+/// One kept recovery: the transcript plus the app it was dictated for.
+/// Atomic by construction — a confirm dialog built from this can never
+/// name a stale app for a fresh transcript (or vice versa).
+struct KeptRecovery: Equatable, Sendable {
+    var transcript: Transcript
+    var expectedBundleID: String?
+
+    nonisolated static func == (lhs: KeptRecovery, rhs: KeptRecovery) -> Bool {
+        lhs.transcript == rhs.transcript && lhs.expectedBundleID == rhs.expectedBundleID
+    }
+}
+
 /// Insertion outcome. Success is never claimed from merely sending a paste
 /// event — only the insertion boundary decides (START_HERE_PRODUCT.md).
 enum InsertionResult: Equatable, Sendable {

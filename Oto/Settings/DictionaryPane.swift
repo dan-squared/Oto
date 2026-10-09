@@ -132,6 +132,10 @@ private struct DictionaryRuleEditor: View {
                 }
                 .pickerStyle(.segmented)
                 if !scopeGlobal {
+                    // Scope is typed by hand: a "use frontmost" button
+                    // cannot work from Settings (clicking it makes Oto
+                    // frontmost, so it would capture app.Oto). Removed
+                    // until capture happens while the target app is front.
                     TextField("App bundle ID (e.g. com.apple.Mail)", text: $bundleID)
                         .font(.caption)
                 }

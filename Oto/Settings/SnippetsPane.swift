@@ -139,6 +139,8 @@ private struct SnippetEditor: View {
                 }
                 .pickerStyle(.segmented)
                 if !scopeGlobal {
+                    // Manual bundle ID only (see DictionaryPane: a Fill
+                    // button would capture Oto itself).
                     TextField("App bundle ID", text: $bundleID)
                         .font(.caption)
                 }

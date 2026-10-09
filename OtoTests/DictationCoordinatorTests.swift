@@ -639,6 +639,27 @@ struct DictationCoordinatorTests {
         #expect(await coordinator.recoveryTranscript?.cleaned == "do not lose me")
     }
 
+    @Test func recoveryCarriesExpectedAppAndClearsOnNewSession() async {
+        // Retry confirms against the dictated-for app, never
+        // focus-at-click-time: the keep site stores the session target.
+        let (coordinator, _, _, target, _) = makeSUT(finalText: "do not lose me")
+
+        let id = await coordinator.beginHold()
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        await target.setCapturedTargetAlive(false)
+        await coordinator.finish(id!)
+        let terminal = await waitFor(coordinator, { $0.isTerminal && $0 != .idle })
+
+        guard case .failed = terminal else {
+            Issue.record("expected failed, got \(terminal)")
+            return
+        }
+        #expect(await coordinator.recoveryExpectedBundleID == "com.example.FakeTarget")
+        // A new session clears the kept app with the kept text.
+        _ = await coordinator.beginHold()
+        #expect(await coordinator.recoveryExpectedBundleID == nil)
+    }
+
     // MARK: - 11. Hands-free shares the pipeline
 
     @Test func handsFreeToggleFinishesThroughSamePipeline() async {

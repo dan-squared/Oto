@@ -118,7 +118,7 @@ struct PolishServiceTests {
         #expect(medium.hasPrefix(light))
         #expect(medium.contains("clarity and conciseness"))
         #expect(light != medium)
-        for preset in TransformPreset.allCases {
+        for preset in TransformPreset.allCases where preset != .custom {
             let prompt = LivePolishService.instructions(for: .transform(preset))!
             #expect(prompt.contains("Preserve the meaning exactly"))
             #expect(prompt.contains("Keep the same language"))
@@ -130,6 +130,42 @@ struct PolishServiceTests {
         #expect(professional.contains("work-ready"))
         #expect(TransformPreset.polish.displayName == "Polish")
         #expect(TransformPreset.polish.tagline == "Improve clarity and conciseness")
+        #expect(TransformPreset.custom.tagline == "Your own instruction")
+        #expect(TransformPreset.custom.pillVerb == "Custom")
+    }
+
+    @Test func customInstructionWrapsWithLocksMinusLanguage() {
+        // Unjudged user text keeps meaning + output-only locks; the
+        // same-language lock is dropped so translation works.
+        let custom = CustomPrompt(name: "Bullets", instruction: "rewrite as 3 bullet points")
+        let prompt = LivePolishService.instructions(for: .transform(.custom), custom: custom)!
+        #expect(prompt.hasPrefix("rewrite as 3 bullet points"))
+        #expect(prompt.contains("Preserve the meaning exactly"))
+        #expect(prompt.contains("Output only the rewritten text"))
+        #expect(!prompt.contains("Keep the same language"))
+        // Empty instruction ⇒ nil ⇒ fail-closed upstream.
+        #expect(LivePolishService.instructions(for: .transform(.custom), custom: CustomPrompt(name: "", instruction: "  ")) == nil)
+        // Fixed presets ignore the injected custom (byte-identical either way).
+        let a = LivePolishService.instructions(for: .transform(.polish), custom: custom)!
+        let b = LivePolishService.instructions(for: .transform(.polish), custom: CustomPrompt(name: "", instruction: ""))!
+        #expect(a == b)
+    }
+
+    @Test func customPromptCapsAndSanitize() {
+        #expect(CustomPrompt.sanitizeName(nil) == "")
+        #expect(CustomPrompt.sanitizeName("  Bullets\t\nrock  ") == "Bullets rock")
+        #expect(CustomPrompt.sanitizeName(String(repeating: "a", count: 100)).count == CustomPrompt.nameCap)
+        #expect(CustomPrompt.sanitizeInstruction(nil) == "")
+        #expect(CustomPrompt.sanitizeInstruction(String(repeating: "b", count: 900)).count == CustomPrompt.instructionCap)
+        #expect(CustomPrompt(name: "", instruction: "").isUsable == false)
+        #expect(CustomPrompt(name: "", instruction: "do x").isUsable == true)
+        #expect(CustomPrompt(name: "", instruction: "").nameOrFallback == "Custom")
+        #expect(CustomPrompt(name: "Mine", instruction: "do x").nameOrFallback == "Mine")
+        // Round-trip through injected defaults (never shared standard).
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        let original = CustomPrompt(name: "Bullets", instruction: "rewrite as 3 bullets")
+        original.save(to: defaults)
+        #expect(CustomPrompt.load(defaults: defaults) == original)
     }
 
     @Test func tokenCapScalesWithInput() {
@@ -137,6 +173,25 @@ struct PolishServiceTests {
         #expect(LivePolishService.options(for: String(repeating: "a", count: 200)).maximumResponseTokens == 164)
         #expect(LivePolishService.options(for: String(repeating: "a", count: 20)).maximumResponseTokens == 128)
         #expect(LivePolishService.options(for: String(repeating: "a", count: 5000)).maximumResponseTokens == 512)
+    }
+
+    @Test func customPromptNeverReachesLogs() throws {
+        // Structural pin: the user's instruction must not appear in any
+        // log line. Scans the service source (located relative to this
+        // file) for prompt-content interpolation in logs — a tripwire, not
+        // a parser: any hit fails for human review, never auto-fixed.
+        let thisFile = URL(fileURLWithPath: #filePath)
+        let sourceURL = thisFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Oto/Services/WritingPolishService.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        for line in source.components(separatedBy: "\n") {
+            let lower = line.lowercased()
+            if lower.contains("log.") && (lower.contains("instruction") || lower.contains("customprompt") || lower.contains("prompt")) {
+                Issue.record("possible prompt content in logs: \(line)")
+            }
+        }
     }
 
     @Test func manualFlowNeverWritesHistory() async {

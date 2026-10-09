@@ -353,7 +353,7 @@ struct RealTextInsertionTests {
             timings: fastTimings(restore: 300_000_000), pasteboard: board
         )
         let posted = await service.retryPostToFrontmost("kept words")
-        #expect(posted)
+        #expect(posted == .posted)
         #expect(hid.count == 1)
         #expect(board.string(forType: .string) == "kept words")
         #expect(board.string(forType: PasteboardReceipt.markerType) != nil)
@@ -371,7 +371,7 @@ struct RealTextInsertionTests {
             events: scriptedEvents(trusted: false, postedHID: { hid.bump() }),
             timings: fastTimings(), pasteboard: board
         )
-        #expect(await service.retryPostToFrontmost("kept words") == false)
+        #expect(await service.retryPostToFrontmost("kept words") == .refusedNoAccessibility)
         #expect(hid.count == 0)
         #expect(board.changeCount == before)
     }

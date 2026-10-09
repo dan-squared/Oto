@@ -51,6 +51,10 @@ actor TransformRunner {
     func execute(preset: TransformPreset) async {
         guard behaviorProvider().enabled else { return }
         guard polish.availability() == .available else { return }
+        // Custom with no written instruction is idle: fail closed before
+        // touching the target, the clipboard, or the pill (same contract
+        // as empty selection — nothing happens, silently).
+        if preset == .custom, !CustomPrompt.load().isUsable { return }
         // Target captured synchronously at press, before any Oto UI could
         // appear — never re-resolved later (insertion-rule precedent).
         let target = targetService.capture()
@@ -83,7 +87,7 @@ actor TransformRunner {
     }
 }
 
-/// Owns the three transform hotkeys (Carbon combos — no AX needed to
+/// Owns the four transform hotkeys (Carbon combos — no AX needed to
 /// receive them). Suspends by rule, not by flag: a press while dictation is
 /// non-terminal is ignored (transforms never interleave with recording).
 /// Registration conflicts with other apps surface per preset (`isLive`)
@@ -132,7 +136,7 @@ final class TransformDispatch {
         self.setDictationSuspended = setDictationSuspended
     }
 
-    /// (Re)register all three combos. Unregisters first: re-registering can
+    /// (Re)register all four combos. Unregisters first: re-registering can
     /// never leave a stale callback behind. Non-combo kinds never register
     /// (the UI refuses to save them with guidance — transforms need a
     /// combination like ⌥1).
@@ -159,7 +163,7 @@ final class TransformDispatch {
     }
 
     /// Current dictation kinds for the Settings advisory (same rule, same
-    /// strings — the pure gate compares all five slots).
+    /// strings — the pure gate compares all six slots).
     func currentDictationKinds() -> (hold: ShortcutTrigger.Kind, handsFree: ShortcutTrigger.Kind) {
         dictationKinds()
     }

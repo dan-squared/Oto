@@ -35,8 +35,12 @@ struct PermissionsManager: Sendable {
     }
 
     /// Asks only when the person attempts dictation or preparation — never
-    /// speculatively at launch (07 §5.1).
-    func requestMicrophone() async -> Bool {
+    /// speculatively at launch (07 §5.1). Nonisolated: the system calls
+    /// the handler on a background TCC queue, and a MainActor-inherited
+    /// closure traps there on entry (Debug SIGTRAP) — the callback must
+    /// never inherit an executor. Resuming the continuation from any
+    /// thread is explicitly legal (it hops to the awaiting task).
+    nonisolated func requestMicrophone() async -> Bool {
         await withCheckedContinuation { continuation in
             AVAudioApplication.requestRecordPermission { granted in
                 continuation.resume(returning: granted)
@@ -63,6 +67,34 @@ struct PermissionsManager: Sendable {
 
     func speechStatus() -> SFSpeechRecognizerAuthorizationStatus {
         SFSpeechRecognizer.authorizationStatus()
+    }
+
+    /// Asks only on user gesture — never speculatively (same rule as the
+    /// mic). Denied/restricted short-circuit (no prompt exists); only
+    /// notDetermined presents the system dialog. Nonisolated for the
+    /// same background-callback reason as requestMicrophone (crashed
+    /// 2026-10-09: TCC reply queue vs inherited MainActor isolation).
+    nonisolated func requestSpeech() async -> Bool {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status == .authorized)
+            }
+        }
+    }
+
+    /// Returns true when speech recognition may proceed: already
+    /// authorized, or authorized through a just-in-time prompt.
+    func ensureSpeech() async -> Bool {
+        switch speechStatus() {
+        case .authorized:
+            return true
+        case .denied, .restricted:
+            return false
+        case .notDetermined:
+            return await requestSpeech()
+        @unknown default:
+            return false
+        }
     }
 }
 

@@ -8,6 +8,7 @@
 //  Driven by the hoisted SettingsUIState, like the panes themselves.
 //
 
+import Speech
 import SwiftUI
 
 /// Microphone status row. Title differs by pane ("Status" under Dictation's
@@ -17,17 +18,19 @@ struct MicStatusRow: View {
     let title: String
 
     var body: some View {
+        // One trailing slot, always exactly one control (same contract as
+        // the speech row): the Allow button sits IN the status slot while
+        // a prompt exists; otherwise the status pill.
         OtoLine(title, uiState.micDeniedGuidance) {
-            VStack(alignment: .trailing, spacing: 8) {
-                OtoStatus(text: uiState.micText, tone: uiState.micTone)
-                if !uiState.micAllowed {
-                    OtoBig("Allow microphone access") {
-                        Task {
-                            _ = await uiState.ensureMicrophoneGrant()
-                            uiState.refreshPermissions()
-                        }
+            if uiState.micPermission == .notDetermined {
+                OtoBig("Allow microphone access") {
+                    Task {
+                        _ = await uiState.ensureMicrophoneGrant()
+                        uiState.refreshPermissions()
                     }
                 }
+            } else {
+                OtoStatus(text: uiState.micText, tone: uiState.micTone)
             }
         }
     }
@@ -55,13 +58,26 @@ struct AccessibilityRow: View {
     }
 }
 
-/// Speech-recognition status row. Identical in both panes.
+/// Speech-recognition status row. Identical in both panes. One trailing
+/// slot, always exactly one control: the Allow button sits IN the status
+/// slot (never below it) while a prompt exists; otherwise the status
+/// pill. Denied gets Settings guidance instead of a dead button — no
+/// prompt exists to show, so a button would lie.
 struct SpeechStatusRow: View {
     let uiState: SettingsUIState
 
     var body: some View {
-        OtoLine("Speech recognition", nil) {
-            OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
+        OtoLine("Speech recognition", uiState.speechDeniedGuidance) {
+            if uiState.speechPermission == .notDetermined {
+                OtoBig("Allow speech recognition") {
+                    Task {
+                        _ = await uiState.ensureSpeechGrant()
+                        uiState.refreshPermissions()
+                    }
+                }
+            } else {
+                OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
+            }
         }
     }
 }

@@ -140,23 +140,27 @@ enum CleanupLevel: String, Sendable, CaseIterable {
 extension CleanupLevel: Equatable {}
 
 /// Transform presets (E2): explicit, user-fired rewrites on selected text.
-/// Fixed set (custom prompts deferred): Polish = clarity + conciseness,
-/// Concise = shorten keeping every fact, Professional = work-ready tone.
+/// Three fixed presets plus one user-defined instruction (Phase 9):
+/// Polish = clarity + conciseness, Concise = shorten keeping every fact,
+/// Professional = work-ready tone, Custom = the user's own instruction.
 enum TransformPreset: String, Sendable, CaseIterable {
     case polish
     case concise
     case professional
+    case custom
 
     nonisolated static func == (lhs: TransformPreset, rhs: TransformPreset) -> Bool {
         lhs.rawValue == rhs.rawValue
     }
 
-    /// Pill + Settings display name ("Polish"). Pure — unit-tested.
+    /// Pill + Settings display name ("Polish"; the custom name when set,
+    /// "Custom" until the user names it). Pure — unit-tested.
     nonisolated var displayName: String {
         switch self {
         case .polish: return "Polish"
         case .concise: return "Concise"
         case .professional: return "Professional"
+        case .custom: return CustomPrompt.load().nameOrFallback
         }
     }
 
@@ -166,21 +170,86 @@ enum TransformPreset: String, Sendable, CaseIterable {
         case .polish: return "Improve clarity and conciseness"
         case .concise: return "Shorten, keep every fact"
         case .professional: return "Work-ready tone, same meaning"
+        case .custom: return "Your own instruction"
         }
     }
 
     /// One-word pill verb while this preset runs (Cleaning's siblings:
-    /// Polishing / Shortening / Formalizing). Pure — unit-tested.
+    /// Polishing / Shortening / Formalizing; Custom breaks the verb
+    /// pattern honestly — no verb can be derived from arbitrary text).
+    /// Pure — unit-tested.
     nonisolated var pillVerb: String {
         switch self {
         case .polish: return "Polishing"
         case .concise: return "Shortening"
         case .professional: return "Formalizing"
+        case .custom: return "Custom"
         }
     }
 }
 
 extension TransformPreset: Equatable {}
+
+/// The user's own transform (Phase 9): a name plus a rewrite instruction.
+/// A UserDefaults setting, never a transcript — it is never written to
+/// History, never logged, and never leaves the Mac (same boundary as the
+/// fixed presets' instructions, which are code).
+struct CustomPrompt: Equatable, Sendable {
+    /// Display-name cap: one word-ish, keeps rows compact.
+    nonisolated static let nameCap = 24
+    /// Instruction cap: keeps token-cap math sane (options(for:) clamps
+    /// output anyway; this bounds the prompt side).
+    nonisolated static let instructionCap = 500
+
+    nonisolated static let nameKey = "app.Oto.customPromptName"
+    nonisolated static let instructionKey = "app.Oto.customPromptInstruction"
+
+    var name: String
+    var instruction: String
+
+    /// Sanitizes on the way in: a CustomPrompt is always valid —
+    /// fail-closed (`isUsable == false`) means truly empty, never
+    /// whitespace-only. Idempotent (load/save round-trips are stable).
+    nonisolated init(name: String, instruction: String) {
+        self.name = Self.sanitizeName(name)
+        self.instruction = Self.sanitizeInstruction(instruction)
+    }
+
+    nonisolated static func == (lhs: CustomPrompt, rhs: CustomPrompt) -> Bool {
+        lhs.name == rhs.name && lhs.instruction == rhs.instruction
+    }
+
+    nonisolated static func load(defaults: UserDefaults = .standard) -> CustomPrompt {
+        CustomPrompt(
+            name: sanitizeName(defaults.string(forKey: nameKey)),
+            instruction: sanitizeInstruction(defaults.string(forKey: instructionKey))
+        )
+    }
+
+    func save(to defaults: UserDefaults = .standard) {
+        defaults.set(name, forKey: Self.nameKey)
+        defaults.set(instruction, forKey: Self.instructionKey)
+    }
+
+    /// The row/audit name: stored name, or "Custom" until named.
+    nonisolated var nameOrFallback: String {
+        name.isEmpty ? "Custom" : name
+    }
+
+    /// Fail-closed: an empty instruction never fires (same contract as
+    /// empty selection — nothing happens, silently).
+    nonisolated var isUsable: Bool { !instruction.isEmpty }
+
+    nonisolated static func sanitizeName(_ raw: String?) -> String {
+        let collapsed = (raw ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return String(collapsed.prefix(nameCap))
+    }
+
+    nonisolated static func sanitizeInstruction(_ raw: String?) -> String {
+        let collapsed = (raw ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return String(collapsed.prefix(instructionCap))
+    }
+}
 
 /// Live work feed for the pill: what the model is doing right now.
 /// Published by whoever runs the work (coordinator cleanup branch,
@@ -364,7 +433,21 @@ final class LivePolishService: PolishServing, @unchecked Sendable {
     /// Transforms share the Polish core with per-preset license. All
     /// rewriting-class: meaning preserved, same language, output only.
     /// Returns nil for `.cleanup(.none)` (never streamed — defensive).
+    /// Custom resolves through the stored prompt (see the overload).
     nonisolated static func instructions(for job: PolishJob) -> String? {
+        switch job {
+        case .transform(.custom):
+            return Self.instructions(for: job, custom: .load())
+        default:
+            return Self.instructions(for: job, custom: CustomPrompt(name: "", instruction: ""))
+        }
+    }
+
+    /// Injectable-custom variant: production passes the stored prompt via
+    /// the overload above; tests pass explicit values (never touching
+    /// shared defaults). Fixed branches ignore `custom` — byte-identical
+    /// output regardless of what is stored.
+    nonisolated static func instructions(for job: PolishJob, custom: CustomPrompt) -> String? {
         switch job {
         case .cleanup(.none):
             return nil
@@ -373,6 +456,15 @@ final class LivePolishService: PolishServing, @unchecked Sendable {
         case .cleanup(.medium):
             return Self.lightInstructions +
                 " You may lightly reword for clarity and conciseness, but change nothing substantive."
+        case .transform(.custom):
+            // Unjudged user text still gets the output-only + meaning
+            // locks. The same-language lock is deliberately absent: a
+            // translate instruction must be allowed to change language.
+            // Empty instruction ⇒ nil ⇒ fail-closed upstream.
+            guard custom.isUsable else { return nil }
+            return custom.instruction +
+                "\n\nRewrite the selected text accordingly. Preserve the meaning exactly. " +
+                "Output only the rewritten text, no commentary."
         case .transform(.polish):
             return "Improve clarity and conciseness. Preserve the meaning exactly. " +
                 "Keep the same language. Output only the rewritten text, no commentary."
@@ -450,7 +542,11 @@ final class LivePolishService: PolishServing, @unchecked Sendable {
     /// Warms the model for an expected job while a surface is already open
     /// (E1: record start warms while the user speaks). Memory cost only
     /// while the hint lives; never called on the mic path itself.
+    /// Custom never prewarms: the instruction is editable, so a warmed
+    /// session could serve a stale instruction — first custom run pays
+    /// full latency, accepted and stated.
     nonisolated func prewarm(job: PolishJob) {
+        guard job != .transform(.custom) else { return }
         guard let instructions = Self.instructions(for: job) else { return }
         let session = LanguageModelSession(instructions: instructions)
         session.prewarm()

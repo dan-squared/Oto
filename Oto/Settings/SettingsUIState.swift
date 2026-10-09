@@ -100,6 +100,13 @@ final class SettingsUIState {
         await permissions.ensureMicrophone()
     }
 
+    /// Just-in-time speech grant for the Allow buttons. Same gesture-only
+    /// rule as the mic: denied stays a Settings errand (no prompt exists),
+    /// notDetermined gets the system dialog in-product.
+    func ensureSpeechGrant() async -> Bool {
+        await permissions.ensureSpeech()
+    }
+
     /// Apple's blessed prompt: opens System Settings at the Accessibility
     /// page itself when untrusted, no-ops when trusted. Verified in the
     /// macOS 27 headers (10.9+); no raw Settings URLs.
@@ -162,6 +169,17 @@ final class SettingsUIState {
         micAllowed || micPermission == .notDetermined
             ? nil
             : "Allow it in System Settings → Privacy & Security → Microphone."
+    }
+
+    /// Denied/restricted speech has no in-product remedy (no prompt
+    /// exists) — point at Settings instead of showing a dead button.
+    var speechDeniedGuidance: String? {
+        switch speechPermission {
+        case .denied, .restricted:
+            "Turn it back on in System Settings → Privacy & Security."
+        default:
+            nil
+        }
     }
 
     var speechTone: OtoStatus.Tone {

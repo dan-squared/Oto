@@ -83,16 +83,21 @@ enum EditableFocus: Equatable, Sendable {
     /// when its role read as non-text — canvas editors draw their own
     /// caret under generic roles. Pure — unit-tested. Secure fields still
     /// refuse (they expose selection too — refusal wins, pinned by test);
-    /// editable/unknown pass through untouched.
+    /// editable/unknown pass through untouched. The upgrade fires ONLY for
+    /// canvas-editor bundles: everywhere else (notably Chromium browsers,
+    /// where selected static text — or an empty range — answers the probe
+    /// on void web areas) a void stays a void and diverts to recovery
+    /// instead of laundering a phantom insert. Nil bundle never upgrades
+    /// (fail closed, house rule).
     nonisolated static func resolveWithSelectionProbe(
-        verdict: EditableFocus, hasSelectedText: Bool
+        verdict: EditableFocus, hasSelectedText: Bool, bundleID: String?
     ) -> EditableFocus {
         guard hasSelectedText else { return verdict }
         switch verdict {
         case .secureField:
             return .secureField
         case .noField:
-            return .unknown
+            return CanvasEditors.isCanvas(bundleID: bundleID) ? .unknown : verdict
         case .editable, .unknown:
             return verdict
         }
@@ -236,15 +241,16 @@ struct LiveFocusCheck: FocusChecking {
 
     private nonisolated(unsafe) static let focusLog = Logger(subsystem: "app.Oto", category: "focus")
 
-    nonisolated static func logVerdict(pid: pid_t, verdict: EditableFocus, axError: AXError?, timedOut: Bool, selected: Bool = false, attempt: Int? = nil) {
+    nonisolated static func logVerdict(pid: pid_t, verdict: EditableFocus, axError: AXError?, timedOut: Bool, selected: Bool = false, attempt: Int? = nil, bundleID: String? = nil) {
         // Raw code, not the opaque struct description (which prints as
         // `Optional(__C.AXError)` and hides the value that decides the
         // sandbox-denial vs per-app-behavior question).
         let code = axError.map { String($0.rawValue) } ?? "nil"
+        let app = bundleID ?? "?"
         if let attempt {
-            focusLog.info("focus pid=\(pid, privacy: .public) attempt=\(attempt, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) sel=\(selected, privacy: .public) timeout=\(timedOut, privacy: .public)")
+            focusLog.info("focus pid=\(pid, privacy: .public) app=\(app, privacy: .public) attempt=\(attempt, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) sel=\(selected, privacy: .public) timeout=\(timedOut, privacy: .public)")
         } else {
-            focusLog.info("focus pid=\(pid, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) sel=\(selected, privacy: .public) timeout=\(timedOut, privacy: .public)")
+            focusLog.info("focus pid=\(pid, privacy: .public) app=\(app, privacy: .public) verdict=\(String(describing: verdict), privacy: .public) axerr=\(code, privacy: .public) sel=\(selected, privacy: .public) timeout=\(timedOut, privacy: .public)")
         }
     }
 
@@ -273,7 +279,7 @@ struct LiveFocusCheck: FocusChecking {
                 while !settled {
                     attempt += 1
                     let detail = reader(pid)
-                    Self.logVerdict(pid: pid, verdict: detail.verdict, axError: detail.axError, timedOut: false, selected: detail.hasSelectedText, attempt: attempt)
+                    Self.logVerdict(pid: pid, verdict: detail.verdict, axError: detail.axError, timedOut: false, selected: detail.hasSelectedText, attempt: attempt, bundleID: TerminalEmulators.bundleID(for: pid))
                     let transientVoid = detail.verdict == .noField
                         && detail.axError == .noValue
                         && attempt < Self.maxAttempts
@@ -295,7 +301,7 @@ struct LiveFocusCheck: FocusChecking {
                 // If the timer wins, it logs + resumes; a late worker
                 // detail line may follow, which reads chronologically.
                 if gate.claim() {
-                    Self.logVerdict(pid: pid, verdict: .unknown, axError: nil, timedOut: true)
+                    Self.logVerdict(pid: pid, verdict: .unknown, axError: nil, timedOut: true, bundleID: TerminalEmulators.bundleID(for: pid))
                     continuation.resume(returning: .unknown)
                 }
             }
@@ -337,8 +343,10 @@ struct LiveFocusCheck: FocusChecking {
         element: AXUIElement?
     ) -> (verdict: EditableFocus, axError: AXError?, hasSelectedText: Bool) {
         let selected = element.map(selectedTextPresent) ?? false
-        let probed = EditableFocus.resolveWithSelectionProbe(verdict: verdict, hasSelectedText: selected)
         let bundleID = TerminalEmulators.bundleID(for: pid)
+        let probed = EditableFocus.resolveWithSelectionProbe(
+            verdict: verdict, hasSelectedText: selected, bundleID: bundleID
+        )
         let out: EditableFocus
         if axError == .noValue, CanvasEditors.proceedsVoid(bundleID: bundleID) {
             out = .unknown

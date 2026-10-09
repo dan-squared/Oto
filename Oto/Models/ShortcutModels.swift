@@ -571,7 +571,7 @@ struct ShortcutStaging: Equatable, Sendable {
     }
 }
 
-/// Which purpose a shortcut serves (five slots). Display names feed the
+/// Which purpose a shortcut serves (six slots). Display names feed the
 /// refusal copy — one source, never scattered strings. Double-tap has no
 /// entry: it derives from the hold key for the same purpose (dictation).
 enum ShortcutSlotID: Sendable, Equatable {
@@ -628,7 +628,7 @@ enum ShortcutRefusalMessage {
     }
 }
 
-/// The three transform shortcuts (E2): one re-recordable combo per preset.
+/// The four transform shortcuts (E2 + Phase 9 custom): one re-recordable combo per preset.
 /// Persisted as one JSON blob (`app.Oto.transformShortcuts`); absent or
 /// corrupt ⇒ factory `Opt+1/2/3`. Stored triggers are Kinds (combos need no
 /// interaction mode — transforms fire, they never hold or toggle).
@@ -636,21 +636,26 @@ struct TransformShortcuts: Equatable, Sendable, Codable {
     var polish: ShortcutTrigger.Kind
     var concise: ShortcutTrigger.Kind
     var professional: ShortcutTrigger.Kind
+    var custom: ShortcutTrigger.Kind
 
     nonisolated static func == (lhs: TransformShortcuts, rhs: TransformShortcuts) -> Bool {
         lhs.polish == rhs.polish && lhs.concise == rhs.concise && lhs.professional == rhs.professional
+            && lhs.custom == rhs.custom
     }
 
     nonisolated static func `default`() -> TransformShortcuts {
-        // Factory trio (moved Opt+digits → Cmd+digits per explicit request:
+        // Factory quartet (moved Opt+digits → Cmd+digits per explicit request:
         // Opt+digits don't fire on the user's machine. Global Cmd-digit
         // hotkeys preempt per-app Tab switching while Oto runs — stated
         // cost, each re-recordable. Paired with the Right-Option hold
-        // (different families ⇒ Rule B clean).
+        // (different families ⇒ Rule B clean). Cmd+4 preempts per-app
+        // Cmd+4 the same way; idle-until-instruction-written, so it never
+        // surprises.
         TransformShortcuts(
             polish: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_1)),
             concise: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_2)),
-            professional: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_3))
+            professional: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_3)),
+            custom: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_4))
         )
     }
 
@@ -659,6 +664,7 @@ struct TransformShortcuts: Equatable, Sendable, Codable {
         case .polish: return polish
         case .concise: return concise
         case .professional: return professional
+        case .custom: return custom
         }
     }
 
@@ -667,6 +673,7 @@ struct TransformShortcuts: Equatable, Sendable, Codable {
         case .polish: polish = kind
         case .concise: concise = kind
         case .professional: professional = kind
+        case .custom: custom = kind
         }
     }
 
@@ -675,10 +682,25 @@ struct TransformShortcuts: Equatable, Sendable, Codable {
     private static let log = Logger(subsystem: "app.Oto", category: "shortcut")
 
     static func load(from defaults: UserDefaults = .standard) -> TransformShortcuts {
-        guard let data = defaults.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode(TransformShortcuts.self, from: data)
-        else { return .default() }
-        return decoded
+        guard let data = defaults.data(forKey: defaultsKey) else { return .default() }
+        // Tolerant upgrade (load-bearing): a 4th Codable field breaks
+        // JSONDecoder on old 3-key blobs, and falling back to .default()
+        // would wipe the user's re-recorded trio. Decode leniently: keep
+        // whatever survives, default only the rest.
+        if let decoded = try? JSONDecoder().decode(TransformShortcuts.self, from: data) {
+            return decoded
+        }
+        struct Trio: Decodable {
+            var polish: ShortcutTrigger.Kind
+            var concise: ShortcutTrigger.Kind
+            var professional: ShortcutTrigger.Kind
+        }
+        guard let trio = try? JSONDecoder().decode(Trio.self, from: data) else { return .default() }
+        var kept = TransformShortcuts.default()
+        kept.polish = trio.polish
+        kept.concise = trio.concise
+        kept.professional = trio.professional
+        return kept
     }
 
     func save(to defaults: UserDefaults = .standard) {
@@ -687,7 +709,7 @@ struct TransformShortcuts: Equatable, Sendable, Codable {
     }
 }
 
-/// Non-blocking load-time audit: every conflicting pair among the five live
+/// Non-blocking load-time audit: every conflicting pair among the six live
 /// slots, for advisory display. Never auto-clears — data is preserved, the
 /// user decides. New saves are blocked by the dispatch gate; this names old
 /// sins (one matrix item covers an upgraded violating config).
@@ -704,6 +726,7 @@ enum ShortcutAudit {
             (.transform(.polish), transforms.polish),
             (.transform(.concise), transforms.concise),
             (.transform(.professional), transforms.professional),
+            (.transform(.custom), transforms.custom),
         ]
         var out: [(slot: ShortcutSlotID, message: String)] = []
         for i in slots.indices {

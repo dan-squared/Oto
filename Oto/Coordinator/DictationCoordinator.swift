@@ -22,10 +22,17 @@ import os
 actor DictationCoordinator {
     private(set) var state: DictationState = .idle
 
-    /// Transcript preserved when insertion fails or the target is gone.
-    /// Cleared when a new session begins. The production menu copies it
-    /// until the Flow Bar (Phase 6) surfaces it.
-    private(set) var recoveryTranscript: Transcript?
+    /// Transcript preserved when insertion fails or the target is gone,
+    /// plus the app it was dictated for (Retry confirms against the
+    /// expected app, never focus-at-click-time). ONE value, set and
+    /// cleared atomically — the transcript and its app can never desync
+    /// into a confirm dialog naming the wrong app. Cleared when a new
+    /// session begins. The production menu copies it until the Flow Bar
+    /// (Phase 6) surfaces it.
+    private(set) var recovery: KeptRecovery?
+    /// Pass-through reads (tests + menu): derived, so they cannot drift.
+    var recoveryTranscript: Transcript? { recovery?.transcript }
+    var recoveryExpectedBundleID: String? { recovery?.expectedBundleID }
 
     private let audio: any AudioCaptureServing
     private let speech: any SpeechServing
@@ -290,7 +297,7 @@ actor DictationCoordinator {
         currentSessionID = context.id
         finishRequested = false
         recordingBeganAt = nil
-        recoveryTranscript = nil
+        recovery = nil
         currentWork = nil
         state = .starting(context)
         log.info("begin \(context.id.uuidString.prefix(8), privacy: .public) mode=\(String(describing: interaction), privacy: .public) target=\(context.target.bundleIdentifier ?? "?", privacy: .public)")
@@ -514,7 +521,10 @@ actor DictationCoordinator {
         guard alive else {
             // Terminal first (cancel-wins over in-flight restore).
             currentSessionID = nil
-            recoveryTranscript = Transcript(text: clean)
+            recovery = KeptRecovery(
+                transcript: Transcript(text: clean),
+                expectedBundleID: context.target.bundleIdentifier
+            )
             state = .failed(context, .targetGone)
             await restoreMedia(sessionID: sessionID)
             log.info("failed target-gone, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
@@ -535,14 +545,20 @@ actor DictationCoordinator {
             log.info("completed, inserted \(final.count, privacy: .public) chars into \(context.target.bundleIdentifier ?? "?", privacy: .public)")
         case .recoverableFailure(let reason):
             // No false success: the transcript stays recoverable.
-            recoveryTranscript = Transcript(text: final)
+            recovery = KeptRecovery(
+                transcript: Transcript(text: final),
+                expectedBundleID: context.target.bundleIdentifier
+            )
             state = .failed(context, .insertionFailed(reason))
             log.info("failed insertion, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public) reason=\(reason, privacy: .public)")
         case .noEditableField:
             // Void-paste divert: focus with nowhere to paste. Same
             // recoverability as insertion failure, distinct case so the
             // catcher (and only the catcher) fires for it.
-            recoveryTranscript = Transcript(text: final)
+            recovery = KeptRecovery(
+                transcript: Transcript(text: final),
+                expectedBundleID: context.target.bundleIdentifier
+            )
             state = .failed(context, .noTextField)
             log.info("failed no-text-field, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
         }

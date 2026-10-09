@@ -362,7 +362,7 @@ struct OnboardingView: View {
                     icon: "mic",
                     title: "Microphone",
                     status: micStatusText,
-                    actionTitle: uiState.micAllowed ? nil : "Allow microphone access",
+                    actionTitle: uiState.micPermission == .notDetermined ? "Allow microphone access" : nil,
                     action: {
                         Task {
                             _ = await uiState.ensureMicrophoneGrant()
@@ -387,8 +387,14 @@ struct OnboardingView: View {
                     icon: "checkmark",
                     title: "Speech recognition",
                     status: uiState.speechText,
-                    actionTitle: nil,
-                    action: {}
+                    actionTitle: uiState.speechPermission == .notDetermined ? "Allow speech recognition" : nil,
+                    guidance: uiState.speechDeniedGuidance,
+                    action: {
+                        Task {
+                            _ = await uiState.ensureSpeechGrant()
+                            uiState.refreshPermissions()
+                        }
+                    }
                 )
             }
         }
@@ -400,7 +406,7 @@ struct OnboardingView: View {
         uiState.micPermission == .denied ? "Denied — allow it in System Settings." : uiState.micText
     }
 
-    private func permissionRow(icon: String, title: String, status: String, actionTitle: String?, action: @escaping () -> Void) -> some View {
+    private func permissionRow(icon: String, title: String, status: String, actionTitle: String?, guidance: String? = nil, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 18))
@@ -413,6 +419,11 @@ struct OnboardingView: View {
                 Text(status)
                     .font(.system(size: 11.5))
                     .foregroundStyle(OtoPalette.faint)
+                if let guidance {
+                    Text(guidance)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(OtoPalette.faint)
+                }
             }
             Spacer()
             if let actionTitle {
