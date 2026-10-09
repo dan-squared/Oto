@@ -141,6 +141,14 @@ private struct SnippetEditor: View {
                 if !scopeGlobal {
                     TextField("App bundle ID", text: $bundleID)
                         .font(.caption)
+                    // Frontmost Fill (mirrors the dictionary editor):
+                    // manual field stays for the rest.
+                    Button("Use frontmost app") {
+                        if let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+                            bundleID = id
+                        }
+                    }
+                    .font(.caption)
                 }
             }
             if let error {

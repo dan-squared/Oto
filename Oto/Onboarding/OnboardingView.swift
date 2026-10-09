@@ -387,8 +387,13 @@ struct OnboardingView: View {
                     icon: "checkmark",
                     title: "Speech recognition",
                     status: uiState.speechText,
-                    actionTitle: nil,
-                    action: {}
+                    actionTitle: uiState.speechAllowed ? nil : "Allow speech recognition",
+                    action: {
+                        Task {
+                            _ = await uiState.ensureSpeechGrant()
+                            uiState.refreshPermissions()
+                        }
+                    }
                 )
             }
         }

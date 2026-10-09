@@ -70,7 +70,7 @@ struct HistoryPane: View {
                                 .foregroundStyle(OtoPalette.ink)
                                 .lineLimit(3)
                             HStack {
-                                Text(entry.bundleIdentifier ?? "Unknown app")
+                                Text(AppNames.displayName(forBundleID: entry.bundleIdentifier))
                                 Text("·")
                                 Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
                             }

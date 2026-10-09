@@ -61,7 +61,17 @@ struct SpeechStatusRow: View {
 
     var body: some View {
         OtoLine("Speech recognition", nil) {
-            OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
+            VStack(alignment: .trailing, spacing: 8) {
+                OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
+                if !uiState.speechAllowed {
+                    OtoBig("Allow speech recognition") {
+                        Task {
+                            _ = await uiState.ensureSpeechGrant()
+                            uiState.refreshPermissions()
+                        }
+                    }
+                }
+            }
         }
     }
 }

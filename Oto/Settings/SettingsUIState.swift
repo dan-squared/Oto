@@ -100,6 +100,13 @@ final class SettingsUIState {
         await permissions.ensureMicrophone()
     }
 
+    /// Just-in-time speech grant for the Allow buttons. Same gesture-only
+    /// rule as the mic: denied stays a Settings errand (no prompt exists),
+    /// notDetermined gets the system dialog in-product.
+    func ensureSpeechGrant() async -> Bool {
+        await permissions.ensureSpeech()
+    }
+
     /// Apple's blessed prompt: opens System Settings at the Accessibility
     /// page itself when untrusted, no-ops when trusted. Verified in the
     /// macOS 27 headers (10.9+); no raw Settings URLs.
@@ -148,6 +155,9 @@ final class SettingsUIState {
     }
 
     var micAllowed: Bool { micPermission == .granted }
+
+    /// Authorized-only gate for the Allow buttons (mirrors micAllowed).
+    var speechAllowed: Bool { speechPermission == .authorized }
 
     /// True while the sidebar column is on screen. Pure over the stored
     /// visibility, so it is unit-tested; membership is equality because

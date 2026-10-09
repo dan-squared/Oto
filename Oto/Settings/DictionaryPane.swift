@@ -134,6 +134,15 @@ private struct DictionaryRuleEditor: View {
                 if !scopeGlobal {
                     TextField("App bundle ID (e.g. com.apple.Mail)", text: $bundleID)
                         .font(.caption)
+                    // Frontmost Fill (the real flow: open the app, Fill,
+                    // save): manual field stays for power users and
+                    // non-running apps — no full picker needed.
+                    Button("Use frontmost app") {
+                        if let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+                            bundleID = id
+                        }
+                    }
+                    .font(.caption)
                 }
                 Toggle("Enabled", isOn: $isEnabled)
             }

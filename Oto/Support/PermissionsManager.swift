@@ -64,6 +64,32 @@ struct PermissionsManager: Sendable {
     func speechStatus() -> SFSpeechRecognizerAuthorizationStatus {
         SFSpeechRecognizer.authorizationStatus()
     }
+
+    /// Asks only on user gesture — never speculatively (same rule as the
+    /// mic). Denied/restricted short-circuit (no prompt exists); only
+    /// notDetermined presents the system dialog.
+    func requestSpeech() async -> Bool {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status == .authorized)
+            }
+        }
+    }
+
+    /// Returns true when speech recognition may proceed: already
+    /// authorized, or authorized through a just-in-time prompt.
+    func ensureSpeech() async -> Bool {
+        switch speechStatus() {
+        case .authorized:
+            return true
+        case .denied, .restricted:
+            return false
+        case .notDetermined:
+            return await requestSpeech()
+        @unknown default:
+            return false
+        }
+    }
 }
 
 extension PermissionsManager {

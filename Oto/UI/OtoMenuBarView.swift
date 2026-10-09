@@ -82,13 +82,34 @@ struct OtoMenuBarView: View {
                         feedback = nil
                         return
                     }
-                    // The person pressed this while looking at the target —
-                    // they are the check: only someone facing the app they
-                    // want the text in presses Retry.
-                    let posted = await inserter.retryPostToFrontmost(text)
-                    feedback = posted
-                        ? "Posted — check the frontmost app."
-                        : "Retry failed — Accessibility permission may be off, or the clipboard was unavailable."
+                    let expectedID = await coordinator.recoveryExpectedBundleID
+                    let front = NSWorkspace.shared.frontmostApplication
+                    let frontID = front?.bundleIdentifier
+                    // Mismatch confirm: the transcript was dictated for a
+                    // different app than the one facing the user now.
+                    // Unknown on either side posts without interrogating —
+                    // the person pressed Retry looking at their target.
+                    if AppNames.shouldConfirmRetry(frontmost: frontID, expected: expectedID) {
+                        let frontName = front?.localizedName ?? frontID ?? "frontmost app"
+                        let expectedName = AppNames.displayName(forBundleID: expectedID)
+                        let alert = NSAlert()
+                        alert.messageText = "Paste into \(frontName)?"
+                        alert.informativeText = "This transcript was dictated for \(expectedName)."
+                        alert.addButton(withTitle: "Paste")
+                        alert.addButton(withTitle: "Cancel")
+                        guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    }
+                    switch await inserter.retryPostToFrontmost(text) {
+                    case .posted:
+                        let name = front?.localizedName ?? frontID ?? "the frontmost app"
+                        feedback = "Posted to \(name) — check it."
+                    case .refusedNoAccessibility:
+                        feedback = "Retry failed — Accessibility permission is off."
+                    case .clipboardUnavailable:
+                        feedback = "Retry failed — the clipboard was unavailable."
+                    case .pasteFailed:
+                        feedback = "Retry failed — the paste keystroke could not be sent."
+                    }
                 }
             }
             Divider()

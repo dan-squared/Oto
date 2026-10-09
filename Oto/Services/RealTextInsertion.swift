@@ -509,10 +509,29 @@ final class RealTextInsertion: TextInserting {
     /// reports success. Clipboard discipline + write-verify + guarded
     /// restore are kept. Returns true when the keystroke was posted
     /// (delivery itself remains unverified, as always).
-    func retryPostToFrontmost(_ text: String) async -> Bool {
+    /// Retry outcome, per cause — the menu names the failure instead of
+    /// bundling causes (Phase 12: honesty over brevity).
+    enum RetryOutcome: Equatable, Sendable {
+        case posted
+        case refusedNoAccessibility
+        case clipboardUnavailable
+        case pasteFailed
+
+        nonisolated static func == (lhs: RetryOutcome, rhs: RetryOutcome) -> Bool {
+            switch (lhs, rhs) {
+            case (.posted, .posted), (.refusedNoAccessibility, .refusedNoAccessibility),
+                 (.clipboardUnavailable, .clipboardUnavailable), (.pasteFailed, .pasteFailed):
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    func retryPostToFrontmost(_ text: String) async -> RetryOutcome {
         guard events.isTrusted() else {
             log.info("retry: refused, accessibility untrusted")
-            return false
+            return .refusedNoAccessibility
         }
         let front = NSWorkspace.shared.frontmostApplication
         log.info("retry: posting to frontmost \(front?.bundleIdentifier ?? "?", privacy: .public) (\(front?.processIdentifier ?? -1, privacy: .public))")
@@ -521,16 +540,16 @@ final class RealTextInsertion: TextInserting {
         await events.sleep(timings.prePasteDelay)
         guard await waitForClipboard(text: text, marker: receipt.marker) else {
             PasteboardSnapshot.restore(saved, to: pasteboard)
-            return false
+            return .clipboardUnavailable
         }
         guard await events.postPaste() else {
             log.info("retry: no keystroke created")
             PasteboardSnapshot.restore(saved, to: pasteboard)
-            return false
+            return .pasteFailed
         }
         log.info("retry: posted HID Cmd-V (delivery unverified)")
         scheduleRestore(saved: saved, receipt: receipt)
-        return true
+        return .posted
     }
 
     // MARK: - Private
