@@ -155,7 +155,7 @@ binding for both the post context and the copy.
   PlistBuddy — fine, but brittle if they rebrand; prefer a comment
   noting the source).
 
-## 7. Resolutions, §3–§5 (2026-10-09, unpushed)
+## 6. Resolutions, §1–§5 (2026-10-09, unpushed)
 
 - §3.4: Reset-scope line added in the Transforms card ("Reset restores
   the four shortcuts; the custom name + instruction stay untouched").
@@ -174,7 +174,7 @@ binding for both the post context and the copy.
   matrices (retry dialog, speech Allow, Fill removal sanity, Docs
   canvas, non-Figma canvas divert, Dia void card).
 
-## 6. What is solid (don't touch)
+## 7. What is solid (don't touch)
 
 - Crash fix shape (`nonisolated` request callbacks) — correct executor
   reasoning, TCC-verified failure mode, mic path hardened too.
