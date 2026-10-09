@@ -66,6 +66,9 @@ struct SettingsUIStateTests {
         #expect(state.speechText == "Not allowed")
         #expect(state.speechTone == .warn)
         #expect(state.speechAllowed == false)
+        #expect(state.speechDeniedGuidance != nil)
+        state.speechPermission = .notDetermined
+        #expect(state.speechDeniedGuidance == nil)
         state.speechPermission = .restricted
         #expect(state.speechText == "Not allowed")
         #expect(state.speechTone == .warn)

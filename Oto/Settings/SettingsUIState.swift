@@ -174,6 +174,17 @@ final class SettingsUIState {
             : "Allow it in System Settings → Privacy & Security → Microphone."
     }
 
+    /// Denied/restricted speech has no in-product remedy (no prompt
+    /// exists) — point at Settings instead of showing a dead button.
+    var speechDeniedGuidance: String? {
+        switch speechPermission {
+        case .denied, .restricted:
+            "Turn it back on in System Settings → Privacy & Security."
+        default:
+            nil
+        }
+    }
+
     var speechTone: OtoStatus.Tone {
         switch speechPermission {
         case .authorized: .ok

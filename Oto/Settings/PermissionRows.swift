@@ -8,6 +8,7 @@
 //  Driven by the hoisted SettingsUIState, like the panes themselves.
 //
 
+import Speech
 import SwiftUI
 
 /// Microphone status row. Title differs by pane ("Status" under Dictation's
@@ -55,22 +56,25 @@ struct AccessibilityRow: View {
     }
 }
 
-/// Speech-recognition status row. Identical in both panes.
+/// Speech-recognition status row. Identical in both panes. One trailing
+/// slot, always exactly one control: the Allow button sits IN the status
+/// slot (never below it) while a prompt exists; otherwise the status
+/// pill. Denied gets Settings guidance instead of a dead button — no
+/// prompt exists to show, so a button would lie.
 struct SpeechStatusRow: View {
     let uiState: SettingsUIState
 
     var body: some View {
-        OtoLine("Speech recognition", nil) {
-            VStack(alignment: .trailing, spacing: 8) {
-                OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
-                if !uiState.speechAllowed {
-                    OtoBig("Allow speech recognition") {
-                        Task {
-                            _ = await uiState.ensureSpeechGrant()
-                            uiState.refreshPermissions()
-                        }
+        OtoLine("Speech recognition", uiState.speechDeniedGuidance) {
+            if uiState.speechPermission == .notDetermined {
+                OtoBig("Allow speech recognition") {
+                    Task {
+                        _ = await uiState.ensureSpeechGrant()
+                        uiState.refreshPermissions()
                     }
                 }
+            } else {
+                OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
             }
         }
     }
