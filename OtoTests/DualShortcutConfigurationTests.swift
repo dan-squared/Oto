@@ -214,11 +214,13 @@ struct DualShortcutConfigurationTests {
     @Test func auditNamesGrandfatheredViolations() {
         // A stored violating pair (Option hold + Opt-digit transforms, the
         // pre-Cmd-trio shape) is named, never silently cleared: the hold
-        // plus all three transforms flag each other.
+        // plus all three transforms flag each other (custom Cmd+4 stays
+        // clean — count holds at 4).
         let clashing = TransformShortcuts(
             polish: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_1)),
             concise: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_2)),
-            professional: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_3))
+            professional: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_3)),
+            custom: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_4))
         )
         let violations = ShortcutAudit.violations(
             hold: .modifierHold(keyCode: UInt16(kVK_RightOption)),
@@ -240,6 +242,28 @@ struct DualShortcutConfigurationTests {
         #expect(TransformShortcuts.load(from: defaults) == custom)
         defaults.set("garbage".data(using: .utf8)!, forKey: TransformShortcuts.defaultsKey)
         #expect(TransformShortcuts.load(from: defaults) == .default())
+    }
+
+    @Test func oldThreeKeyBlobKeepsTrioAndDefaultsCustom() throws {
+        // Load-bearing: a 4th Codable field breaks JSONDecoder on stored
+        // 3-key blobs. The trio must survive with the user's re-recorded
+        // kinds; only custom falls back to factory. Never .default()-wipe.
+        let mods = UInt32(CarbonModifiers.command | CarbonModifiers.control)
+        var distinct = TransformShortcuts.default()
+        distinct.polish = .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_G))
+        distinct.concise = .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_H))
+        distinct.professional = .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_J))
+        distinct.custom = .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_K))
+        let blob = try JSONEncoder().encode(distinct)
+        var dict = try JSONSerialization.jsonObject(with: blob) as! [String: Any]
+        dict.removeValue(forKey: "custom")
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        defaults.set(try JSONSerialization.data(withJSONObject: dict), forKey: TransformShortcuts.defaultsKey)
+        let loaded = TransformShortcuts.load(from: defaults)
+        #expect(loaded.polish == distinct.polish)
+        #expect(loaded.concise == distinct.concise)
+        #expect(loaded.professional == distinct.professional)
+        #expect(loaded.custom == TransformShortcuts.default().custom)
     }
 
     @Test func holdVersusFunctionNeverConflictsEitherOrder() {

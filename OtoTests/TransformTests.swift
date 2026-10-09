@@ -126,6 +126,34 @@ struct TransformTests {
 
     // MARK: - Runner
 
+    /// Custom-prompt store seeding (Runner reads `.standard`): stashed
+    /// and restored — tests must never depend on, leak into, or wipe
+    /// the developer machine's real defaults.
+    private func stashCustomPrompt() -> (name: String?, instruction: String?) {
+        (
+            UserDefaults.standard.string(forKey: CustomPrompt.nameKey),
+            UserDefaults.standard.string(forKey: CustomPrompt.instructionKey)
+        )
+    }
+
+    private func seedCustomPrompt(name: String, instruction: String) {
+        UserDefaults.standard.set(name, forKey: CustomPrompt.nameKey)
+        UserDefaults.standard.set(instruction, forKey: CustomPrompt.instructionKey)
+    }
+
+    private func restoreCustomPrompt(_ stashed: (name: String?, instruction: String?)) {
+        if let name = stashed.name {
+            UserDefaults.standard.set(name, forKey: CustomPrompt.nameKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: CustomPrompt.nameKey)
+        }
+        if let instruction = stashed.instruction {
+            UserDefaults.standard.set(instruction, forKey: CustomPrompt.instructionKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: CustomPrompt.instructionKey)
+        }
+    }
+
     private func makeRunner(
         selection: String? = "helo wrld",
         chunks: [String] = ["Hello world."],
@@ -172,6 +200,36 @@ struct TransformTests {
         #expect(calls.first?.text == "Hello world.")
         #expect(polish.jobs == [.transform(.polish)])
         #expect(grabber.grabs == 1)
+        #expect(await runner.currentWorkLabel() == nil)
+    }
+
+    @Test func customRunAppliesRewriteOnce() async {
+        // The 4th preset end to end via fake: press → grabbed →
+        // transformed job → replaced. Cmd+Z is target-native (matrix).
+        let stashed = stashCustomPrompt()
+        defer { restoreCustomPrompt(stashed) }
+        seedCustomPrompt(name: "Bullets", instruction: "rewrite as 3 bullets")
+        let (runner, inserter, polish, grabber, _) = await makeRunner()
+        await runner.execute(preset: .custom)
+        #expect(await waitForReplaces(inserter, count: 1))
+        #expect(await inserter.replaceSelectionCalls.count == 1)
+        #expect(polish.jobs == [.transform(.custom)])
+        #expect(grabber.grabs == 1)
+        #expect(await runner.currentWorkLabel() == nil)
+    }
+
+    @Test func customEmptyInstructionNeverGrabs() async {
+        // Fail-closed before target capture: no grab, no model contact,
+        // no pill work — the same silence as empty selection.
+        let stashed = stashCustomPrompt()
+        defer { restoreCustomPrompt(stashed) }
+        seedCustomPrompt(name: "Bullets", instruction: "   ")
+        let (runner, inserter, polish, grabber, _) = await makeRunner()
+        await runner.execute(preset: .custom)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(grabber.grabs == 0)
+        #expect(polish.prompts.isEmpty)
+        #expect(await inserter.replaceSelectionCalls.count == 0)
         #expect(await runner.currentWorkLabel() == nil)
     }
 
@@ -275,13 +333,13 @@ struct TransformTests {
 
     // MARK: - Save gate
 
-    @Test func gateAdvisoryCoversAllFiveSlots() {
+    @Test func gateAdvisoryCoversAllSixSlots() {
         let transforms = TransformShortcuts.default()
-        // Clean baseline: the factory pair (Opt hold + Cmd trio) never
+        // Clean baseline: the factory pair (Opt hold + Cmd quartet) never
         // conflicts — different families, zero cross-fire.
         let holdOpt = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_RightOption))
         let free = ShortcutTrigger.Kind.unassigned
-        // Clean triple: no advisory anywhere.
+        // Clean quartet: no advisory anywhere.
         for preset in TransformPreset.allCases {
             #expect(TransformShortcutGate.advisory(
                 kind: transforms.kind(for: preset), preset: preset,
@@ -305,12 +363,25 @@ struct TransformTests {
             kind: cmdCombo, preset: .polish,
             transforms: transforms, hold: holdCmd, handsFree: free
         )?.contains("Push to talk") == true)
-        // Sibling digit: a new same-modifier digit alongside the trio is
+        // Sibling digit: a new same-modifier digit alongside the quartet is
         // allowed (Carbon distinguishes by keyCode — no double-fire).
         #expect(TransformShortcutGate.advisory(
             kind: cmdCombo, preset: .concise,
             transforms: transforms, hold: holdOpt, handsFree: free
         ) == nil)
+        // Factory custom (Cmd+4) is advisory-clean by construction.
+        #expect(TransformShortcutGate.advisory(
+            kind: transforms.kind(for: .custom), preset: .custom,
+            transforms: transforms, hold: holdOpt, handsFree: free
+        ) == nil)
+        // Exact dup of custom names it (unnamed → "Custom").
+        let stashed = stashCustomPrompt()
+        defer { restoreCustomPrompt(stashed) }
+        restoreCustomPrompt((nil, nil))
+        #expect(TransformShortcutGate.advisory(
+            kind: transforms.kind(for: .custom), preset: .polish,
+            transforms: transforms, hold: holdOpt, handsFree: free
+        )?.contains("Custom") == true)
         // Exact dup of a sibling: refused, names the sibling.
         #expect(TransformShortcutGate.advisory(
             kind: transforms.kind(for: .polish), preset: .concise,
@@ -347,6 +418,7 @@ struct TransformTests {
         #expect(workPillText(.preset(.polish)) == "Polishing")
         #expect(workPillText(.preset(.concise)) == "Shortening")
         #expect(workPillText(.preset(.professional)) == "Formalizing")
+        #expect(workPillText(.preset(.custom)) == "Custom")
         #expect(TransformPreset.polish.pillVerb == "Polishing")
         let ctx = SessionContext(
             id: UUID(), startedAt: ContinuousClock().now,
@@ -360,8 +432,8 @@ struct TransformTests {
     }
 
     @Test func workWidthFitsLabelsAndClamps() {
-        // All four labels fit untruncated at the pill font (the plan's pin).
-        for text in ["Cleaning", "Polishing", "Shortening", "Formalizing"] {
+        // All five labels fit untruncated at the pill font (the plan's pin).
+        for text in ["Cleaning", "Polishing", "Shortening", "Formalizing", "Custom"] {
             let w = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(text))
             #expect(w < VisualizerMath.workMaxWidth)
         }
