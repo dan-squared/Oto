@@ -17,17 +17,29 @@ import Testing
 @MainActor
 struct FocusProbeTests {
     @Test func probeUpgradesVoidRolesNeverSecure() {
+        let figma: String? = "com.figma.Desktop"
+        let dia: String? = "company.thebrowser.dia"
+        let chrome: String? = "com.google.Chrome"
         // No signal: verdict stands (today's behavior, byte-identical).
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: false) == .noField)
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .editable, hasSelectedText: false) == .editable)
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .secureField, hasSelectedText: false) == .secureField)
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .unknown, hasSelectedText: false) == .unknown)
-        // Signal: canvas caret under a generic role proceeds…
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: true) == .unknown)
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .editable, hasSelectedText: true) == .editable)
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .unknown, hasSelectedText: true) == .unknown)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: false, bundleID: figma) == .noField)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .editable, hasSelectedText: false, bundleID: figma) == .editable)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .secureField, hasSelectedText: false, bundleID: figma) == .secureField)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .unknown, hasSelectedText: false, bundleID: figma) == .unknown)
+        // Signal on a canvas caret under a generic role proceeds…
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: true, bundleID: figma) == .unknown)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .editable, hasSelectedText: true, bundleID: figma) == .editable)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .unknown, hasSelectedText: true, bundleID: figma) == .unknown)
         // …but secure fields still refuse (they expose selection too).
-        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .secureField, hasSelectedText: true) == .secureField)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .secureField, hasSelectedText: true, bundleID: figma) == .secureField)
+        // Signal anywhere else never upgrades: a browser void (selected
+        // static text — or an empty range answering the probe) stays a
+        // void and diverts to recovery instead of laundering a phantom
+        // insert. Nil bundle fails closed, house rule.
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: true, bundleID: dia) == .noField)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: true, bundleID: chrome) == .noField)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: true, bundleID: "com.apple.Finder") == .noField)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .noField, hasSelectedText: true, bundleID: nil) == .noField)
+        #expect(EditableFocus.resolveWithSelectionProbe(verdict: .secureField, hasSelectedText: true, bundleID: dia) == .secureField)
     }
 
     @Test func canvasTableAndFallback() {
