@@ -107,6 +107,16 @@
             argument = "-OtoCleanSlate"
             isEnabled = "YES">
          </CommandLineArgument>
+         <!-- TEMP P3-proof (plan/p3-locale-cache.md): arm the locale cache via
+              the argument domain to compare pressToReady flag-off vs flag-on.
+              Same mechanism as the late probe arming (immune to CleanSlate +
+              container mess). REVERT after measurement; graduation (if any)
+              is a code default flip or Settings toggle, NOT this arg, which
+              only affects Xcode runs. -->
+         <CommandLineArgument
+            argument = "-app.Oto.localeCache YES"
+            isEnabled = "YES">
+         </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
