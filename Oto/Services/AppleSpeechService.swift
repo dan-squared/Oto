@@ -168,9 +168,17 @@ actor AppleSpeechService: SpeechServing {
         // whole slow path below; any throw drops the stash and falls through
         // to it (single retry, then propagate — no retry loops). REMOVE after
         // the probe reports.
+        //
+        // v2 (probe-hardening): the kept TRANSCRIBER is never reused — its
+        // `results` stream already served a full iteration and may be
+        // single-use (reusing it risks an empty transcript with nothing to
+        // fall back to). Each attempt builds a FRESH transcriber and offers
+        // it via `setModules`: whether a finalized analyzer accepts new
+        // modules is probe question 2. Every throw below still lands on the
+        // slow path, so the dictation lands in all outcomes but a dead
+        // results pipeline — which is itself the verdict.
         if AnalyzerReuseProbe.armed().enabled,
            let keptAnalyzer = probeKeptAnalyzer,
-           let keptTranscriber = probeKeptTranscriber,
            let keptFormat = probeKeptFormat
         {
             probeKeptAnalyzer = nil
@@ -178,9 +186,20 @@ actor AppleSpeechService: SpeechServing {
             probeKeptFormat = nil
             do {
                 let probeStart = ContinuousClock.now
+                let supported = await SpeechTranscriber.supportedLocales
+                guard let locale = SpeechLocaleMatching.bestMatch(for: .current, in: supported) else {
+                    throw SpeechReadiness.unsupportedLocale
+                }
+                let fresh = SpeechTranscriber(
+                    locale: locale,
+                    transcriptionOptions: [],
+                    reportingOptions: [.volatileResults],
+                    attributeOptions: [.audioTimeRange]
+                )
+                try await keptAnalyzer.setModules([fresh])
                 let stream = feedBox.createStream()
                 feedBox.configure(format: keptFormat)
-                self.transcriber = keptTranscriber
+                self.transcriber = fresh
                 self.analyzer = keptAnalyzer
                 finalizedText = ""
                 resultTask = Task { [weak self] in
@@ -190,12 +209,12 @@ actor AppleSpeechService: SpeechServing {
                 let feedBox = self.feedBox
                 relay.attach { buffer in feedBox.feed(buffer) }
                 let startMs = PerfTrace.ms(probeStart.duration(to: .now))
-                log.info("PROBE reuse start ok startMs=\(startMs, privacy: .public)ms (results verdict = this dictation's transcript)")
+                log.info("PROBE reuse start ok startMs=\(startMs, privacy: .public)ms (transcript verdict = this dictation's text)")
                 log.info("speech prepared (PROBE reuse)")
                 return
             } catch {
                 teardown()
-                log.error("PROBE reuse start failed, slow-path fallback: \(error.localizedDescription, privacy: .public)")
+                log.error("PROBE reuse failed, slow-path fallback: \(error.localizedDescription, privacy: .public)")
             }
         }
         // PROBE-END.

@@ -11,6 +11,12 @@ Landed headless-executable parts (all inert, zero behavior change):
   slot clearing in `cancel()`. DELETE after hardware reports.
 - Isolation note: synthesized `Equatable` inherits MainActor isolation, so all
   four P2 types carry explicit `nonisolated ==` (`PolishAvailability` precedent).
+- Harness v2 (2026-10-15): the kept TRANSCRIBER is never reused — its `results`
+  stream already served a full iteration and may be single-use (first hardware
+  run showed the second dictation landing empty, consistent with a dead
+  re-iteration). Each attempt builds a FRESH transcriber + `setModules` before
+  `start`; every throw still falls back to the slow path, so text lands in all
+  outcomes but a dead results pipeline (which is itself the verdict).
 This is the deferred item from `07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md:89`
 ("add only a bounded `prepared` state that has no open microphone tap and
 expires on idle, memory pressure, sleep, or an error"). The conditions in that
