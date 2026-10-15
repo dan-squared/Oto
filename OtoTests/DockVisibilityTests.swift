@@ -3,8 +3,9 @@
 //  OtoTests
 //
 //  Phase 5 dock setting: the toggle is one scalar + one documented call.
-//  These tests pin what the UI depends on — default ON (preserves current
-//  behavior on upgrade), the shown→policy mapping (an inversion here would
+//  These tests pin what the UI depends on — default OFF (fresh installs are
+//  menu-bar-only; an explicitly stored value still wins on upgrade),
+//  the shown→policy mapping (an inversion here would
 //  hide the Dock when the toggle says show), and the defaults round-trip.
 //  `apply()` itself is NOT unit-tested: it requires a live NSApp and its
 //  verdict belongs to the device matrix + UI existence test.
@@ -20,8 +21,8 @@ struct DockVisibilityTests {
         UserDefaults(suiteName: "app.Oto.tests.dock-\(UUID().uuidString)")!
     }
 
-    @Test func defaultIsShownWhenKeyAbsent() {
-        #expect(DockVisibility.isShown(defaults: isolatedDefaults()) == true)
+    @Test func defaultIsHiddenWhenKeyAbsent() {
+        #expect(DockVisibility.isShown(defaults: isolatedDefaults()) == false)
     }
 
     @Test func shownMapsToRegularHiddenMapsToAccessory() {
