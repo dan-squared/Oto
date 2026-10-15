@@ -63,6 +63,14 @@ actor DictationCoordinator {
     /// guard). Nil until the starting→recording transition; cleared on
     /// every begin so a stale instant can never green-light a new session.
     private var recordingBeganAt: ContinuousClock.Instant?
+    /// P1 (plan/p1-perf-signposts.md): the press instant + its live signpost
+    /// handle, so the press→ready span ends exactly at the .recording
+    /// transition. Observation only — no branch reads these.
+    private var pressReceivedAt: ContinuousClock.Instant?
+    private var pressToReadyID: OSSignpostID?
+    /// P1: measured press→ready ms, kept for the end-of-session summary.
+    /// Set in closePressToReady(); cleared on every begin; never branched on.
+    private var pressToReadyMs: Int?
     /// Silent-skip gate (no loader for voice-less sessions): peak under
     /// −40 dBFS with enough recorded audio to trust it. Conservative
     /// starting point — speech peaks ~0.1–0.5, mic idle noise ~0.001;
@@ -297,6 +305,9 @@ actor DictationCoordinator {
         currentSessionID = context.id
         finishRequested = false
         recordingBeganAt = nil
+        pressReceivedAt = context.startedAt
+        pressToReadyID = PerfTrace.begin(.pressToReady)
+        pressToReadyMs = nil
         recovery = nil
         currentWork = nil
         state = .starting(context)
@@ -338,6 +349,7 @@ actor DictationCoordinator {
             }
         }
         if micDenied {
+            closePressToReady()
             guard currentSessionID == sessionID else { return }
             currentSessionID = nil
             state = .failed(context, .microphoneDenied)
@@ -347,6 +359,7 @@ actor DictationCoordinator {
         do {
             try await audio.start()
         } catch {
+            closePressToReady()
             guard currentSessionID == sessionID else { return }
             currentSessionID = nil
             state = .failed(context, .audioCapture(error.localizedDescription))
@@ -358,6 +371,7 @@ actor DictationCoordinator {
         do {
             try await speech.prepare()
         } catch {
+            closePressToReady()
             guard currentSessionID == sessionID else { return }
             await audio.stop()
             // Suspension crossed: cancel may have won mid-stop. Re-check
@@ -380,6 +394,10 @@ actor DictationCoordinator {
               let context = sessionContext,
               context.id == sessionID
         else { return }
+
+        // P1: preparation just completed — close the press→ready span here,
+        // whichever branch follows (recording, or release-during-prepare).
+        closePressToReady()
 
         if finishRequested {
             state = .finalizing(context)
@@ -421,6 +439,20 @@ actor DictationCoordinator {
         await mediaDuck?.restore(sessionID: sessionID)
     }
 
+    /// P1: close the press→ready span if it is still open and log the
+    /// measurement. Idempotent; called on every path that can end
+    /// preparation (success, mic deny, audio failure, prepare throw).
+    private func closePressToReady() {
+        if let id = pressToReadyID, let began = pressReceivedAt {
+            PerfTrace.end(.pressToReady, id)
+            let ms = PerfTrace.ms(began.duration(to: .now))
+            pressToReadyMs = ms
+            log.info("PERF pressToReady=\(ms, privacy: .public)ms")
+        }
+        pressToReadyID = nil
+        pressReceivedAt = nil
+    }
+
     /// E1 prewarm: the model warms while the user speaks (free seconds).
     /// Gated on enabled + a real level + availability — all synchronous
     /// property reads, never a download, never a prompt.
@@ -450,15 +482,20 @@ actor DictationCoordinator {
             state = .completed(context)
             await restoreMedia(sessionID: sessionID)
             log.info("completed (silent, loader skipped) \(sessionID.uuidString.prefix(8), privacy: .public)")
+            log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms outcome=silent-skip")
             return
         }
         // The settle above suspends: cancel may have won while waiting.
         guard currentSessionID == sessionID else { return }
 
         let raw: String
+        let finalizeBeganAt = ContinuousClock.now
+        let tFinal = PerfTrace.begin(.finalizeAwait)
         do {
             raw = try await speech.finish()
         } catch {
+            PerfTrace.end(.finalizeAwait, tFinal)
+            let finalizeMs = PerfTrace.ms(finalizeBeganAt.duration(to: .now))
             guard currentSessionID == sessionID else { return }
             currentSessionID = nil
             // Dead mic surfaces honestly: no transcript exists to keep,
@@ -471,12 +508,16 @@ actor DictationCoordinator {
                 state = .failed(context, .speechPreparation(error.localizedDescription))
             }
             await restoreMedia(sessionID: sessionID)
+            log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms finalize=\(finalizeMs, privacy: .public)ms outcome=speech-failure")
             return
         }
 
         guard currentSessionID == sessionID,
               case .finalizing = state
         else { return }
+
+        PerfTrace.end(.finalizeAwait, tFinal)
+        let finalizeMs = PerfTrace.ms(finalizeBeganAt.duration(to: .now))
 
         let clean = pipeline.process(raw, for: context.target)
         guard !clean.isEmpty else {
@@ -486,6 +527,7 @@ actor DictationCoordinator {
             state = .completed(context)
             await restoreMedia(sessionID: sessionID)
             log.info("completed (empty, no insertion) \(sessionID.uuidString.prefix(8), privacy: .public)")
+            log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms finalize=\(finalizeMs, privacy: .public)ms outcome=empty")
             return
         }
 
@@ -493,7 +535,11 @@ actor DictationCoordinator {
         // The winner inserts exactly once; timeout / error / empty /
         // identical ⇒ raw inserts with zero ceremony. No swap, no window,
         // no second write — a miss is invisible, never mysterious.
+        let cleanupBeganAt = ContinuousClock.now
+        let tRace = PerfTrace.begin(.cleanupRace)
         let (final, wasCleaned) = await cleanedText(clean, sessionID: sessionID)
+        PerfTrace.end(.cleanupRace, tRace)
+        let cleanupMs = PerfTrace.ms(cleanupBeganAt.duration(to: .now))
         guard currentSessionID == sessionID,
               case .finalizing = state
         else { return }
@@ -528,17 +574,24 @@ actor DictationCoordinator {
             state = .failed(context, .targetGone)
             await restoreMedia(sessionID: sessionID)
             log.info("failed target-gone, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
+            log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms finalize=\(finalizeMs, privacy: .public)ms cleanup=\(cleanupMs, privacy: .public)ms outcome=target-gone")
             return
         }
 
         state = .inserting(context)
+        let insertBeganAt = ContinuousClock.now
+        let tInsert = PerfTrace.begin(.insert)
         let result = await inserter.insert(final, into: context.target)
+        PerfTrace.end(.insert, tInsert)
+        let insertMs = PerfTrace.ms(insertBeganAt.duration(to: .now))
+        log.info("PERF insert=\(insertMs, privacy: .public)ms")
 
         guard currentSessionID == sessionID else { return }
         // Terminal first (cancel-wins over in-flight restore); the switch
         // below only sets state, never suspends, so no second guard needed.
         currentSessionID = nil
         await restoreMedia(sessionID: sessionID)
+        log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms finalize=\(finalizeMs, privacy: .public)ms cleanup=\(cleanupMs, privacy: .public)ms insert=\(insertMs, privacy: .public)ms")
         switch result {
         case .inserted:
             state = .completed(context)

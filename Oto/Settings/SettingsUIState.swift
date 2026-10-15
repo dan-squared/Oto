@@ -90,6 +90,10 @@ final class SettingsUIState {
         isPreparing = true
         prepareFeedback = "Preparing…"
         prepareFeedback = await preparer.prepareDefault()
+        // P3: preparing a language changes installed state — the press-path
+        // snapshot must requery next time (success or failure; a failed
+        // prepare changes nothing, and requerying once is harmless).
+        LocaleSnapshotCache.shared.invalidate()
         isPreparing = false
         await refreshSpeech()
     }
