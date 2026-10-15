@@ -17,6 +17,14 @@ Landed headless-executable parts (all inert, zero behavior change):
   re-iteration). Each attempt builds a FRESH transcriber + `setModules` before
   `start`; every throw still falls back to the slow path, so text lands in all
   outcomes but a dead results pipeline (which is itself the verdict).
+- Arming (2026-10-15): `defaults write` CANNOT arm the probe — the stale
+  `~/Library/Containers/app.Oto` is system-protected (even `rm` is denied) and
+  misdirects cfprefsd, which clobbers file writes back to `{}`; on top of that
+  the shared scheme's `-OtoCleanSlate` launch arg wipes the domain at every
+  Xcode startup. So arming rides the shared scheme's `CommandLineArguments`
+  (`-app.Oto.probeAnalyzerReuse YES`): NSUserDefaults' argument domain has the
+  highest precedence, is in-process (no daemon/filesystem), and survives
+  CleanSlate. Zero Swift changes; revert the scheme hunk with the harness.
 This is the deferred item from `07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md:89`
 ("add only a bounded `prepared` state that has no open microphone tap and
 expires on idle, memory pressure, sleep, or an error"). The conditions in that
