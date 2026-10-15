@@ -21,6 +21,15 @@ final class DockRestoreDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = DockVisibility.apply(shown: DockVisibility.isShown())
         Self.onboarding?.showIfNeeded()
+        // Product rule: onboarding owns first-run. A restored Settings window
+        // (stale Saved Application State, or quit-mid-onboarding) must not
+        // stand while onboarding is unfinished — restoration runs before this
+        // delegate callback, so any such window already exists to be closed.
+        if OnboardingStore.shouldShow(),
+           let settings = SettingsWindowLocator.settingsWindow(in: NSApp.windows)
+        {
+            settings.close()
+        }
     }
 }
 
