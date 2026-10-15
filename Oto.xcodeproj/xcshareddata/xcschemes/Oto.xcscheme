@@ -107,14 +107,6 @@
             argument = "-OtoCleanSlate"
             isEnabled = "YES">
          </CommandLineArgument>
-         <!-- PROBE-ONLY (P2 plan §Probe): arms the analyzer-reuse probe via
-              NSUserDefaults' argument domain (highest precedence, in-process,
-              immune to CleanSlate wipes and the cfprefsd/container mess — no
-              `defaults write` needed). REMOVE with the probe harness. -->
-         <CommandLineArgument
-            argument = "-app.Oto.probeAnalyzerReuse YES"
-            isEnabled = "YES">
-         </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
