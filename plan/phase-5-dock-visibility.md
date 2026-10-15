@@ -153,3 +153,10 @@ duplicate), coordinator/speech/shortcuts/insertion, login item, scene type.
 2. Default ON (recommended, preserves today) confirmed?
 3. X model in §6 accepted (no disappear-on-close half-state)?
 4. Push together with the pending UI-polish stack after sign-off?
+
+## 9. Reversal 2026-10-15 (user decision, implemented)
+
+Default is now OFF: `isShown()` returns `false` when the key is absent, so
+fresh installs are menu-bar-only. Explicitly stored values still win either
+way, so upgrades keep whoever chose. `DockVisibilityTests` repinned
+(`defaultIsHiddenWhenKeyAbsent`); mapping + round-trip unchanged.

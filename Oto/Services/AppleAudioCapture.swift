@@ -9,6 +9,28 @@ import AVFoundation
 import Foundation
 import os
 
+// TEMP-START (plan/audio-throw-10877.md Phase A): per-step attribution spans
+// for restart(). REMOVE in Phase C either way — do not extend, do not reuse.
+// Separate from PerfTrace deliberately: the pinned 8-phase vocabulary (and
+// its count test) stays untouched by temporary diagnosis.
+private enum AudioStepTrace: Sendable {
+    nonisolated static let slog = OSLog(subsystem: "app.Oto", category: "audio")
+    nonisolated static let log = Logger(subsystem: "app.Oto", category: "audio")
+
+    nonisolated static func begin(_ step: String) -> OSSignpostID {
+        let id = OSSignpostID(log: slog)
+        os_signpost(.begin, log: slog, name: "AudioStart", signpostID: id,
+                    "%{public}s", step)
+        return id
+    }
+
+    nonisolated static func end(_ step: String, _ id: OSSignpostID, began: ContinuousClock.Instant) {
+        os_signpost(.end, log: slog, name: "AudioStart", signpostID: id,
+                    "%{public}s", step)
+        log.info("AUDIOSTEP \(step, privacy: .public) \(PerfTrace.ms(began.duration(to: .now)), privacy: .public)ms")
+    }
+}
+
 /// Real `AudioCaptureServing` over `AVAudioEngine`. Graph lessons adopted
 /// from the Yap reference (`AudioCaptureService.swift`, MIT) as Oto-owned
 /// code — each one guards a real crash/failure class:
@@ -142,21 +164,43 @@ actor AppleAudioCapture: AudioCaptureServing {
     private func restart() throws {
         // A leftover observer would stack listeners that race to rebuild.
         removeConfigObserver()
+        // TEMP Phase A (REMOVE in Phase C).
+        let sStop = AudioStepTrace.begin("engineStop")
+        let tStop = ContinuousClock.now
         engine.stop()
+        AudioStepTrace.end("engineStop", sStop, began: tStop)
         engine = AVAudioEngine()
 
-        try installTap()
+        // TEMP Phase A (REMOVE in Phase C).
+        let sTap = AudioStepTrace.begin("installTap")
+        let tTap = ContinuousClock.now
+        do {
+            try installTap()
+        } catch {
+            AudioStepTrace.end("installTap", sTap, began: tTap)
+            throw error
+        }
+        AudioStepTrace.end("installTap", sTap, began: tTap)
         addConfigObserver()
 
+        // TEMP Phase A (REMOVE in Phase C).
+        let sPrep = AudioStepTrace.begin("prepare")
+        let tPrep = ContinuousClock.now
         engine.prepare()
+        AudioStepTrace.end("prepare", sPrep, began: tPrep)
+        // TEMP Phase A (REMOVE in Phase C).
+        let sStart = AudioStepTrace.begin("engineStart")
+        let tStart = ContinuousClock.now
         do {
             try engine.start()
         } catch {
+            AudioStepTrace.end("engineStart", sStart, began: tStart)
             // Never leave observer or tap behind a non-running engine.
             removeConfigObserver()
             engine.inputNode.removeTap(onBus: 0)
             throw error
         }
+        AudioStepTrace.end("engineStart", sStart, began: tStart)
     }
 
     private func teardown() {
@@ -181,7 +225,12 @@ actor AppleAudioCapture: AudioCaptureServing {
 
     private func installTap() throws {
         let input = engine.inputNode
+        // TEMP Phase A (REMOVE in Phase C): suspect #1 — removeTap on a
+        // tapless node may be one of the two InvalidElement throws.
+        let sRemove = AudioStepTrace.begin("removeTap")
+        let tRemove = ContinuousClock.now
         input.removeTap(onBus: 0)
+        AudioStepTrace.end("removeTap", sRemove, began: tRemove)
         let format = input.outputFormat(forBus: 0)
 
         guard Self.tapFormatUsable(format) else {

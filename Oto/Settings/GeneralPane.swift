@@ -13,14 +13,14 @@ import SwiftUI
 
 /// Dock visibility preference. One documented call
 /// (`setActivationPolicy`), persisted as a scalar — not a model store, so
-/// the 12:46 one-store rule is untouched. Default shown: preserves current
-/// behavior on upgrade.
+/// the 12:46 one-store rule is untouched. Default hidden: fresh installs
+/// are menu-bar-only; an explicitly stored value still wins on upgrade.
 enum DockVisibility {
     nonisolated static let defaultsKey = "app.Oto.showInDock"
 
-    /// Pure read with upgrade default: `nonisolated` (Swift 6).
+    /// Pure read with fresh-install default: `nonisolated` (Swift 6).
     nonisolated static func isShown(defaults: UserDefaults = .standard) -> Bool {
-        defaults.object(forKey: defaultsKey) as? Bool ?? true
+        defaults.object(forKey: defaultsKey) as? Bool ?? false
     }
 
     /// Pure mapping: `nonisolated` (Swift 6).
