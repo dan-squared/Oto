@@ -580,14 +580,28 @@ final class LivePolishService: PolishServing, @unchecked Sendable {
         let started = Date()
         return AsyncStream { continuation in
             let task = Task {
+                // P1: model-latency span — stream start → first streamed chunk.
+                // Observation only; the Date-based runStats below stay the
+                // user-visible caption source.
+                let tokenSpan = PerfTrace.begin(.cleanupFirstToken)
+                var tokenSpanEnded = false
                 do {
                     let stream = session.streamResponse(to: prompt, options: options)
                     var firstYield: Date?
                     var last = ""
                     for try await snapshot in stream {
-                        if firstYield == nil { firstYield = Date() }
+                        if firstYield == nil {
+                            firstYield = Date()
+                            if !tokenSpanEnded {
+                                PerfTrace.end(.cleanupFirstToken, tokenSpan)
+                                tokenSpanEnded = true
+                            }
+                        }
                         last = snapshot.content
                         continuation.yield(snapshot.content)
+                    }
+                    if !tokenSpanEnded {
+                        PerfTrace.end(.cleanupFirstToken, tokenSpan)
                     }
                     let finished = Date()
                     let stats = PolishRunStats(
@@ -600,6 +614,9 @@ final class LivePolishService: PolishServing, @unchecked Sendable {
                     self.log.debug("polish stream firstTokenMs=\(stats.firstTokenMs) totalMs=\(stats.totalMs) inWords=\(inWords) outWords=\(stats.outWords)")
                     continuation.finish()
                 } catch {
+                    if !tokenSpanEnded {
+                        PerfTrace.end(.cleanupFirstToken, tokenSpan)
+                    }
                     log.error("cleanup stream failed: \(error.localizedDescription)")
                     continuation.finish()
                 }
