@@ -11,6 +11,16 @@ Pending manual (packaged signed app only): flag-off identical behavior; flag-on
 `localeResolve ≈ 0ms` with `assetProbe` unchanged; language-change drill;
 Settings-prepare drill.
 
+## Proof run 2026-10-15 (TEMP arming, same mechanism as late probe arming)
+
+`defaults write` is unusable on dev machines (protected stale container +
+CleanSlate wipes), so measurement arms via a TEMP shared-scheme launch arg
+(`-app.Oto.localeCache YES`, argument domain wins in-process). Compare
+steady-state (2nd+ dictation) `pressToReady` against the 140–160ms baseline
+from the probe logs; expect ~5–30ms. REVERT the arg after measurement whatever
+the outcome — graduation is a code-default flip or Settings toggle (scheme args
+don't exist in the shipped app), decided on the data.
+
 ## Goal
 
 `AppleSpeechService.prepare()` awaits `SpeechTranscriber.supportedLocales` and
