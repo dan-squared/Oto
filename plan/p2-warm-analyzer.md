@@ -1,6 +1,19 @@
 # P2 — Warm-analyzer reuse (hardened plan, v2)
 
-Status: **probe harness landed 2026-10-15 — build green, 543 unit tests pass (58 suites, incl. 9 new WarmAnalyzerPolicyTests). Warm slot NOT built: blocked on hardware probe results below.**
+Status: **STOPPED 2026-10-15 — hardware probe answered NO. Do not build the warm slot.**
+Verdict (verbatim from the device log, three consecutive reuse sessions):
+`SpeechAnalyzer: setModules(_:) call on finished analyzer; ignoring` →
+`start(inputSequence:) call on finished analyzer; ignoring` →
+`finalizeAndFinishThroughEndOfInput() call on finished analyzer; ignoring`.
+A finalized analyzer is a brick: calls don't throw, they're silently ignored,
+and the session completes empty (`chars=0`, `completed (empty, no insertion)`).
+Reuse pressToReady (~103ms) is a vacuous win — it skips the build while
+producing nothing. Revisit only if Apple documents cross-session reuse.
+Cleanup 2026-10-15 (same change): probe harness, `AnalyzerReuseProbe`,
+`WarmAnalyzerPolicy` + tests, and the scheme arming arg all REMOVED. Kept:
+P1 signposts (proved their worth reading this verdict) and P3 locale cache
+(flag off, still a valid future win). Steady-state floor on this hardware:
+pressToReady ~110–140ms, finalize ~65–80ms, insert ~200ms (do not touch).
 Landed headless-executable parts (all inert, zero behavior change):
 - `Oto/Support/WarmAnalyzerPolicy.swift` (permanent): pure `decide()` +
   `WarmAnalyzerExperiment` flag (default false). No call sites yet.

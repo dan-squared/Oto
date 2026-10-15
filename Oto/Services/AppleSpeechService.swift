@@ -33,19 +33,6 @@ extension SpeechSessionError: LocalizedError {
     }
 }
 
-// PROBE-ONLY (P2 plan §Probe): temporary flag for the analyzer-reuse probe.
-// REMOVE with the PROBE blocks below after hardware reports. Default false =
-// the entire probe path is dead code; never enabled in tests.
-struct AnalyzerReuseProbe: Sendable, Equatable {
-    var enabled: Bool
-
-    nonisolated static let enabledKey = "app.Oto.probeAnalyzerReuse"
-
-    nonisolated static func armed(defaults: UserDefaults = .standard) -> AnalyzerReuseProbe {
-        AnalyzerReuseProbe(enabled: defaults.bool(forKey: enabledKey))
-    }
-}
-
 /// Realtime feeder: the ONLY object the audio thread touches. Converter +
 /// continuation live behind one lock; session state stays on the actor.
 /// `feed` drops (never blocks) when no session is configured.
@@ -138,15 +125,6 @@ actor AppleSpeechService: SpeechServing {
     private var resultTask: Task<Void, Never>?
     private var finalizedText = ""
 
-    // PROBE-START (P2 plan §Probe): stashed session kept past finish so the
-    // next prepare can attempt re-start + results re-iteration. Populated
-    // only when the probe flag is armed and only on successful finishes;
-    // consumed (single attempt) or dropped on any error/cancel. REMOVE after
-    // the probe reports.
-    private var probeKeptAnalyzer: SpeechAnalyzer?
-    private var probeKeptTranscriber: SpeechTranscriber?
-    private var probeKeptFormat: AVAudioFormat?
-
     init(
         relay: AudioBufferRelay,
         permissions: PermissionsManager = PermissionsManager()
@@ -163,61 +141,6 @@ actor AppleSpeechService: SpeechServing {
         guard await permissions.ensureMicrophone() else {
             throw SpeechReadiness.microphoneDenied
         }
-
-        // PROBE-START: single reuse attempt when armed. Success skips the
-        // whole slow path below; any throw drops the stash and falls through
-        // to it (single retry, then propagate — no retry loops). REMOVE after
-        // the probe reports.
-        //
-        // v2 (probe-hardening): the kept TRANSCRIBER is never reused — its
-        // `results` stream already served a full iteration and may be
-        // single-use (reusing it risks an empty transcript with nothing to
-        // fall back to). Each attempt builds a FRESH transcriber and offers
-        // it via `setModules`: whether a finalized analyzer accepts new
-        // modules is probe question 2. Every throw below still lands on the
-        // slow path, so the dictation lands in all outcomes but a dead
-        // results pipeline — which is itself the verdict.
-        if AnalyzerReuseProbe.armed().enabled,
-           let keptAnalyzer = probeKeptAnalyzer,
-           let keptFormat = probeKeptFormat
-        {
-            probeKeptAnalyzer = nil
-            probeKeptTranscriber = nil
-            probeKeptFormat = nil
-            do {
-                let probeStart = ContinuousClock.now
-                let supported = await SpeechTranscriber.supportedLocales
-                guard let locale = SpeechLocaleMatching.bestMatch(for: .current, in: supported) else {
-                    throw SpeechReadiness.unsupportedLocale
-                }
-                let fresh = SpeechTranscriber(
-                    locale: locale,
-                    transcriptionOptions: [],
-                    reportingOptions: [.volatileResults],
-                    attributeOptions: [.audioTimeRange]
-                )
-                try await keptAnalyzer.setModules([fresh])
-                let stream = feedBox.createStream()
-                feedBox.configure(format: keptFormat)
-                self.transcriber = fresh
-                self.analyzer = keptAnalyzer
-                finalizedText = ""
-                resultTask = Task { [weak self] in
-                    await self?.consumeResults()
-                }
-                try await keptAnalyzer.start(inputSequence: stream)
-                let feedBox = self.feedBox
-                relay.attach { buffer in feedBox.feed(buffer) }
-                let startMs = PerfTrace.ms(probeStart.duration(to: .now))
-                log.info("PROBE reuse start ok startMs=\(startMs, privacy: .public)ms (transcript verdict = this dictation's text)")
-                log.info("speech prepared (PROBE reuse)")
-                return
-            } catch {
-                teardown()
-                log.error("PROBE reuse failed, slow-path fallback: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-        // PROBE-END.
 
         // 2. Resolve the system locale against what Apple supports. P3:
         // flag-gated snapshot (zero awaits on hit); the requery path reads
@@ -330,24 +253,6 @@ actor AppleSpeechService: SpeechServing {
         let dropped = relay.droppedBufferCount()
         let delivered = relay.deliveredBufferCount()
         let convFail = feedBox.conversionFailureCount()
-        // PROBE-START: seed the next prepare's reuse attempt (success path
-        // only — the no-audio/excessive-loss throws below still fire and
-        // stash nothing). Format is re-resolved here so the slow path above
-        // stays untouched; the extra await runs only on armed probe runs,
-        // never on matrix data. REMOVE after the probe reports.
-        if AnalyzerReuseProbe.armed().enabled,
-           delivered > 0,
-           dropped <= AudioBufferRelay.maximumDroppedBeforeFailure,
-           let keptAnalyzer = analyzer,
-           let keptTranscriber = transcriber,
-           let keptFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [keptTranscriber])
-        {
-            probeKeptAnalyzer = keptAnalyzer
-            probeKeptTranscriber = keptTranscriber
-            probeKeptFormat = keptFormat
-            log.info("PROBE seeded for next prepare")
-        }
-        // PROBE-END.
         teardown()
         log.info("speech finished delivered=\(delivered, privacy: .public) dropped=\(dropped, privacy: .public) convFail=\(convFail, privacy: .public) chars=\(text.count, privacy: .public)")
 
@@ -370,12 +275,6 @@ actor AppleSpeechService: SpeechServing {
         await analyzer?.cancelAndFinishNow()
         resultTask?.cancel()
         resultTask = nil
-        // PROBE-START: a cancelled engine is never borrowed (matches the
-        // P2 policy: cancelled → rebuild). REMOVE after the probe reports.
-        probeKeptAnalyzer = nil
-        probeKeptTranscriber = nil
-        probeKeptFormat = nil
-        // PROBE-END.
         teardown()
         log.info("speech cancelled")
     }
