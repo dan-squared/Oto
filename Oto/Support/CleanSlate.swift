@@ -20,6 +20,9 @@ import os
 /// - prefs: `~/Library/Preferences/app.Oto.plist` (every `app.Oto.*` key)
 /// - files: `~/Library/Application Support/Oto/` (`history.v1.json`,
 ///   dictionary/snippet stores, `Backups/`)
+/// - windows: `~/Library/Saved Application State/app.Oto.savedState`
+///   (a first install has no saved state — without this, a stale Settings
+///   window restores onto the wiped domain every dev launch)
 /// - NOT wiped: Login Item registration (system-level, re-asserted by the
 ///   app), TCC permissions (system-owned), the clipboard.
 enum CleanSlate {
@@ -41,10 +44,11 @@ enum CleanSlate {
     nonisolated static func wipeIfRequested(
         arguments: [String] = CommandLine.arguments,
         defaults: UserDefaults = .standard,
-        supportDir: URL? = nil
+        supportDir: URL? = nil,
+        savedStateDir: URL? = nil
     ) -> Bool {
         guard isRequested(arguments: arguments) else { return false }
-        wipe(defaults: defaults, supportDir: supportDir)
+        wipe(defaults: defaults, supportDir: supportDir, savedStateDir: savedStateDir)
         return true
     }
 
@@ -53,7 +57,8 @@ enum CleanSlate {
     nonisolated static func wipe(
         defaults: UserDefaults = .standard,
         domain: String = bundleDomain,
-        supportDir: URL? = nil
+        supportDir: URL? = nil,
+        savedStateDir: URL? = nil
     ) {
         defaults.removePersistentDomain(forName: domain)
         defaults.synchronize()
@@ -74,6 +79,29 @@ enum CleanSlate {
                 // failures (removeItem throws the same for both; check).
                 if FileManager.default.fileExists(atPath: dir.path) {
                     Self.log.error("clean slate: support dir removal failed")
+                }
+            }
+        }
+        // Saved Application State is keyed by bundle ID, not by the wiped
+        // domain suffix — derive it the same way; tests pass the dir
+        // explicitly (same discipline as supportDir).
+        let stateDir: URL?
+        if let savedStateDir {
+            stateDir = savedStateDir
+        } else {
+            stateDir = try? FileManager.default.url(
+                for: .libraryDirectory,
+                in: .userDomainMask, appropriateFor: nil, create: false
+            )
+            .appendingPathComponent("Saved Application State", isDirectory: true)
+            .appendingPathComponent("\(domain).savedState", isDirectory: true)
+        }
+        if let stateDir {
+            do {
+                try FileManager.default.removeItem(at: stateDir)
+            } catch {
+                if FileManager.default.fileExists(atPath: stateDir.path) {
+                    Self.log.error("clean slate: saved-state removal failed")
                 }
             }
         }

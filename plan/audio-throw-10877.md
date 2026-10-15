@@ -1,6 +1,13 @@
 # Audio `throwing -10877` per-session pair — diagnosis plan (no code changed)
 
-Status: **Phase A landed 2026-10-15 — build green, 534/534 unit tests pass. Awaiting hardware (Phase B).**
+Status: **CLOSED wontfix 2026-10-15 — hardware data exonerated our half. TEMP spans removed.**
+Phase B verdict (7 sessions, device log): `engineStop` 0ms and `removeTap` 0ms
+every session; the pair prints between them in the stream (async delivery, not
+causal). Real cost: `installTap` 47–91ms (first 91 = HAL warm-up), `prepare`
+~10ms, `engineStart` ~43ms steady. pressToReady ≈ audio(~100) + remainder
+(mic/locale/probe/engineWarm — P3 territory). No C1 fix: state-tracking our
+0ms guards would save nothing; the pair is Apple-internal negotiation.
+Removed: `AudioStepTrace` + all 5 TEMP sites (code identical to pre-Phase-A).
 Implementation notes (deviations from §Exact changes, both safer):
 - Spans live in a separate TEMP `AudioStepTrace` enum, NOT new `PerfTrace`
   phases — the pinned 8-phase vocabulary and its count test stay untouched.
