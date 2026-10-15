@@ -21,6 +21,18 @@ from the probe logs; expect ~5–30ms. REVERT the arg after measurement whatever
 the outcome — graduation is a code-default flip or Settings toggle (scheme args
 don't exist in the shipped app), decided on the data.
 
+## Proof verdict 2026-10-15: NO DELTA — parked, arg reverted
+
+Armed steady-state `pressToReady`: 164 / 141 / 128ms (plus 89 hands-free and a
+cold 224) vs unarmed baseline 140–160ms. Overlapping distributions;
+session-to-session variance (±20ms) swallows the expected 5–30ms, so no
+graduation. The cache stays landed-but-inert (flag off, zero behavior change);
+revisit only with finer instrumentation (a `localeResolve` ms line) or a real
+Settings toggle. Side observations from the same run, all healthy: the new
+`outcome=speech-failure` summary fired correctly on a zero-audio session,
+cancel and hands-free paths completed cleanly, and the 873ms first insert into
+Xcode is target-dependent reactivate cost (insertion timings untouched).
+
 ## Goal
 
 `AppleSpeechService.prepare()` awaits `SpeechTranscriber.supportedLocales` and
