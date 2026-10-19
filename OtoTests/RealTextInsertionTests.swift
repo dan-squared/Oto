@@ -26,6 +26,13 @@ struct StubFocusCheck: FocusChecking {
     nonisolated func editableFocus(for pid: pid_t) async -> EditableFocus { verdict }
 }
 
+/// Scriptable delivery probe (v7): the test flips a CaretBox in the post
+/// hook, so "landed" / "not landed" are scripted without AX.
+struct StubDeliveryCheck: DeliveryChecking {
+    let scripted: DeliveryProbe
+    nonisolated func probe(for pid: pid_t) -> DeliveryProbe { scripted }
+}
+
 /// Test-only Sendable counter for the scripted `@Sendable` event hooks.
 /// Swift 6 region isolation forbids mutating captured vars inside
 /// concurrently-executing closures; the lock is the sharing proof, and the
@@ -47,6 +54,7 @@ final class HookCount: @unchecked Sendable {
 
 private func scriptedEvents(
     trusted: Bool = true,
+    postingAuthorized: Bool = true,
     reactivate: @escaping @Sendable (pid_t) -> Bool = { _ in true },
     frontmostPID: @escaping @Sendable () -> pid_t? = { 99999 },
     otoFrontmost: @escaping @Sendable () -> Bool = { false },
@@ -54,6 +62,7 @@ private func scriptedEvents(
 ) -> InsertionEvents {
     InsertionEvents(
         isTrusted: { trusted },
+        postingAuthorized: { postingAuthorized },
         reactivate: reactivate,
         currentModifiers: { [] },
         frontmostPID: frontmostPID,
@@ -753,5 +762,133 @@ struct RealTextInsertionTests {
         #expect(await service.replaceSelection("new words", into: anyTarget()) == .inserted)
         #expect(hid.count == 1)
         #expect(board.string(forType: .string) == "new words")
+    }
+
+    // MARK: - Delivery truth (v7)
+
+    /// Fast gates with a small, real delivery budget so the not-landed path
+    /// reaches its final comparison without a 300 ms wait.
+    private func deliveryTimings(budget: UInt64 = 5_000_000) -> InsertionTimings {
+        InsertionTimings(
+            prePasteDelay: 0,
+            verifyBudget: 10_000_000,
+            verifyPoll: 1_000_000,
+            restoreDelay: 5_000_000,
+            modifierTimeout: 0,
+            modifierPoll: 0,
+            reactivateSettle: 0,
+            readyBudget: 0,
+            readyPoll: 0,
+            deliveryBudget: budget,
+            deliveryPerKB: 0,
+            deliveryBudgetCap: budget,
+            deliveryPoll: 1_000_000,
+            keyStep: 0
+        )
+    }
+
+    /// The caret moving is the only success proof. One post, and the
+    /// clipboard goes back at once because the app has already read it.
+    @Test func landedCaretPostsOnceAndRestoresImmediately() async {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let hid = HookCount()
+        let before = CaretSample(location: 0, length: 0, characters: 0)
+        let after = CaretSample(location: 8, length: 0, characters: 8)
+        let box = CaretBox(before)
+        let service = RealTextInsertion(
+            events: scriptedEvents(postedHID: { hid.bump(); box.set(after) }),
+            timings: deliveryTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable),
+            deliveryCheck: StubDeliveryCheck(scripted: DeliveryProbe(
+                initial: before, read: { box.current }, stillFocused: { true }
+            ))
+        )
+        #expect(await service.insert("dictated", into: anyTarget()) == .inserted)
+        #expect(hid.count == 1)
+        var restored = false
+        for _ in 0..<100 {
+            try? await Task.sleep(nanoseconds: 2_000_000)
+            if board.string(forType: .string) == "mine" { restored = true; break }
+        }
+        #expect(restored)
+    }
+
+    /// Same element, nothing moved: the app got the keystroke and refused
+    /// it. Fail honestly, once, with the transcript recoverable.
+    @Test func unchangedCaretFailsRecoverablyAfterOnePost() async {
+        let board = scratchBoard()
+        let hid = HookCount()
+        let sample = CaretSample(location: 3, length: 0, characters: 3)
+        let service = RealTextInsertion(
+            events: scriptedEvents(postedHID: { hid.bump() }),
+            timings: deliveryTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable),
+            deliveryCheck: StubDeliveryCheck(scripted: DeliveryProbe(
+                initial: sample, read: { sample }, stillFocused: { true }
+            ))
+        )
+        let result = await service.insert("dictated", into: anyTarget())
+        guard case .recoverableFailure(let reason) = result else {
+            Issue.record("expected recoverableFailure, got \(result)")
+            return
+        }
+        #expect(reason.contains("did not appear"))
+        #expect(reason.contains("posted once"))
+        #expect(hid.count == 1)
+    }
+
+    /// Web editors publish no caret range (Muse's composer is an AXButton).
+    /// No signal is not failure: the pre-v7 result stands.
+    @Test func noSignalStillReportsInserted() async {
+        let board = scratchBoard()
+        let hid = HookCount()
+        let service = RealTextInsertion(
+            events: scriptedEvents(postedHID: { hid.bump() }),
+            timings: deliveryTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .unknown),
+            deliveryCheck: StubDeliveryCheck(scripted: .unavailable)
+        )
+        #expect(await service.insert("dictated", into: anyTarget()) == .inserted)
+        #expect(hid.count == 1)
+    }
+
+    /// A synthetic post the OS will not deliver is refused before the
+    /// clipboard is touched — never reported as an insert.
+    @Test func postingBlockedRefusesBeforeClipboard() async {
+        let board = scratchBoard()
+        board.clearContents()
+        let hid = HookCount()
+        let service = RealTextInsertion(
+            events: scriptedEvents(
+                postingAuthorized: false, postedHID: { hid.bump() }
+            ),
+            timings: deliveryTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable)
+        )
+        let result = await service.insert("dictated", into: anyTarget())
+        guard case .recoverableFailure(let reason) = result else {
+            Issue.record("expected recoverableFailure, got \(result)")
+            return
+        }
+        #expect(reason.contains("synthetic keystrokes"))
+        #expect(hid.count == 0)
+        #expect(board.string(forType: .string) == nil)
+    }
+
+    /// Retry uses the same verification: "posted" must mean proven.
+    @Test func retryReportsNotDeliveredWhenCaretDoesNotMove() async {
+        guard NSWorkspace.shared.frontmostApplication != nil else { return }
+        let board = scratchBoard()
+        let sample = CaretSample(location: 0, length: 0, characters: 0)
+        let service = RealTextInsertion(
+            events: scriptedEvents(), timings: deliveryTimings(), pasteboard: board,
+            focusCheck: StubFocusCheck(verdict: .editable),
+            deliveryCheck: StubDeliveryCheck(scripted: DeliveryProbe(
+                initial: sample, read: { sample }, stillFocused: { true }
+            ))
+        )
+        #expect(await service.retryPostToFrontmost("dictated") == .notDelivered)
     }
 }

@@ -105,12 +105,16 @@ struct OtoMenuBarView: View {
                     // that same app — never the pre-dialog one.
                     let postFront = NSWorkspace.shared.frontmostApplication
                     let postFrontID = postFront?.bundleIdentifier
+                    let name = postFront?.localizedName ?? postFrontID ?? "the frontmost app"
                     switch await inserter.retryPostToFrontmost(text) {
                     case .posted:
-                        let name = postFront?.localizedName ?? postFrontID ?? "the frontmost app"
                         feedback = "Posted to \(name) — check it."
+                    case .notDelivered:
+                        feedback = "Sent to \(name) — but it did not take the text. It is still kept: copy it from the transcript."
                     case .refusedNoAccessibility:
                         feedback = "Retry failed — Accessibility permission is off."
+                    case .refusedPostingBlocked:
+                        feedback = "Retry failed — macOS is blocking synthetic keystrokes."
                     case .clipboardUnavailable:
                         feedback = "Retry failed — the clipboard was unavailable."
                     case .pasteFailed:

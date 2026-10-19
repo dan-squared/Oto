@@ -87,6 +87,16 @@ enum AXDump {
         visited += 1
         let indent = String(repeating: "  ", count: depth)
         emit("\(indent)\(describe(node))")
+        // Which elements publish a verifiable caret? Text roles always do
+        // (the attribute is required); anything else that answers here is a
+        // web host exposing a range on a non-text role — exactly the case a
+        // false "not landed" would come from, so it must be visible.
+        let sample = LiveDeliveryCheck.sample(node)
+        if sample != nil || EditableFocus.textCapableRoles.contains(
+            stringAttr(node, kAXRoleAttribute) ?? ""
+        ) {
+            emit("\(indent)  ▸ delivery sample=\(String(describing: sample))")
+        }
         guard depth < maxDepth else { return }
         let kids = childrenOf(node)
         for kid in kids.prefix(maxChildrenPerNode) {

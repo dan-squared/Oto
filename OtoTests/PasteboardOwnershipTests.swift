@@ -74,6 +74,15 @@ struct InsertionDecisionTests {
         #expect(InsertionDecision.next(isTrusted: false) == .refuseUntrusted)
     }
 
+    @Test func postingBlockedRefuses() {
+        // Accessibility granted, synthetic posting still denied: distinct
+        // cause, distinct words, never a claimed insert.
+        #expect(InsertionDecision.next(isTrusted: true, postingAuthorized: false)
+            == .refusePostingBlocked)
+        #expect(InsertionDecision.next(isTrusted: false, postingAuthorized: false)
+            == .refuseUntrusted)
+    }
+
     @Test func clearPathProceeds() {
         #expect(InsertionDecision.next(isTrusted: true) == .proceed)
     }

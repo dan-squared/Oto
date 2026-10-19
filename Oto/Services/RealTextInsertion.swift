@@ -67,8 +67,20 @@ struct InsertionTimings: Equatable, Sendable {
     /// Cap for the held-modifier drain (our default trigger IS a modifier).
     var modifierTimeout: UInt64 = 600_000_000
     var modifierPoll: UInt64 = 15_000_000
-    /// Target reactivation settle before the keystroke.
+    /// Target reactivation settle before the keystroke. Serves as the FLOOR
+    /// of the readiness wait (see `readyBudget`), not as a blind sleep.
     var reactivateSettle: UInt64 = 120_000_000
+    /// Readiness wait ceiling: keep checking "is the target frontmost" up to
+    /// here, then post anyway. Advisory only — the pre-post frontmost guard
+    /// owns refusal, so expiry must never strand a session.
+    var readyBudget: UInt64 = 400_000_000
+    var readyPoll: UInt64 = 15_000_000
+    /// Post-paste delivery verification: base budget, growth per KB of text
+    /// (bigger pastes render slower), hard ceiling, poll interval.
+    var deliveryBudget: UInt64 = 300_000_000
+    var deliveryPerKB: UInt64 = 15_000_000
+    var deliveryBudgetCap: UInt64 = 1_500_000_000
+    var deliveryPoll: UInt64 = 15_000_000
     /// Gap between the four Cmd-V sub-events.
     var keyStep: UInt64 = 10_000_000
 }
@@ -77,6 +89,12 @@ struct InsertionTimings: Equatable, Sendable {
 /// Production uses `.live`; tests use fakes + a scratch pasteboard.
 struct InsertionEvents: Sendable {
     var isTrusted: @Sendable () -> Bool
+    /// Whether the OS will deliver a synthetic keystroke at all
+    /// (`CGPreflightPostEventAccess`). Distinct from Accessibility: a grant
+    /// can read AX while posting stays blocked, and a dropped post used to
+    /// be reported as success. Defaulted for tests and fakes that script the
+    /// other gates.
+    var postingAuthorized: @Sendable () -> Bool = { true }
     var reactivate: @Sendable (pid_t) -> Bool
     var currentModifiers: @Sendable () -> NSEvent.ModifierFlags
     /// Advisory focus read, used ONCE pre-post as a race guard (no retries,
@@ -104,6 +122,7 @@ struct InsertionEvents: Sendable {
     static var live: InsertionEvents {
         InsertionEvents(
             isTrusted: { AXIsProcessTrusted() },
+            postingAuthorized: { CGPreflightPostEventAccess() },
             reactivate: { pid in
                 guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
                 guard !app.isActive else { return true }
@@ -194,7 +213,9 @@ enum InsertionDecision: Equatable, Sendable {
     // Explicit: compared in decision tests from any domain (Swift 6).
     nonisolated static func == (lhs: InsertionDecision, rhs: InsertionDecision) -> Bool {
         switch (lhs, rhs) {
-        case (.proceed, .proceed), (.refuseUntrusted, .refuseUntrusted):
+        case (.proceed, .proceed),
+            (.refuseUntrusted, .refuseUntrusted),
+            (.refusePostingBlocked, .refusePostingBlocked):
             return true
         default:
             return false
@@ -203,9 +224,16 @@ enum InsertionDecision: Equatable, Sendable {
 
     case proceed
     case refuseUntrusted
+    /// Accessibility may be granted while the WindowServer still refuses to
+    /// deliver synthetic events. Posting then is a silent no-op, so it is
+    /// refused here instead of reported as an insert.
+    case refusePostingBlocked
 
-    nonisolated static func next(isTrusted: Bool) -> InsertionDecision {
+    nonisolated static func next(
+        isTrusted: Bool, postingAuthorized: Bool = true
+    ) -> InsertionDecision {
         if !isTrusted { return .refuseUntrusted }
+        if !postingAuthorized { return .refusePostingBlocked }
         return .proceed
     }
 
@@ -231,6 +259,9 @@ final class RealTextInsertion: TextInserting {
     /// Void-paste guard (catcher fix): read-only editable-focus check,
     /// injected so tests script verdicts without AX. Defaults live.
     private let focusCheck: any FocusChecking
+    /// Post-paste delivery check (v7): proves the caret moved where the app
+    /// publishes the required text attributes; `.unverifiable` elsewhere.
+    private let deliveryCheck: any DeliveryChecking
     /// Insertion trail: gates, reactivate attempts, restores. Pids and bundle
     /// IDs only — transcript text is never logged.
     private let log = Logger(subsystem: "app.Oto", category: "insertion")
@@ -239,12 +270,14 @@ final class RealTextInsertion: TextInserting {
         events: InsertionEvents = .live,
         timings: InsertionTimings = InsertionTimings(),
         pasteboard: NSPasteboard = .general,
-        focusCheck: any FocusChecking = LiveFocusCheck()
+        focusCheck: any FocusChecking = LiveFocusCheck(),
+        deliveryCheck: any DeliveryChecking = LiveDeliveryCheck()
     ) {
         self.events = events
         self.timings = timings
         self.pasteboard = pasteboard
         self.focusCheck = focusCheck
+        self.deliveryCheck = deliveryCheck
     }
 
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult {
@@ -318,7 +351,10 @@ final class RealTextInsertion: TextInserting {
     /// → focus). Identical policy for insert and replace; only the failure
     /// words differ per context. Clipboard untouched on every refusal.
     private func readyPID(into target: TargetApplication, context: PostContext) async -> PostReady {
-        switch InsertionDecision.next(isTrusted: events.isTrusted()) {
+        switch InsertionDecision.next(
+            isTrusted: events.isTrusted(),
+            postingAuthorized: events.postingAuthorized()
+        ) {
         case .refuseUntrusted:
             switch context {
             case .insert:
@@ -337,6 +373,9 @@ final class RealTextInsertion: TextInserting {
                     "Accessibility permission is required to replace the selection. Nothing was changed — your text stands as it was."
                 ))
             }
+        case .refusePostingBlocked:
+            log.info("refused: synthetic posting blocked, clipboard untouched")
+            return .refused(.recoverableFailure(reason: postingBlockedReason(context)))
         case .proceed:
             break
         }
@@ -379,7 +418,7 @@ final class RealTextInsertion: TextInserting {
                 )))
             }
         }
-        await events.sleep(timings.reactivateSettle)
+        await waitForReadiness(pid: pid)
         await waitForModifiersToClear()
 
         switch await focusCheck.editableFocus(for: pid) {
@@ -478,6 +517,20 @@ final class RealTextInsertion: TextInserting {
             }
         }
 
+        // The OS's own answer to "will this post reach the tap". Checked
+        // here as well as pre-flight: a grant can be revoked mid-session,
+        // and a dropped post must never be reported as an insert.
+        guard events.postingAuthorized() else {
+            log.info("refused: synthetic posting blocked pre-post, clipboard restored")
+            PasteboardSnapshot.restore(saved, to: pasteboard)
+            return .recoverableFailure(reason: postingBlockedReason(context))
+        }
+
+        // Capture the caret BEFORE posting: the probe re-reads this same
+        // element afterwards, so a change cannot be another field's caret.
+        // Nil inside means the app publishes no verifiable signal.
+        let probe = deliveryCheck.probe(for: pid)
+
         guard await events.postPaste() else {
             log.error("post: no keystroke created, failing closed")
             PasteboardSnapshot.restore(saved, to: pasteboard)
@@ -496,8 +549,33 @@ final class RealTextInsertion: TextInserting {
                 )
             }
         }
-        log.info("posted HID Cmd-V to frontmost (delivery unverified) for target \(pid, privacy: .public)")
-        scheduleRestore(saved: saved, receipt: receipt)
+        log.info("posted HID Cmd-V for target \(pid, privacy: .public)")
+
+        let budget = DeliveryVerification.budget(
+            base: timings.deliveryBudget,
+            perKB: timings.deliveryPerKB,
+            cap: timings.deliveryBudgetCap,
+            utf8Count: text.utf8.count
+        )
+        let (outcome, elapsedMs) = await verifyDelivery(probe, budget: budget)
+        log.info("delivery=\(String(describing: outcome), privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms chars=\(text.count, privacy: .public)")
+
+        // Restore follows the evidence, not a timer: a landed paste has
+        // already been read by the app, so the clipboard can go back at
+        // once; anything else keeps the existing short grace.
+        if outcome == .landed {
+            restoreNow(saved: saved, receipt: receipt)
+        } else {
+            scheduleRestore(saved: saved, receipt: receipt)
+        }
+
+        // Only positive proof of "nothing moved" fails the session. An
+        // unverifiable app (web editor) keeps the pre-v7 behaviour, because
+        // a catcher over text that is already in the document is the exact
+        // failure v6 removed.
+        if outcome == .notLanded {
+            return .recoverableFailure(reason: notDeliveredReason(context))
+        }
         return .inserted
     }
 
@@ -514,13 +592,18 @@ final class RealTextInsertion: TextInserting {
     enum RetryOutcome: Equatable, Sendable {
         case posted
         case refusedNoAccessibility
+        case refusedPostingBlocked
         case clipboardUnavailable
         case pasteFailed
+        /// The post was delivered but the caret proved nothing moved.
+        case notDelivered
 
         nonisolated static func == (lhs: RetryOutcome, rhs: RetryOutcome) -> Bool {
             switch (lhs, rhs) {
             case (.posted, .posted), (.refusedNoAccessibility, .refusedNoAccessibility),
-                 (.clipboardUnavailable, .clipboardUnavailable), (.pasteFailed, .pasteFailed):
+                 (.refusedPostingBlocked, .refusedPostingBlocked),
+                 (.clipboardUnavailable, .clipboardUnavailable), (.pasteFailed, .pasteFailed),
+                 (.notDelivered, .notDelivered):
                 return true
             default:
                 return false
@@ -533,6 +616,10 @@ final class RealTextInsertion: TextInserting {
             log.info("retry: refused, accessibility untrusted")
             return .refusedNoAccessibility
         }
+        guard events.postingAuthorized() else {
+            log.info("retry: refused, synthetic posting blocked")
+            return .refusedPostingBlocked
+        }
         let front = NSWorkspace.shared.frontmostApplication
         log.info("retry: posting to frontmost \(front?.bundleIdentifier ?? "?", privacy: .public) (\(front?.processIdentifier ?? -1, privacy: .public))")
         let saved = PasteboardSnapshot.capture(pasteboard)
@@ -542,14 +629,28 @@ final class RealTextInsertion: TextInserting {
             PasteboardSnapshot.restore(saved, to: pasteboard)
             return .clipboardUnavailable
         }
+        let probe: DeliveryProbe = front.map {
+            deliveryCheck.probe(for: $0.processIdentifier)
+        } ?? .unavailable
         guard await events.postPaste() else {
             log.info("retry: no keystroke created")
             PasteboardSnapshot.restore(saved, to: pasteboard)
             return .pasteFailed
         }
-        log.info("retry: posted HID Cmd-V (delivery unverified)")
-        scheduleRestore(saved: saved, receipt: receipt)
-        return .posted
+        let budget = DeliveryVerification.budget(
+            base: timings.deliveryBudget,
+            perKB: timings.deliveryPerKB,
+            cap: timings.deliveryBudgetCap,
+            utf8Count: text.utf8.count
+        )
+        let (outcome, elapsedMs) = await verifyDelivery(probe, budget: budget)
+        log.info("retry: delivery=\(String(describing: outcome), privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms")
+        if outcome == .landed {
+            restoreNow(saved: saved, receipt: receipt)
+        } else {
+            scheduleRestore(saved: saved, receipt: receipt)
+        }
+        return outcome == .notLanded ? .notDelivered : .posted
     }
 
     // MARK: - Private
@@ -616,15 +717,87 @@ final class RealTextInsertion: TextInserting {
         log.error("modifiers: still held after timeout, posting anyway")
     }
 
+    /// Readiness wait (v7): activation is a condition, not a duration.
+    /// Advisory only — budget expiry still posts, and the pre-post frontmost
+    /// guard owns refusal with its better message.
+    private func waitForReadiness(pid: pid_t) async {
+        let started = Date()
+        while true {
+            let elapsed = UInt64(max(0, Date().timeIntervalSince(started)) * 1_000_000_000)
+            let frontmost = events.frontmostPID() == pid
+            if InsertionReadiness.shouldPost(
+                elapsedNanoseconds: elapsed,
+                floor: timings.reactivateSettle,
+                budget: timings.readyBudget,
+                isFrontmost: frontmost
+            ) {
+                log.info("ready pid=\(pid, privacy: .public) frontmost=\(frontmost, privacy: .public) elapsed=\(elapsed / 1_000_000, privacy: .public)ms post-auth=\(self.events.postingAuthorized(), privacy: .public)")
+                return
+            }
+            await events.sleep(timings.readyPoll)
+        }
+    }
+
+    /// Delivery poll off the main actor: AX reads into another process can
+    /// block, and the failure path runs for the whole budget. Bounded by the
+    /// budget, so it needs no cancellation.
+    private func verifyDelivery(
+        _ probe: DeliveryProbe, budget: UInt64
+    ) async -> (DeliveryOutcome, Int) {
+        let poll = timings.deliveryPoll
+        let sleep = events.sleep
+        let started = Date()
+        let outcome = await Task.detached(priority: .utility) {
+            await DeliveryVerification.verify(
+                probe: probe, budget: budget, poll: poll, sleep: sleep
+            )
+        }.value
+        return (outcome, Int(Date().timeIntervalSince(started) * 1000))
+    }
+
+    /// Refusal words for a blocked synthetic post. Names the permission the
+    /// person can change; never claims the text went anywhere.
+    private func postingBlockedReason(_ context: PostContext) -> String {
+        switch context {
+        case .insert:
+            return "macOS is not delivering Oto's synthetic keystrokes, so nothing was pasted. The transcript is kept — check Accessibility for Oto in System Settings, then use Retry paste."
+        case .replace:
+            return "macOS is not delivering Oto's synthetic keystrokes, so the replacement was not applied. The text is kept — check Accessibility for Oto in System Settings, then use Retry paste."
+        case .replaceSelection:
+            return "macOS is not delivering Oto's synthetic keystrokes, so the replacement was not applied. Your text stands as it was — the transcript is kept."
+        }
+    }
+
+    /// Failure words when the caret proved nothing moved. Explicitly says the
+    /// text was not inserted twice: the paste was delivered but refused.
+    private func notDeliveredReason(_ context: PostContext) -> String {
+        switch context {
+        case .insert:
+            return "The text did not appear in the target app. It was posted once — the transcript is kept: copy it, or switch back and press Retry paste."
+        case .replace:
+            return "The replacement did not appear in the target app. The text is kept — copy it, or switch back and press Retry paste."
+        case .replaceSelection:
+            return "The replacement did not appear in the target app. Your text stands as it was — copy the transcript, or press Retry paste."
+        }
+    }
+
+    private func restoreNow(
+        saved: [[NSPasteboard.PasteboardType: Data]], receipt: PasteboardReceipt
+    ) {
+        scheduleRestore(saved: saved, receipt: receipt, delay: 0)
+    }
+
     /// One bounded Task per insertion (not per event): restores the previous
     /// clipboard only if nobody touched it since — a user copy in between
-    /// wins, and our text stays available for manual paste.
+    /// wins, and our text stays available for manual paste. `delay` nil uses
+    /// the configured grace; v7 passes 0 once delivery is proven.
     private func scheduleRestore(
         saved: [[NSPasteboard.PasteboardType: Data]],
-        receipt: PasteboardReceipt
+        receipt: PasteboardReceipt,
+        delay: UInt64? = nil
     ) {
         let pasteboard = pasteboard
-        let delay = timings.restoreDelay
+        let delay = delay ?? timings.restoreDelay
         let sleep = events.sleep
         Task {
             await sleep(delay)
