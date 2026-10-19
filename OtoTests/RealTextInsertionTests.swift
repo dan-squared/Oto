@@ -469,15 +469,19 @@ struct RealTextInsertionTests {
     // MARK: - Void-paste divert (catcher fix)
 
     @Test func focusRoleMapping() {
-        // Text roles proceed; everything present-but-not-editable diverts;
-        // a missing role is unknown (legacy path), never a guess.
+        // v6: divert only on positive evidence of a non-editable focus.
+        // Text roles proceed; known widget roles divert; containers and
+        // unrecognised roles proceed (measured: Muse answers with a
+        // container, Chromium composers report a web area).
         // A focused element owned by another app is unknown too — the
         // frontmostPID race guard owns that failure, not this layer.
         #expect(EditableFocus.classify(role: "AXTextField") == .editable)
         #expect(EditableFocus.classify(role: "AXTextArea") == .editable)
+        #expect(EditableFocus.classify(role: "AXComboBox") == .editable)
         #expect(EditableFocus.classify(role: "AXButton") == .noField)
-        #expect(EditableFocus.classify(role: "AXStaticText") == .noField)
-        #expect(EditableFocus.classify(role: "AXWebArea") == .noField)
+        #expect(EditableFocus.classify(role: "AXStaticText") == .unknown)
+        #expect(EditableFocus.classify(role: "AXWebArea") == .unknown)
+        #expect(EditableFocus.classify(role: "AXGroup") == .unknown)
         #expect(EditableFocus.classify(role: nil) == .unknown)
         #expect(EditableFocus.classify(role: "AXTextField", pidMatches: false) == .unknown)
         #expect(EditableFocus.classify(role: "AXButton", pidMatches: false) == .unknown)
@@ -490,68 +494,19 @@ struct RealTextInsertionTests {
         #expect(EditableFocus.classify(role: "AXTextField") == .editable)
         #expect(EditableFocus.classify(role: "AXButton", subrole: "AXSecureTextField") == .noField)
         #expect(LiveFocusCheck.timeoutNanoseconds == 700_000_000)
-        #expect(LiveFocusCheck.maxAttempts == 3)
     }
 
     @Test func focusErrorMapping() {
-        // No-value on the focus read IS the void case (nothing focused);
-        // every other AX error is ambiguity (legacy proceed).
-        #expect(EditableFocus.verdictForFocusError(.noValue) == .noField)
+        // v6: no-value means "the app did not answer", not "nothing is
+        // editable" — measured on a live Claude composer (-25212). It
+        // diverts only for desktop shells, where no field is the truth.
+        #expect(EditableFocus.verdictForFocusError(.noValue) == .unknown)
+        #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "com.apple.finder") == .noField)
+        #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "com.apple.dock") == .noField)
         #expect(EditableFocus.verdictForFocusError(.failure) == .unknown)
         #expect(EditableFocus.verdictForFocusError(.invalidUIElement) == .unknown)
         #expect(EditableFocus.verdictForFocusError(.apiDisabled) == .unknown)
         #expect(EditableFocus.verdictForFocusError(.cannotComplete) == .unknown)
-    }
-
-    @Test func terminalFallbackMapping() {
-        // Terminal emulators consume keystrokes by definition: a focused
-        // but unmapped role proceeds (never diverts). True void (nil
-        // role) still diverts; non-terminals are untouched.
-        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "org.alacritty", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm", "dev.warp.Warp"] {
-            #expect(TerminalEmulators.isTerminal(bundleID: id))
-            #expect(TerminalEmulators.proceeds(role: "AXUnknown", bundleID: id))
-            #expect(TerminalEmulators.proceeds(role: "AXGroup", bundleID: id))
-            #expect(!TerminalEmulators.proceeds(role: nil, bundleID: id))
-        }
-        #expect(!TerminalEmulators.isTerminal(bundleID: "com.apple.Finder"))
-        #expect(!TerminalEmulators.isTerminal(bundleID: nil))
-        #expect(!TerminalEmulators.proceeds(role: "AXUnknown", bundleID: "com.apple.Finder"))
-        // Text roles never reach the fallback (the caller consults it
-        // only on .noField), so presence alone answers true here.
-        #expect(TerminalEmulators.proceeds(role: "AXTextArea", bundleID: "com.apple.Terminal"))
-    }
-
-    @Test func terminalVoidProceeds() {
-        // Emulators publish focus transiently: a persistent void in a
-        // terminal is uninformative, so it proceeds (race guard and
-        // clipboard restore still apply; secure password fields refuse
-        // via .secureField). Everywhere else — and
-        // dead pids — void still diverts.
-        for id in ["com.apple.Terminal", "com.googlecode.iterm2", "org.alacritty", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "com.github.wez.wezterm", "dev.warp.Warp"] {
-            #expect(TerminalEmulators.proceedsVoid(bundleID: id))
-        }
-        #expect(!TerminalEmulators.proceedsVoid(bundleID: "com.apple.Finder"))
-        #expect(!TerminalEmulators.proceedsVoid(bundleID: nil))
-    }
-
-    @Test func terminalFallbackNeverOverridesSecureField() {
-        // The fallback only converts .noField: a password field refuses
-        // even inside a terminal emulator, and non-terminals pass every
-        // verdict through untouched.
-        for id in ["com.apple.Terminal", "com.mitchellh.ghostty", "org.alacritty"] {
-            #expect(TerminalEmulators.fallback(
-                verdict: .secureField, role: "AXTextField", bundleID: id
-            ) == .secureField)
-            #expect(TerminalEmulators.fallback(
-                verdict: .noField, role: "AXGroup", bundleID: id
-            ) == .unknown)
-            #expect(TerminalEmulators.fallback(
-                verdict: .editable, role: "AXTextArea", bundleID: id
-            ) == .editable)
-        }
-        #expect(TerminalEmulators.fallback(
-            verdict: .noField, role: "AXGroup", bundleID: "com.apple.Finder"
-        ) == .noField)
     }
 
     @Test func noEditableFocusDivertsPreClipboard() async {

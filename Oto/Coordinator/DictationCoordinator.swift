@@ -313,6 +313,7 @@ actor DictationCoordinator {
         state = .starting(context)
         log.info("begin \(context.id.uuidString.prefix(8), privacy: .public) mode=\(String(describing: interaction), privacy: .public) target=\(context.target.bundleIdentifier ?? "?", privacy: .public)")
         prewarmForSession()
+        prewarmAccessibility(for: target)
 
         Task { await self.runPreparation(sessionID: context.id) }
         return context.id
@@ -462,6 +463,17 @@ actor DictationCoordinator {
         guard behavior.enabled, behavior.level != .none else { return }
         guard polish.availability() == .available else { return }
         polish.prewarm(job: .cleanup(behavior.level))
+    }
+
+    /// AX prewarm: ask the captured target to publish its accessibility tree
+    /// while the user is still speaking. Chromium/Electron build no AX tree
+    /// until an assistive client asks, and the focus gate runs at insertion
+    /// time — this is the only point in the session where the wait is free.
+    /// Off the press path, trust-gated, failure is a no-op (the gate no
+    /// longer depends on the app answering).
+    private func prewarmAccessibility(for target: TargetApplication) {
+        guard let pid = target.processIdentifier else { return }
+        AccessibilityPrewarm.armInBackground(pid: pid, bundleID: target.bundleIdentifier)
     }
 
     private func finalizeSession(sessionID: UUID, context: SessionContext) async {
