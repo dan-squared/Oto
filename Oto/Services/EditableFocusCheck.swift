@@ -156,6 +156,63 @@ enum EditableFocus: Equatable, Sendable {
         }
         return .noField
     }
+
+    /// Roles that mean "an HTML document is rendered here". AX roles below
+    /// one of these are the host's mapping of DOM semantics, not a native
+    /// control's own truth — measured: Muse's composer is `AXButton`.
+    nonisolated static let webContentRoles: Set<String> = ["AXWebArea", "AXBrowser"]
+
+    nonisolated static func isWebContentRole(_ role: String?) -> Bool {
+        guard let role else { return false }
+        return webContentRoles.contains(role)
+    }
+
+    /// True when a non-editable role cannot be trusted as evidence:
+    ///
+    /// - the element answers `AXEditableAncestor` (WebKit/Chromium publish
+    ///   this on nodes inside a contenteditable), or
+    /// - an ancestor is a web area / browser.
+    ///
+    /// Bounded (≤ 8 hops, read-only) and only reached on the divert path, so
+    /// the common `.editable` verdict pays nothing. A mistaken `true` costs
+    /// one silent no-insert; a mistaken `false` is the false catcher this
+    /// whole change exists to remove.
+    nonisolated static func webContentHidesEditable(element: AXUIElement) -> Bool {
+        var ancestor: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            element, kAXEditableAncestorAttribute as CFString, &ancestor
+        ) == .success,
+            let raw = ancestor, CFGetTypeID(raw) == AXUIElementGetTypeID()
+        {
+            return true
+        }
+        var cursor: AXUIElement? = element
+        var hops = 0
+        while let node = cursor, hops < 8 {
+            if isWebContentRole(role(of: node)) { return true }
+            cursor = parent(of: node)
+            hops += 1
+        }
+        return false
+    }
+
+    nonisolated private static func role(of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXRoleAttribute as CFString, &value
+        ) == .success else { return nil }
+        return value as? String
+    }
+
+    nonisolated private static func parent(of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXParentAttribute as CFString, &value
+        ) == .success,
+            let raw = value, CFGetTypeID(raw) == AXUIElementGetTypeID()
+        else { return nil }
+        return unsafeDowncast(raw, to: AXUIElement.self)
+    }
 }
 
 /// The desktop itself: apps whose focused element is genuinely "nothing"
@@ -376,11 +433,19 @@ struct LiveFocusCheck: FocusChecking {
             )
         }
         let role = roleRaw as? String
-        let verdict = EditableFocus.classify(
+        var verdict = EditableFocus.classify(
             role: role,
             subrole: secureSubrole(role: role, element: element),
             pidMatches: true
         )
+        // A widget role is only trustworthy on native content. Web hosts map
+        // DOM semantics onto arbitrary AX roles — measured on Muse, whose
+        // message composer is a single AXButton whose title concatenates its
+        // placeholders — so a divert inside a web area is a guess, not
+        // evidence. Same for anything reporting an editable ancestor.
+        if verdict == .noField, EditableFocus.webContentHidesEditable(element: element) {
+            verdict = .unknown
+        }
         return FocusRead(
             verdict: verdict,
             hasSelectedText: selectedTextPresent(element: element),

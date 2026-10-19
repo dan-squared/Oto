@@ -84,6 +84,9 @@ struct OtoApp: App {
     private let transformDispatch: TransformDispatch
 
     init() {
+        // Dev-only AX tree dump (`--ax-dump[=<bundle>|pid]`): prints and
+        // exits before any scene exists. See AXDump.
+        AXDump.runIfRequested()
         // Crash backstop first: a kill mid-dictation leaves the duck flag
         // set — put the user's volume back before anything else runs.
         // One-shot migrations precede it (audit F7): Container-scoped

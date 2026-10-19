@@ -253,3 +253,79 @@ Commands run:
 Still open: the packaged-app matrix in §7 (TCC/AX are only meaningful in the
 signed `.app`), and the read of the new `role=` / `src=` fields on the next real
 dictation.
+
+---
+
+## 10. v6.1 — Muse's composer is an `AXButton` (2026-10-19)
+
+The first device run of `431f912` split the two apps cleanly:
+
+```
+Claude  arm manual=0 enhanced=-25208 pull=-25212   →   focus verdict=unknown axerr=-25212 role=nil
+        arm manual=0 enhanced=-25208 pull=0        →   focus verdict=editable role=AXTextArea sel=true
+Muse    arm manual=-25205 enhanced=-25208 pull=0   →   focus verdict=noField axerr=nil role=AXButton ×2
+```
+
+So the prewarm works (Claude's tree wakes between sessions and the second read
+is exact), and the gate was not lying about Muse: **Muse really does report a
+button**. No `focus alt` line appeared, so the system-wide read and Muse's own
+read agreed.
+
+That still looked wrong, because the user was typing in a composer. Reading
+Muse's tree settles it. Muse is a native AppKit shell around a `WKWebView`
+(`AXWebArea desc="Hatch"`, `markdown-editor.html`), and its message composer is
+exposed as a single leaf:
+
+```
+depth=8  role=AXButton title="Message Attach file Dictate a message Se" kids=0
+depth=6  role=AXWebArea desc="Hatch"
+```
+
+The title is the composer's placeholders concatenated ("Message", "Attach file",
+"Dictate a message", "Send"), and there is no `AXTextArea` anywhere in the
+window except the sidebar search field. WebKit collapsed the contenteditable
+into one button-ish leaf. **`role=AXButton` was the field.**
+
+### The rule this buys
+
+A widget role is evidence only on **native** content. Inside web-rendered
+surfaces the role is the host's mapping of DOM semantics, so a divert there is
+a guess, not evidence. `EditableFocus.webContentHidesEditable(element:)` now
+runs on the divert path only:
+
+1. `AXEditableAncestor` answers with an element → inside an editable region;
+2. otherwise walk `AXParent` up to 8 hops looking for `AXWebArea` / `AXBrowser`
+   (Muse needs 2; the bound is headroom for deeper DOM wrappers).
+
+Either one demotes `.noField` to `.unknown`, i.e. **proceed and paste**, because
+a missed catcher is recoverable and a false catcher breaks the feature. Cost is
+zero on the common `.editable` path and ≤ 17 read-only attribute calls when a
+widget role would otherwise divert.
+
+Native widgets keep their meaning: a focused toolbar button in a native app
+still diverts, because there is no web area above it and no editable ancestor.
+
+### Diagnostic seam kept
+
+`Oto/Support/AXDump.swift` — `--ax-dump[=<bundle-id>|pid]`, opt-in launch
+argument, prints the target's focused element, ancestor chain and window tree,
+then exits in `OtoApp.init()` before any scene exists. It is the only way to
+inspect another app's AX tree on this Mac: shell/probe binaries are AX-untrusted
+(`-25211`) and Oto is the trusted binary. Same explicit-opt-in shape as
+`-OtoCleanSlate`; read-only, touches no Oto state.
+
+Note for future triage: launch it through LaunchServices
+(`open -n -a …/Oto.app --stderr /tmp/ax.txt --args --ax-dump=com.meta.endo`).
+Run directly from a shell, TCC attributes the process to the shell and reports
+`trusted=false`.
+
+### Verification
+
+- `xcodebuild … build` → **BUILD SUCCEEDED**.
+- `xcodebuild test … -only-testing:OtoTests` → **539 tests in 57 suites
+  passed**; new: `webContentRolesAreIdentified` (set membership) and
+  `webContentCheckNeverTrapsHeadless` (bounded, no trap).
+- On device dump of Muse: `webContentHidesEditable` returns **true** for the
+  composer node, 2 hops below `AXWebArea` — the guard fires on the real tree.
+- End-to-end paste into Muse still needs one real dictation; that is the only
+  step that cannot be reproduced without audio.

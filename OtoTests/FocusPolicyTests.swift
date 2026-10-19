@@ -106,6 +106,22 @@ struct FocusPolicyTests {
         #expect(outcome.pull == 0)
     }
 
+    @Test func webContentRolesAreIdentified() {
+        #expect(EditableFocus.isWebContentRole("AXWebArea"))
+        #expect(EditableFocus.isWebContentRole("AXBrowser"))
+        #expect(!EditableFocus.isWebContentRole("AXButton"))
+        #expect(!EditableFocus.isWebContentRole("AXGroup"))
+        #expect(!EditableFocus.isWebContentRole(nil))
+    }
+
+    @Test func webContentCheckNeverTrapsHeadless() {
+        // The guard itself: bounded, boolean out, no trap — whatever the
+        // answer on this machine. The real discrimination (a composer
+        // exposed as AXButton inside an AXWebArea) is proven on device.
+        let wide = AXUIElementCreateSystemWide()
+        _ = EditableFocus.webContentHidesEditable(element: wide)
+    }
+
     @Test func probeNeverTrapsHeadless() {
         // The AX read itself: boolean out, no trap, no throw — whatever the
         // answer on this machine.
