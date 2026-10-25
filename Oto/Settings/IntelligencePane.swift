@@ -45,81 +45,62 @@ struct IntelligencePane: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            OtoCaption(text: "Intelligence")
-            OtoCard {
-                OtoLine("Apple Intelligence", statusDetail) {
-                    OtoStatus(text: statusText, tone: statusTone)
-                }
+        // No "Intelligence" header — the sidebar already says it.
+
+        Section {
+            LabeledContent("Apple Intelligence") {
+                OtoStatus(text: statusText, tone: statusTone)
             }
-            OtoCard {
-                OtoLine(
-                    "Use Apple Intelligence",
-                    "Off means exactly today's app: no model contact at all."
-                ) {
-                    OtoSwitch(on: $enabled)
-                }
+            Toggle("Use Apple Intelligence", isOn: $enabled)
+        } footer: {
+            if let statusDetail {
+                Text(statusDetail)
             }
-            OtoCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Auto Cleanup")
-                        .font(.system(size: 13))
-                        .foregroundStyle(OtoPalette.ink)
-                    Text(cleanupFooting(historyEnabled: historyEnabled))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
-                    HStack(spacing: 8) {
-                        cleanupCard(
-                            level: .none, title: "None",
-                            detail: "Exact words, mistakes included"
-                        )
-                        cleanupCard(
-                            level: .light, title: "Light",
-                            detail: "Fixes fillers and grammar"
-                        )
-                        cleanupCard(
-                            level: .medium, title: "Medium",
-                            detail: "Tightens for clarity too"
-                        )
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-            }
-            .disabled(!enabled)
-            .opacity(enabled ? 1 : 0.45)
-            OtoCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("My Transforms")
-                        .font(.system(size: 13))
-                        .foregroundStyle(OtoPalette.ink)
-                    Text("Select text in any app, press the shortcut — the pill shows the rewrite while it runs.")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
-                    ForEach(TransformPreset.allCases, id: \.rawValue) { preset in
-                        transformRow(for: preset)
-                    }
-                    HStack {
-                        Spacer()
-                        OtoPill("Reset to defaults") {
-                            transforms.resetToDefaults()
-                            refreshTransforms()
-                        }
-                        .disabled(recording != nil)
-                    }
-                    // Reset restores the four shortcuts; the custom name +
-                    // instruction are yours and stay untouched.
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-            }
-            .disabled(!enabled)
-            .opacity(enabled ? 1 : 0.45)
-            Text("On-device only — transcripts and prompts never leave this Mac.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(OtoPalette.muted)
-                .padding(.leading, 2)
         }
+
+        Section {
+            Picker("Level", selection: level) {
+                Text("None").tag(CleanupLevel.none)
+                Text("Light").tag(CleanupLevel.light)
+                Text("Medium").tag(CleanupLevel.medium)
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.regular)
+            Text(cleanupDescription)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Auto Cleanup")
+        } footer: {
+            Text(cleanupFooting(historyEnabled: historyEnabled))
+        }
+        .disabled(!enabled)
+
+        Section {
+            Text("Select text in any app, press the shortcut — the pill shows the rewrite while it runs.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+            ForEach(TransformPreset.allCases, id: \.rawValue) { preset in
+                transformRow(for: preset)
+            }
+            HStack {
+                Spacer()
+                Button("Reset to defaults") {
+                    transforms.resetToDefaults()
+                    refreshTransforms()
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .disabled(recording != nil)
+            }
+            // Reset restores the four shortcuts; the custom name +
+            // instruction are yours and stay untouched.
+        } header: {
+            Text("My Transforms")
+        } footer: {
+            Text("On-device only — transcripts and prompts never leave this Mac.")
+        }
+        .disabled(!enabled)
         .onAppear {
             CleanupMigrator.migrateIfNeeded()
             availability = polish.availability()
@@ -154,17 +135,16 @@ struct IntelligencePane: View {
                     // guidance must survive a re-record.
                     Text("Write your instruction — \(transformShortcutLabel(kind: kind)) stays idle until you do.")
                         .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
+                        .foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(preset.displayName)
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(OtoPalette.ink)
                     Text(preset.tagline)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 Button {
@@ -176,30 +156,25 @@ struct IntelligencePane: View {
                         recording = preset
                     }
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         if isRecording {
-                            Text("Press your shortcut…")
-                                .font(.system(size: 12))
-                                .foregroundStyle(OtoPalette.muted)
+                            Text("…and a key")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
                         } else {
                             ForEach(KeyNames.chips(for: kind), id: \.self) { chip in
-                                OtoKey(text: chip)
+                                OtoKey(text: chip, compact: true)
                             }
                             if KeyNames.chips(for: kind).isEmpty {
                                 Text("Set shortcut…")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(OtoPalette.muted)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(OtoPalette.hairline, lineWidth: 1)
-                    )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .controlSize(.small)
                 .disabled(othersRecording)
                 .accessibilityLabel("\(preset.displayName) shortcut, \(transformShortcutLabel(kind: kind)). Activate to record a new shortcut.")
                 .shortcutRecorder(
@@ -242,20 +217,18 @@ struct IntelligencePane: View {
                         .frame(width: 16, height: 16)
                     Text(message)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
+                        .foregroundStyle(.secondary)
                     Spacer()
                 }
-                .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else if !transforms.isLive(preset), !isRecording {
                 // Registered combos that the OS refused (another app holds
                 // the hotkey): named, never silently dead — except empty
                 // slots, which claim nothing.
                 if kind != .unassigned {
-                    Text("Couldn’t register — already used by another app. Pick a different one.")
+                    Text("Couldn't register — already used by another app. Pick a different one.")
                         .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -335,43 +308,12 @@ struct IntelligencePane: View {
         }
     }
 
-    /// One selectable cleanup card (title + one-line description).
-    /// Selected card carries the ink border + wash fill (sidebar-row
-    /// language); selection still announces via VoiceOver traits — the
-    /// checkmark decoration is deliberately gone (user call: less chrome).
-    /// Native Buttons throughout: Tab-focusable, Space/Enter activates.
-    /// `contentShape(Rectangle())` hardens hit-testing: plain-styled cards
-    /// with spacer content can otherwise have hole-y tap areas.
-    private func cleanupCard(level: CleanupLevel, title: String, detail: String) -> some View {
-        let selected = level == self.level.wrappedValue
-        return Button {
-            self.level.wrappedValue = level
-        } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(OtoPalette.ink)
-                Text(detail)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OtoPalette.muted)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected ? OtoPalette.wash : .clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(selected ? OtoPalette.ink : OtoPalette.hairline, lineWidth: selected ? 1.5 : 1)
-            )
-            .contentShape(Rectangle())
+    private var cleanupDescription: String {
+        switch level.wrappedValue {
+        case .none: "Exact words, mistakes included"
+        case .light: "Fixes fillers and grammar"
+        case .medium: "Tightens for clarity too"
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Auto Cleanup \(title)")
-        .accessibilityValue(selected ? "selected" : "not selected")
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
     }
 
     private var statusText: String {

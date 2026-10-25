@@ -13,19 +13,13 @@ struct PrivacyPane: View {
     let uiState: SettingsUIState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            OtoCaption(text: "Privacy")
-            OtoCard {
-                MicStatusRow(uiState: uiState, title: "Microphone")
-                OtoRule()
-                AccessibilityRow(uiState: uiState)
-                OtoRule()
-                SpeechStatusRow(uiState: uiState)
-            }
+        // No "Privacy" header — the sidebar already says it.
+        Section {
+            MicStatusRow(uiState: uiState, title: "Microphone")
+            AccessibilityRow(uiState: uiState)
+            SpeechStatusRow(uiState: uiState)
+        } footer: {
             Text("Oto stores what you choose: rules, snippets, and transcripts only if you enable history. Never audio or other apps' content.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(OtoPalette.muted)
-                .padding(.leading, 2)
         }
         .task {
             // Slow state is hoisted (loaded once per window open) — keep

@@ -18,58 +18,60 @@ struct SnippetsPane: View {
     @State private var pendingCopySnippet: Snippet?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            OtoCaption(text: "Snippets")
-            if snippets.snippets.isEmpty {
-                OtoCard {
-                    OtoNothing(
-                        systemName: "text.quote",
-                        text: "No snippets",
-                        detail: "Save repeated text once, then copy it wherever you need it."
-                    )
-                }
-            } else {
-                OtoCard {
-                    ForEach(Array(snippets.snippets.enumerated()), id: \.element.id) { index, snippet in
-                        if index > 0 { OtoRule() }
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(snippet.name)
-                                .font(.system(size: 13))
-                                .foregroundStyle(OtoPalette.ink)
-                            Text(snippet.preview())
+        // No "Snippets" header — the sidebar already says it.
+        if snippets.snippets.isEmpty {
+            Section {
+                ContentUnavailableView(
+                    "No snippets",
+                    systemImage: "text.quote",
+                    description: Text("Save repeated text once, then copy it wherever you need it.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 240)
+            }
+        } else {
+            Section {
+                ForEach(snippets.snippets) { snippet in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(snippet.name)
+                            .font(.system(size: 13))
+                        Text(snippet.preview())
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        if let scope = snippet.bundleID {
+                            Text(scope)
                                 .font(.system(size: 11.5))
-                                .foregroundStyle(OtoPalette.muted)
-                                .lineLimit(2)
-                            if let scope = snippet.bundleID {
-                                Text(scope)
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(OtoPalette.faint)
-                            }
-                            HStack(spacing: 16) {
-                                OtoQuick("Edit") { editingSnippet = snippet }
-                                OtoQuick("Copy") { copySnippet(snippet) }
-                                OtoQuick("Delete", tint: .red) {
-                                    Task { await snippets.remove(id: snippet.id) }
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.top, 4)
+                                .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .contentShape(Rectangle())
-                        .onTapGesture { editingSnippet = snippet }
+                        HStack(spacing: 16) {
+                            Button("Edit") { editingSnippet = snippet }
+                                .buttonStyle(.borderless)
+                            Button("Copy") { copySnippet(snippet) }
+                                .buttonStyle(.borderless)
+                            Button("Delete") {
+                                Task { await snippets.remove(id: snippet.id) }
+                            }
+                            .buttonStyle(.borderless)
+                            .tint(.red)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.top, 4)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { editingSnippet = snippet }
                 }
             }
+        }
+
+        Section {
             HStack {
-                OtoPill("Add snippet") { addingSnippet = true }
+                Button("Add snippet") { addingSnippet = true }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
                 Spacer(minLength: 0)
             }
+        } footer: {
             Text("Snippets only insert when you choose — saying the name never expands it.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(OtoPalette.muted)
-                .padding(.leading, 2)
         }
         .sheet(isPresented: $addingSnippet) {
             SnippetEditor(snippet: nil, snippets: snippets) {
@@ -153,7 +155,7 @@ private struct SnippetEditor: View {
                 Spacer()
                 Button("Copy expansion") { copyDraft() }
                 Button("Save") { save() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
             }
         }
         .formStyle(.grouped)

@@ -131,13 +131,8 @@ struct OtoMenuBarView: View {
             onboarding.show()
         }
         Button("Settings…") {
-            if let existing = NSApp.windows.first(where: { $0.title == "Settings" }) {
-                existing.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            } else {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: SettingsWindowID.id)
-            }
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: SettingsWindowID.id)
         }
         Divider()
         Button("Quit Oto") {

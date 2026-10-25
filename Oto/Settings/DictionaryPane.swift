@@ -17,58 +17,62 @@ struct DictionaryPane: View {
     @State private var showClearDictionaryConfirm = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            OtoCaption(text: "Dictionary")
-            if dictionary.rules.isEmpty {
-                OtoCard {
-                    OtoNothing(
-                        systemName: "text.book.closed",
-                        text: "No dictionary rules",
-                        detail: "Add a spoken form and its replacement. Rules apply to future dictation."
-                    )
-                }
-            } else {
-                OtoCard {
-                    ForEach(Array(dictionary.rules.enumerated()), id: \.element.id) { index, rule in
-                        if index > 0 { OtoRule() }
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("“\(rule.spoken)” → “\(rule.replacement)”")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(OtoPalette.ink)
-                                if let scope = rule.bundleID {
-                                    Text(scope)
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(OtoPalette.muted)
-                                }
-                            }
-                            .opacity(rule.isEnabled ? 1 : 0.45)
-                            Spacer(minLength: 8)
-                            OtoQuick("Edit") { editingRule = rule }
-                            OtoQuick("Delete", tint: .red) {
-                                Task {
-                                    await dictionary.remove(id: rule.id)
-                                    pushRules()
-                                }
+        // No "Dictionary" header — the sidebar already says it.
+        if dictionary.rules.isEmpty {
+            Section {
+                ContentUnavailableView(
+                    "No dictionary rules",
+                    systemImage: "text.book.closed",
+                    description: Text("Add a spoken form and its replacement. Rules apply to future dictation.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 240)
+            }
+        } else {
+            Section {
+                ForEach(dictionary.rules) { rule in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\"\(rule.spoken)\" → \"\(rule.replacement)\"")
+                                .font(.system(size: 13))
+                            if let scope = rule.bundleID {
+                                Text(scope)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .contentShape(Rectangle())
-                        .onTapGesture { editingRule = rule }
+                        .opacity(rule.isEnabled ? 1 : 0.45)
+                        Spacer(minLength: 8)
+                        Button("Edit") { editingRule = rule }
+                            .buttonStyle(.borderless)
+                        Button("Delete") {
+                            Task {
+                                await dictionary.remove(id: rule.id)
+                                pushRules()
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .tint(.red)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { editingRule = rule }
                 }
             }
+        }
+
+        Section {
             HStack(spacing: 12) {
-                OtoPill("Add rule") { addingRule = true }
+                Button("Add rule") { addingRule = true }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
                 Spacer(minLength: 0)
-                OtoPill("Clear", tint: .red) { showClearDictionaryConfirm = true }
+                Button("Clear") { showClearDictionaryConfirm = true }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .tint(.red)
                     .disabled(dictionary.rules.isEmpty)
             }
+        } footer: {
             Text("Whole words only — never inside links or paths. App rules win in their app.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(OtoPalette.muted)
-                .padding(.leading, 2)
         }
         .sheet(isPresented: $addingRule) {
             DictionaryRuleEditor(rule: nil, dictionary: dictionary) { saved in
@@ -146,7 +150,7 @@ private struct DictionaryRuleEditor: View {
                 // Same apply path, explicit scope: the preview never lies
                 // about app-scoped rules.
                 let probe = dictionary.test(
-                    sample: sample.isEmpty ? "Type a sentence containing “\(spoken)”" : sample,
+                    sample: sample.isEmpty ? "Type a sentence containing \"\(spoken)\"" : sample,
                     scope: scopeGlobal ? nil : bundleID.trimmingCharacters(in: .whitespacesAndNewlines),
                     rules: previewRules()
                 )
@@ -164,7 +168,7 @@ private struct DictionaryRuleEditor: View {
                 Button("Cancel", role: .cancel) { onDone(nil) }
                 Spacer()
                 Button("Save") { save() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
             }
         }
         .formStyle(.grouped)

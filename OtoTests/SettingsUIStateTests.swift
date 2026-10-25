@@ -98,36 +98,8 @@ struct SettingsUIStateTests {
         #expect(state.currentInputName == "System default")
     }
 
-    // Sidebar column: the type is NavigationSplitViewVisibility (there is
-    // no …ColumnVisibility in this SDK) and it is not an OptionSet, so the
-    // visible/hidden test is equality — pinned here so neither can drift.
-
-    @Test func sidebarStartsVisible() {
-        let state = makeState()
-        #expect(state.columnVisibility == .all)
-        #expect(state.sidebarVisible)
-    }
-
-    @Test func setSidebarRoundTripsAndIsIdempotent() {
-        let state = makeState()
-        state.setSidebar(false)
-        #expect(state.columnVisibility == .detailOnly)
-        #expect(state.sidebarVisible == false)
-        // Repeat call must not re-animate or change anything.
-        state.setSidebar(false)
-        #expect(state.columnVisibility == .detailOnly)
-        state.setSidebar(true)
-        #expect(state.columnVisibility == .all)
-        #expect(state.sidebarVisible)
-    }
-
-    @Test func sidebarRowMetricsPinTheReportedFixes() {
-        // 36pt rows with 14pt labels (asked for), and an 8pt clear gap
-        // between neighbouring pills — 6 read as "touching".
-        #expect(SettingsRoot.rowHeight == 36)
-        #expect(SettingsRoot.rowFillInsetX == 6)
-        #expect(SettingsRoot.rowPillGap == 8)
-        // Locked column: min == ideal == max is the snap fix.
-        #expect(SettingsRoot.sidebarWidth == 210)
+    @Test func sidebarUsesCompactResizableWidth() {
+        #expect(SettingsRoot.minimumSidebarWidth == 194)
+        #expect(SettingsRoot.sidebarWidth == 218)
     }
 }

@@ -10,27 +10,26 @@
 
 import SwiftUI
 
-/// A group of lines in one hairline box.
+/// Native grouped container used by the settings panes.
 struct OtoCard<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(spacing: 0) { content() }
-            .background(OtoPalette.ground)
-            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(OtoPalette.hairline, lineWidth: 1)
-            )
+        GroupBox {
+            content()
+                // GroupBox otherwise takes the ideal width of its contents.
+                // Flexible content (empty states and multi-line controls in
+                // particular) must share the same trailing edge as row cards.
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 /// The hairline between two lines of a card, inset like the text.
 struct OtoRule: View {
-    var inset: CGFloat = 14
-    var body: some View {
-        Rectangle().fill(OtoPalette.hairline).frame(height: 1).padding(.leading, inset)
-    }
+    var inset: CGFloat = 0
+    var body: some View { Divider().padding(.leading, inset) }
 }
 
 /// One thing to set or do: what it is on the left, the control on the right.
@@ -49,21 +48,17 @@ struct OtoLine<Control: View>: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(OtoPalette.ink)
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
-                        .lineLimit(3)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             control()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -73,33 +68,19 @@ struct OtoCaption: View {
     init(text: String) { self.text = text }
     var body: some View {
         Text(text)
-            .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(OtoPalette.muted)
-            .padding(.leading, 2)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
     }
 }
 
-/// What a panel says when its list is empty.
+/// Native macOS empty state for a settings list with no saved entries.
 struct OtoNothing: View {
     let systemName: String
     let text: String
     let detail: String
 
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: systemName)
-                .font(.system(size: 22))
-                .foregroundStyle(OtoPalette.faint)
-                .frame(width: 26, height: 26)
-            Text(text)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(OtoPalette.ink)
-            Text(detail)
-                .font(.system(size: 12))
-                .foregroundStyle(OtoPalette.muted)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 24)
+        ContentUnavailableView(text, systemImage: systemName, description: Text(detail))
+            .frame(maxWidth: .infinity, minHeight: 240)
     }
 }

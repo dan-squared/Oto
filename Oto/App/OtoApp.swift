@@ -234,13 +234,7 @@ struct OtoApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        // Native window, not a Settings scene (experiment): identical
-        // content, standard window chrome. Cmd-comma is re-wired below
-        // since the system only binds it to a Settings scene. The visible
-        // title text is removed with the toolbar's title item; the title
-        // itself stays, so Exposé, the Window menu and VoiceOver keep a
-        // name to show.
-        WindowGroup(SettingsWindowLocator.windowTitle, id: SettingsWindowID.id) {
+        Window(SettingsWindowLocator.windowTitle, id: SettingsWindowID.id) {
             SettingsRoot(
                 dispatch: dispatch,
                 uiState: settingsUIState,
@@ -252,63 +246,50 @@ struct OtoApp: App {
                 polish: polishService,
                 transforms: transformDispatch
             )
-            // `toolbar(removing:)` is a View modifier, not a Scene one, so
-            // the title-text removal belongs on the window's content. This
-            // drops the visible "Settings" string while the window keeps its
-            // title for Exposé, the Window menu and VoiceOver.
-            .toolbar(removing: .title)
         }
         .defaultSize(width: SettingsRoot.width, height: SettingsRoot.height)
-        // Content MINIMUM, not content size: a contentSize window re-fits
-        // itself whenever the split view's ideal size changes, which is
-        // exactly the snap reported when the sidebar was shown/hidden. The
-        // window now opens at defaultSize, can grow, and never tracks
-        // content. Panes all scroll, so nothing clips at the minimum.
-        // Pinned to content size, as before. A fixed content frame means the
-        // ideal size never changes, so the window itself cannot re-fit (and
-        // so cannot snap) when the column toggles. `.contentMinSize` was
-        // tried and rejected: with a min-only frame the content's ideal size
-        // is unbounded and the window opened full screen.
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appSettings) {
-                SettingsCommands(uiState: settingsUIState)
+                SettingsCommands()
             }
-            CommandGroup(after: .sidebar) {
-                Button("Show Sidebar") {
-                    settingsUIState.setSidebar(true)
-                }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(settingsUIState.sidebarVisible)
-
-                Button("Hide Sidebar") {
-                    settingsUIState.setSidebar(false)
-                }
-                .keyboardShortcut("s", modifiers: [.control, .command])
-                .disabled(!settingsUIState.sidebarVisible)
-            }
+            // This window always keeps its navigation column visible.
+            // Remove macOS's Show/Hide Sidebar menu command as well as the
+            // toolbar toggle removed by SettingsRoot.
+            CommandGroup(replacing: .sidebar) {}
         }
     }
 }
 
-/// Settings window identity + its Cmd-comma entry. The system binds ⌘,
-/// only to a Settings scene, so the native-window experiment re-wires
-/// it here (same shortcut, same destination).
+/// A single native app window gives Settings the same standard window
+/// controls as the reference while keeping the familiar Settings command.
 enum SettingsWindowID {
     nonisolated static let id = "settings"
 }
 
+private struct SettingsCommands: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") {
+            if let existing = SettingsWindowLocator.settingsWindow(in: NSApp.windows) {
+                existing.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: SettingsWindowID.id)
+            }
+        }
+        .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
 /// Finds Oto's Settings window among the app's windows. There is no
-/// singular `Window` scene in MacOSX27.0.sdk and `openWindow(id:)` has no
-/// "focus the existing one" mode, so single-window discipline is
-/// hand-rolled — which means the predicate must be pinned, not guessed.
-/// Split out as a pure function of an array of windows so it is unit
-/// testable without a scene or a run loop.
+/// explicit Settings scene ID, so this predicate remains the onboarding
+/// guard for a restored settings window. Split out as a pure function of an
+/// array of windows so it can be inspected without a scene or run loop.
 enum SettingsWindowLocator {
-    /// Title carried by the Settings scene's window. One constant, because
-    /// it is also the single-open guard's key: if the title-text removal
-    /// below turns out to need an empty scene title, this flips and nothing
-    /// else moves.
+    /// Native Settings scenes use this title in the app's window list.
     nonisolated static let windowTitle = "Settings"
 
     /// The one Settings window Oto owns, or nil.
@@ -317,37 +298,14 @@ enum SettingsWindowLocator {
     /// scene's own. The onboarding window is AppKit-hosted and titled
     /// ("Welcome to Oto") and every Oto panel (catcher, permission modal) is
     /// an `NSPanel`, so nothing else can match.
-    nonisolated static func settingsWindow(in windows: [NSWindow]) -> NSWindow? {
+    @MainActor static func settingsWindow(in windows: [NSWindow]) -> NSWindow? {
         windows.first { isSettings($0) }
     }
 
-    nonisolated static func isSettings(_ window: NSWindow) -> Bool {
+    @MainActor static func isSettings(_ window: NSWindow) -> Bool {
         window.styleMask.contains(.titled)
             && !window.styleMask.contains(.utilityWindow)
             && !(window is NSPanel)
             && window.title == windowTitle
-    }
-}
-
-private struct SettingsCommands: View {
-    let uiState: SettingsUIState
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button("Settings…") {
-            // Single-open guard: repeated invocations (double-fired key
-            // equivalents, rapid menu clicks) focus the live window
-            // instead of stacking duplicates.
-            if let existing = SettingsWindowLocator.settingsWindow(in: NSApp.windows) {
-                existing.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            } else {
-                // Activate first: as a menu-bar app Oto is often inactive,
-                // and a fresh window opened while inactive can land behind.
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: SettingsWindowID.id)
-            }
-        }
-        .keyboardShortcut(",", modifiers: .command)
     }
 }

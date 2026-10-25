@@ -2,21 +2,19 @@
 //  OtoControls.swift
 //  Oto
 //
-//  The control kit, cloned pixel-for-pixel from the reference's pieces:
-//  Big (primary capsule), Pill (outline capsule), OtoSwitch (ink toggle),
-//  OtoSegmented (sliding thumb), OtoDoor (26px square), OtoKey (keycap),
-//  OtoQuick (mini action). All plain-button-style,
-//  all hover-aware, all palette-driven.
+//  Small semantic adapters around native macOS controls. Use system button,
+//  toggle, menu, and segmented picker styles so sizing and interaction stay
+//  consistent with macOS, including Liquid Glass on supported systems.
 //
 
 import SwiftUI
 
-/// The primary capsule: filled ink when it is the thing you came to press.
+/// A native primary macOS button. The system supplies hover, focus,
+/// pressed, disabled, and Liquid Glass treatments for the current OS.
 struct OtoBig: View {
     let title: String
     var filled = true
     let act: () -> Void
-    @State private var hovering = false
 
     init(_ title: String, filled: Bool = true, act: @escaping () -> Void) {
         self.title = title
@@ -25,29 +23,26 @@ struct OtoBig: View {
     }
 
     var body: some View {
-        Button(action: act) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(filled ? OtoPalette.ground : OtoPalette.ink)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.wash), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        Group {
+            if filled {
+                Button(title, action: act).buttonStyle(.glassProminent)
+            } else {
+                Button(title, action: act).buttonStyle(.glass)
+            }
         }
-        .buttonStyle(OtoBounce())
-        .onHover { hovering = $0 }
+        .controlSize(.regular)
+        .tint(OtoPalette.ink)
     }
 }
 
-/// A small capsule that does one thing. Outlined; filled ink when primary.
-/// `large` is the catcher footer size only — everything else stays compact.
+/// A native bordered action button. The system supplies its appearance and
+/// interaction states; destructive actions retain their red tint.
 struct OtoPill: View {
     let title: String
     var filled = false
     var tint: Color = OtoPalette.ink
     var large = false
     let action: () -> Void
-    @State private var hovering = false
 
     init(_ title: String, filled: Bool = false, tint: Color = OtoPalette.ink, large: Bool = false, action: @escaping () -> Void) {
         self.title = title
@@ -58,136 +53,81 @@ struct OtoPill: View {
     }
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: large ? 13 : 11.5))
-                .foregroundStyle(filled ? OtoPalette.ground : tint)
-                .padding(.horizontal, large ? 14 : 10)
-                .padding(.vertical, large ? 8 : 5)
-                .background(filled ? OtoPalette.ink : (hovering ? OtoPalette.hover : OtoPalette.ground), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(filled ? .clear : OtoPalette.hairline, lineWidth: 1))
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        Group {
+            if filled {
+                Button(title, action: action).buttonStyle(.glassProminent)
+            } else {
+                Button(title, action: action).buttonStyle(.glass)
+            }
         }
-        .buttonStyle(OtoBounce())
-        .onHover { hovering = $0 }
-        .animation(OtoMotion.quick, value: hovering)
+        .controlSize(large ? .regular : .small)
+        .tint(tint)
     }
 }
 
-/// On or off, in ink rather than in blue. 30×18.
+/// Native macOS switch used by settings rows.
 struct OtoSwitch: View {
     @Binding var on: Bool
+    let title: String
+
+    init(on: Binding<Bool>, title: String = "Setting") {
+        _on = on
+        self.title = title
+    }
 
     var body: some View {
-        Capsule()
-            .fill(on ? OtoPalette.ink : OtoPalette.faint)
-            .frame(width: 30, height: 18)
-            .overlay(alignment: on ? .trailing : .leading) {
-                Circle()
-                    .fill(OtoPalette.ground)
-                    .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
-                    .padding(2)
-            }
-            .contentShape(Capsule())
-            .onTapGesture { withAnimation(OtoMotion.settle) { on.toggle() } }
-            .animation(OtoMotion.settle, value: on)
-            .accessibilityAddTraits(.isToggle)
-            .accessibilityValue(on ? "On" : "Off")
+        Toggle(title, isOn: $on)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .accessibilityLabel(title)
     }
 }
 
-/// Options in a wash track; the ground thumb slides to the chosen one.
+/// Native segmented picker for mutually exclusive options.
 struct OtoSegmented<Option: Hashable>: View {
     let options: [(Option, String)]
     @Binding var selection: Option
-    @Namespace private var slide
 
     var body: some View {
-        HStack(spacing: 2) {
+        Picker("Options", selection: $selection) {
             ForEach(options, id: \.0) { option, title in
-                Text(title)
-                    .font(.system(size: 11.5, weight: option == selection ? .medium : .regular))
-                    .foregroundStyle(option == selection ? OtoPalette.ink : OtoPalette.muted)
-                    .lineLimit(1)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background {
-                        if option == selection {
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(OtoPalette.ground)
-                                .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
-                                .matchedGeometryEffect(id: "chosen", in: slide)
-                        }
-                    }
-                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .onTapGesture {
-                        withAnimation(OtoMotion.settle) { selection = option }
-                    }
+                Text(title).tag(option)
             }
         }
-        .padding(2)
-        .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .animation(OtoMotion.settle, value: selection)
+        .pickerStyle(.segmented)
+        .controlSize(.regular)
+        .labelsHidden()
     }
 }
 
-/// A small square holding one icon. The panel cross, lit when open.
+/// A native compact icon button for the shortcut editor.
 struct OtoDoor: View {
     let systemName: String
     var on = false
-    /// Keeps a wash plate under the icon at rest. Off for the panel cross
-    /// (it floats on the card); on for a toolbar control, where a bare
-    /// transparent glyph reads as a smudge rather than a button.
-    var showsPlate = false
     var help = ""
     let act: () -> Void
-    @State private var hovering = false
-
-    /// Square edge. The toolbar compresses anything that does not declare
-    /// one, which is what made this control render thin.
-    nonisolated static let side: CGFloat = 28
-
     var body: some View {
-        Button(action: act) {
-            Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(on ? OtoPalette.ink : (hovering ? OtoPalette.ink.opacity(0.7) : OtoPalette.muted))
-                .frame(width: Self.side, height: Self.side)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(plateFill)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(OtoBounce())
-        // Belt and braces with the inner frame: the toolbar gets the
-        // button's ideal size, not whatever space it thinks it has.
-        .frame(width: Self.side, height: Self.side)
-        .onHover { hovering = $0 }
+        Button(action: act) { Image(systemName: systemName) }
+        .buttonStyle(.glass)
+        .controlSize(.small)
+        .tint(on ? OtoPalette.ink : .secondary)
         .help(help)
-        .animation(OtoMotion.quick, value: hovering)
-        .animation(OtoMotion.quick, value: on)
-    }
-
-    private var plateFill: Color {
-        if on { return OtoPalette.wash }
-        if hovering { return OtoPalette.hover }
-        return showsPlate ? OtoPalette.wash.opacity(0.7) : .clear
     }
 }
 
-/// A keycap chip: shortcut glyphs on wash, rounded-6, 44pt minimum.
+/// A compact keycap display with native Liquid Glass material.
 struct OtoKey: View {
     let text: String
+    var compact = false
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .font(.system(size: compact ? 11 : 12, weight: .medium, design: .rounded))
             .foregroundStyle(OtoPalette.ink)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .frame(minWidth: 44)
+            .padding(.horizontal, compact ? 6 : 7)
+            .padding(.vertical, compact ? 4 : 3)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: compact ? 5 : 6, style: .continuous))
+            .frame(minWidth: compact ? 22 : 30)
     }
 }
 
@@ -215,7 +155,7 @@ struct OtoBounce: ButtonStyle {
     }
 }
 
-/// A small text action inside a row — Copy, Remove, Show.
+/// A native borderless text action inside a settings row.
 struct OtoQuick: View {
     let title: String
     var tint: Color = OtoPalette.ink
@@ -228,15 +168,9 @@ struct OtoQuick: View {
     }
 
     var body: some View {
-        Button(action: act) {
-            Text(title)
-                .font(.system(size: 11.5))
-                .foregroundStyle(tint)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-        .buttonStyle(OtoBounce())
+        Button(title, action: act)
+            .foregroundStyle(tint)
+            .buttonStyle(.borderless)
     }
 }
 

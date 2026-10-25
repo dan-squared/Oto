@@ -18,17 +18,16 @@ struct MicStatusRow: View {
     let title: String
 
     var body: some View {
-        // One trailing slot, always exactly one control (same contract as
-        // the speech row): the Allow button sits IN the status slot while
-        // a prompt exists; otherwise the status pill.
-        OtoLine(title, uiState.micDeniedGuidance) {
+        LabeledContent(title) {
             if uiState.micPermission == .notDetermined {
-                OtoBig("Allow microphone access") {
+                Button("Allow microphone access") {
                     Task {
                         _ = await uiState.ensureMicrophoneGrant()
                         uiState.refreshPermissions()
                     }
                 }
+                .buttonStyle(.glassProminent)
+                .controlSize(.small)
             } else {
                 OtoStatus(text: uiState.micText, tone: uiState.micTone)
             }
@@ -41,17 +40,19 @@ struct AccessibilityRow: View {
     let uiState: SettingsUIState
 
     var body: some View {
-        OtoLine("Accessibility", uiState.axTrusted ? nil : "Global keys and insertion need it.") {
+        LabeledContent("Accessibility") {
             VStack(alignment: .trailing, spacing: 8) {
                 OtoStatus(text: uiState.axTrusted ? "Allowed" : "Not allowed", tone: uiState.axTrusted ? .ok : .warn)
                 if !uiState.axTrusted {
-                    OtoBig("Open Accessibility settings") {
+                    Button("Open Accessibility settings") {
                         uiState.requestAccessibilityPrompt()
                         Task {
                             try? await Task.sleep(for: .seconds(2))
                             uiState.refreshPermissions()
                         }
                     }
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.small)
                 }
             }
         }
@@ -67,14 +68,16 @@ struct SpeechStatusRow: View {
     let uiState: SettingsUIState
 
     var body: some View {
-        OtoLine("Speech recognition", uiState.speechDeniedGuidance) {
+        LabeledContent("Speech recognition") {
             if uiState.speechPermission == .notDetermined {
-                OtoBig("Allow speech recognition") {
+                Button("Allow speech recognition") {
                     Task {
                         _ = await uiState.ensureSpeechGrant()
                         uiState.refreshPermissions()
                     }
                 }
+                .buttonStyle(.glassProminent)
+                .controlSize(.small)
             } else {
                 OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
             }

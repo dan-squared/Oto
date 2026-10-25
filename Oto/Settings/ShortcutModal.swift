@@ -2,16 +2,14 @@
 //  ShortcutModal.swift
 //  Oto
 //
-//  Reference-shaped Shortcuts sheet: one card per live slot with keycap
-//  chips, pencil/trash affordances, kind presets, and a Reset/Done footer.
+//  Native Shortcuts sheet: system group boxes, buttons, menu and segmented
+//  picker around the existing key-capture behavior.
 //  All edits stage locally; Done applies through the dispatch gate, ✕
 //  discards. A blocked save offers Swap (atomic exchange, safe by
 //  construction) instead of a dead-end refusal.
 //
-//  Frameless-sheet rule: the sheet window is the only frame — NO Form,
-//  GroupBox, List, or background panel inside. Plain ScrollView + VStack +
-//  cards. The recorder rules, local monitor, and suspend discipline are
-//  reused verbatim from ShortcutRecorderField.
+//  The recorder rules, local monitor, and suspend discipline are retained
+//  from ShortcutRecorderField; only presentation is native.
 //
 
 import Carbon.HIToolbox
@@ -34,47 +32,50 @@ struct KeycapField: View {
     var recorder: ShortcutRecorderModifier
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
+            // Chip bar: tap to arm recorder, shows current binding or
+            // recording prompt — matches the reference glass chip bar.
             Button {
                 onArm()
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     if isRecording {
-                        Text("Press your shortcut…")
-                            .font(.system(size: 13))
+                        Text("…and a key")
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(OtoPalette.muted)
                     } else if chips.isEmpty {
                         Text(emptyPlaceholder)
-                            .font(.system(size: 13))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(OtoPalette.muted)
                     } else {
                         ForEach(chips, id: \.self) { chip in
-                            OtoKey(text: chip)
+                            OtoKey(text: chip, compact: true)
                         }
                     }
                 }
-                .font(.system(size: 13))
-                .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(OtoPalette.hairline, lineWidth: 1)
-                )
+                .padding(.vertical, 2)
             }
-            .buttonStyle(OtoBounce())
+            .buttonStyle(.glass)
+            .controlSize(.small)
             .disabled(disabled)
 
-            Button {
-                onTrash()
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 13))
-                    .foregroundStyle(OtoPalette.muted)
-                    .frame(width: 18, height: 18)
+            // × clear: compact inline button matching the reference's
+            // chip-bar dismiss affordance.
+            if !chips.isEmpty || isRecording {
+                Button {
+                    onTrash()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(OtoPalette.muted)
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.glass)
+                .controlSize(.mini)
+                .disabled(disabled)
+                .help(trashHelp)
             }
-            .buttonStyle(OtoBounce())
-            .disabled(disabled)
-            .help(trashHelp)
         }
         .modifier(recorder)
     }
@@ -100,23 +101,31 @@ struct ShortcutModal: View {
     @State private var showSwapHandsFree = false
 
     private static let recorderHint =
-        "⌘⇧D-style combos record here — bare keys are in presets. Delete clears, Escape cancels."
+        "Press a combo like ⌘⇧D. Delete clears, Escape cancels."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Shortcuts")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(OtoPalette.ink)
+                        .font(.title2.weight(.semibold))
                     Text("Two ways to talk. Click a shortcut to change it.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(OtoPalette.muted)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
-                OtoDoor(systemName: "xmark", help: "Discard changes") {
+                Button {
                     dismiss()
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("Close")
+                            .font(.system(size: 13))
+                        OtoKey(text: "esc", compact: true)
+                    }
                 }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .help("Discard changes")
             }
 
             slotCard(
@@ -144,6 +153,7 @@ struct ShortcutModal: View {
         }
         .padding(20)
         .frame(minWidth: 560)
+        .presentationBackground(.ultraThinMaterial)
         .task {
             staging = ShortcutStaging(live: dispatch.configuration)
             fnUsage = SystemFnUsage.read()
@@ -163,13 +173,11 @@ struct ShortcutModal: View {
         // Opt-in slot with nothing assigned: placeholder + hints instead
         // of chips; recording into it activates the slot on Done.
         let isEmpty = staging.effectiveKind(for: slot) == .unassigned
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(OtoPalette.ink)
+        return GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
             Text(subtitle)
-                .foregroundStyle(OtoPalette.muted)
-                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
 
             if slot == .handsFree {
                 // Derived, non-editable double-tap row: always the hold
@@ -179,31 +187,19 @@ struct ShortcutModal: View {
                 // for every hold kind EXCEPT bare fn: fn taps belong to
                 // macOS, and fn presses bypass the machine that would
                 // finish a converted session (no third-tap stop exists).
-                HStack(spacing: 4) {
-                    Text("Double tap")
-                        .font(.system(size: 13))
-                        .foregroundStyle(OtoPalette.muted)
+                LabeledContent("Double tap") {
+                    HStack(spacing: 4) {
                     ForEach(KeyNames.chips(for: staging.effectiveKind(for: .hold)), id: \.self) { chip in
-                        Text(chip)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(OtoPalette.ink)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        OtoKey(text: chip, compact: true)
+                    }
                     }
                 }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(OtoPalette.hairline, lineWidth: 1)
-                )
                 if case .modifierHold(let code) = staging.effectiveKind(for: .hold),
                    code == UInt16(kVK_Function)
                 {
                     Text(SystemFnUsage.caption(for: fnUsage))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -248,16 +244,16 @@ struct ShortcutModal: View {
                 // The opt-in toggle is empty: double-tap of the hold key
                 // is the always-on path, no setup needed.
                 Text("Double-tap \(KeyNames.shortLabel(for: staging.effectiveKind(for: .hold))) anytime — no setup needed.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OtoPalette.muted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             if slot == .hold, isEmpty, message(for: slot) == nil {
                 // Live hold with no binding (only reachable via Swap with
                 // the empty slot): named guidance instead of a dead row.
                 Text("Push to talk has no shortcut — record one to dictate.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OtoPalette.muted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -284,18 +280,16 @@ struct ShortcutModal: View {
 
             if recording, message(for: slot) == nil {
                 Text(Self.recorderHint)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OtoPalette.muted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             if let message = message(for: slot) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 12))
                         .foregroundStyle(.orange)
-                        .frame(width: 16, height: 16)
                     Text(message)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     if showSwap(for: slot) {
                         Spacer()
                         Button("Swap") {
@@ -304,20 +298,10 @@ struct ShortcutModal: View {
                         .buttonStyle(.link)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(OtoPalette.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
             }
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(OtoPalette.wash.opacity(0.45))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(OtoPalette.hairline, lineWidth: 1)
-        )
+        label: { Text(title) }
     }
 
     // MARK: - Staging

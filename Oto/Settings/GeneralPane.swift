@@ -48,73 +48,52 @@ struct GeneralPane: View {
     @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .freshDefault
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                OtoCaption(text: "General")
-                OtoCard {
-                    OtoLine("Launch at login", loginCaption) {
-                        OtoSwitch(on: Binding(
-                            get: { loginStatus == .enabled },
-                            set: { newValue in setLogin(enabled: newValue) }
-                        ))
-                    }
-                    if let loginError {
-                        Text(loginError)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(OtoPalette.muted)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 11)
-                    }
-                    OtoRule()
-                    OtoLine("Show Oto in Dock", "Applies now. Off: menu bar only — no Dock, no ⌘Tab.") {
-                        OtoSwitch(on: Binding(
-                            get: { showInDock },
-                            set: { newValue in setDockVisibility(shown: newValue) }
-                        ))
-                        .accessibilityIdentifier("ShowInDockToggle")
-                    }
-                    if let dockError {
-                        Text(dockError)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(OtoPalette.muted)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 11)
-                    }
-                }
+        // No "General" header — the sidebar already says it.
+        Section {
+            Toggle("Launch at login", isOn: Binding(
+                get: { loginStatus == .enabled },
+                set: { newValue in setLogin(enabled: newValue) }
+            ))
+            if let loginError {
+                Text(loginError)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
-
-            VStack(alignment: .leading, spacing: 6) {
-                OtoCaption(text: "Flow Bar")
-                OtoCard {
-                    HStack {
-                        Text("Position")
-                            .font(.system(size: 13))
-                            .foregroundStyle(OtoPalette.ink)
-                        Spacer(minLength: 8)
-                        OtoSegmented(
-                            options: [(FlowBarPosition.top, "Top"), (FlowBarPosition.bottom, "Bottom")],
-                            selection: $flowPosition
-                        )
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                }
-                Text("Top sits below the notch. Drag the pill anytime — it snaps.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OtoPalette.muted)
-                    .padding(.leading, 2)
+            Toggle("Show Oto in Dock", isOn: Binding(
+                get: { showInDock },
+                set: { newValue in setDockVisibility(shown: newValue) }
+            ))
+            .accessibilityIdentifier("ShowInDockToggle")
+            if let dockError {
+                Text(dockError)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
-
-            VStack(alignment: .leading, spacing: 6) {
-                OtoCaption(text: "About")
-                OtoCard {
-                    OtoLine("Version", appVersion) { EmptyView() }
-                    OtoRule()
-                    OtoLine("Bundle identifier", Bundle.main.bundleIdentifier ?? "—") { EmptyView() }
-                }
+        } footer: {
+            if let loginCaption {
+                Text(loginCaption)
             }
+            Text("Off: menu bar only — no Dock, no ⌘Tab.")
         }
         .task { refreshLogin() }
+
+        Section {
+            Picker("Position", selection: $flowPosition) {
+                Text("Top").tag(FlowBarPosition.top)
+                Text("Bottom").tag(FlowBarPosition.bottom)
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.regular)
+        } header: {
+            Text("Flow Bar")
+        } footer: {
+            Text("Top sits below the notch. Drag the pill anytime — it snaps.")
+        }
+
+        Section("About") {
+            LabeledContent("Version", value: appVersion)
+            LabeledContent("Bundle identifier", value: Bundle.main.bundleIdentifier ?? "—")
+        }
     }
 
     /// Four states, never two: revoked consent and lookup failure both

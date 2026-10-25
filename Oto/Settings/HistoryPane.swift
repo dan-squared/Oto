@@ -29,45 +29,42 @@ struct HistoryPane: View {
     @State private var polishEntry: HistoryEntry?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            OtoCaption(text: "History")
-            OtoCard {
-                OtoLine(
-                    "Remember transcripts",
-                    "On this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Off stops new saves; existing entries stay until cleared; nothing is ever uploaded."
-                ) {
-                    OtoSwitch(on: Binding(
-                        get: { historyEnabled },
-                        set: { setHistoryEnabled($0) }
-                    ))
-                }
+        // No "History" header — the sidebar already says it.
+        Group {
+            Section {
+                Toggle("Remember transcripts", isOn: Binding(
+                    get: { historyEnabled },
+                    set: { setHistoryEnabled($0) }
+                ))
+            } footer: {
+                Text("On this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Off stops new saves; existing entries stay until cleared; nothing is ever uploaded.")
             }
 
             if !historyEnabled {
-                OtoCard {
-                    OtoNothing(
-                        systemName: "clock",
-                        text: "History is off",
-                        detail: "Turn it on to recall past dictation."
+                Section {
+                    ContentUnavailableView(
+                        "History is off",
+                        systemImage: "clock",
+                        description: Text("Turn it on to recall past dictation.")
                     )
+                    .frame(maxWidth: .infinity, minHeight: 240)
                 }
             } else if history.entries.isEmpty {
-                OtoCard {
-                    OtoNothing(
-                        systemName: "clock",
-                        text: "No remembered transcripts",
-                        detail: "Finished dictation appears here."
+                Section {
+                    ContentUnavailableView(
+                        "No remembered transcripts",
+                        systemImage: "clock",
+                        description: Text("Finished dictation appears here.")
                     )
+                    .frame(maxWidth: .infinity, minHeight: 240)
                 }
             } else {
                 let pageCount = HistoryPage.pageCount(total: history.entries.count)
-                OtoCard {
-                    ForEach(Array(HistoryPage.slice(items: history.entries, page: historyPage).enumerated()), id: \.element.id) { index, entry in
-                        if index > 0 { OtoRule() }
+                Section {
+                    ForEach(HistoryPage.slice(items: history.entries, page: historyPage)) { entry in
                         VStack(alignment: .leading, spacing: 3) {
                             Text(entry.finalText)
                                 .font(.system(size: 13))
-                                .foregroundStyle(OtoPalette.ink)
                                 .lineLimit(3)
                             HStack {
                                 Text(AppNames.displayName(forBundleID: entry.bundleIdentifier))
@@ -75,60 +72,68 @@ struct HistoryPane: View {
                                 Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
                             }
                             .font(.system(size: 11.5))
-                            .foregroundStyle(OtoPalette.muted)
+                            .foregroundStyle(.secondary)
                             HStack(spacing: 12) {
-                                OtoQuick("Copy") { copyEntry(entry) }
+                                Button("Copy") { copyEntry(entry) }
+                                    .buttonStyle(.borderless)
                                 if polishActionVisible(availability: polishAvailability, enabled: intelligenceEnabled) {
-                                    OtoQuick("Clean up") { polishEntry = entry }
+                                    Button("Clean up") { polishEntry = entry }
+                                        .buttonStyle(.borderless)
                                 }
                                 if entry.wasCleaned, entry.rawText != nil {
-                                    OtoQuick("Undo AI edit") { undoCleanup(entry) }
+                                    Button("Undo AI edit") { undoCleanup(entry) }
+                                        .buttonStyle(.borderless)
                                 }
-                                OtoQuick("Delete", tint: .red) {
+                                Button("Delete") {
                                     Task { await history.remove(id: entry.id) }
                                 }
+                                .buttonStyle(.borderless)
+                                .tint(.red)
                                 Spacer(minLength: 0)
                             }
                             .padding(.top, 4)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
                     }
                 }
-                HStack(spacing: 12) {
-                    OtoPill("Clear all…", tint: .red) { showClearConfirm = true }
-                    Spacer(minLength: 0)
-                }
-                // Footer: newest-first pages, 10 per page. Page count caps at
-                // 10 by construction (100-entry bound), so numbered buttons
-                // never need ellipsis logic.
-                HStack(spacing: 8) {
-                    OtoPill("Previous") {
-                        if historyPage > 1 { historyPage -= 1 }
+
+                Section {
+                    HStack(spacing: 12) {
+                        Button("Clear all…") { showClearConfirm = true }
+                            .buttonStyle(.glass)
+                            .controlSize(.small)
+                            .tint(.red)
+                        Spacer(minLength: 0)
                     }
-                    .disabled(historyPage <= 1)
-                    ForEach(1...pageCount, id: \.self) { number in
-                        if number == historyPage {
-                            OtoPill("\(number)", filled: true) { historyPage = number }
-                        } else {
-                            OtoPill("\(number)") { historyPage = number }
+                    HStack(spacing: 8) {
+                        Button("Previous") {
+                            if historyPage > 1 { historyPage -= 1 }
                         }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                        .disabled(historyPage <= 1)
+                        ForEach(1...pageCount, id: \.self) { number in
+                            pageButton(number: number, isCurrent: number == historyPage)
+                        }
+                        Button("Next") {
+                            if historyPage < pageCount { historyPage += 1 }
+                        }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                        .disabled(historyPage >= pageCount)
+                        Spacer(minLength: 0)
+                        Text("Page \(historyPage) of \(pageCount)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    OtoPill("Next") {
-                        if historyPage < pageCount { historyPage += 1 }
-                    }
-                    .disabled(historyPage >= pageCount)
-                    Spacer(minLength: 0)
-                    Text("Page \(historyPage) of \(pageCount)")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(OtoPalette.muted)
                 }
             }
+
             if let feedback {
-                Text(feedback)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OtoPalette.muted)
-                    .padding(.leading, 2)
+                Section {
+                    Text(feedback)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .sheet(item: $polishEntry) { entry in
@@ -139,8 +144,6 @@ struct HistoryPane: View {
             if !new { historyPage = 1 }
         }
         .onAppear {
-            // Read once per visit (cheap sync property): unknown ⇒ hidden,
-            // and prewarm while the user browses so the first tap streams.
             polishAvailability = polish.availability()
             if polishActionVisible(availability: polishAvailability, enabled: intelligenceEnabled) {
                 polish.prewarm()
@@ -192,6 +195,19 @@ struct HistoryPane: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Off stops new saves. Existing entries stay on this Mac until cleared.")
+        }
+    }
+
+    /// Split the conditional button style so the compiler doesn't choke on
+    /// ternary `ButtonStyle` inference inside the deeply-nested `ForEach`.
+    @ViewBuilder
+    private func pageButton(number: Int, isCurrent: Bool) -> some View {
+        let button = Button("\(number)") { historyPage = number }
+            .controlSize(.small)
+        if isCurrent {
+            button.buttonStyle(.glassProminent)
+        } else {
+            button.buttonStyle(.glass)
         }
     }
 
