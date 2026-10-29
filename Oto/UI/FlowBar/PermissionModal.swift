@@ -31,6 +31,27 @@ enum PermissionGrantAction {
     case openSettings
 }
 
+/// What the card says for each mic state. macOS presents its own TCC dialog
+/// once, and only while the status is undetermined; after a denial the
+/// system will never ask again, so this card is the only recovery surface
+/// (deep link to System Settings). The words follow that truth: "Allow"
+/// before the first answer, "Open Settings" after it. Pure — test-pinned.
+struct PermissionCardCopy: Equatable {
+    let title: String
+    let action: String
+
+    nonisolated static func forStatus(_ status: PermissionsManager.MicrophoneStatus) -> Self {
+        switch status {
+        case .notDetermined:
+            Self(title: "Microphone Permission Required", action: "Allow Microphone")
+        case .denied, .granted:
+            // Granted is unreachable (the card only shows on a denied
+            // capture); it reads as denied rather than promising a prompt.
+            Self(title: "Microphone Access Is Off", action: "Open Settings")
+        }
+    }
+}
+
 /// System Settings deep links, most specific first. The Microphone anchor is
 /// the long-standing `com.apple.preference.security` pane path; the two
 /// fallbacks keep the button useful even if a future macOS renames the pane.
@@ -91,10 +112,11 @@ final class PermissionCardView: NSView {
 
     private let bg = CAShapeLayer()
     private let icon = NSImageView()
-    private let title = NSTextField(labelWithString: "Microphone Permission Required")
+    private let title = NSTextField(labelWithString: "")
     private let button = NSButton()
     private(set) var contentSize: NSSize = .zero
     private var didClampTitle = false
+    private(set) var copy = PermissionCardCopy.forStatus(.notDetermined)
 
     init(onGrant: (() -> Void)?) {
         self.onGrant = onGrant
@@ -102,6 +124,7 @@ final class PermissionCardView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.addSublayer(bg)
+        self.title.stringValue = self.copy.title
 
         icon.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: nil)
         icon.contentTintColor = .systemRed
@@ -135,6 +158,17 @@ final class PermissionCardView: NSView {
         applyAppearance()
     }
 
+    /// Re-words the card for the live mic status before it is positioned.
+    /// One card instance is prewarmed at launch; the words are the only
+    /// thing that varies between "ask" and "go fix it".
+    func configure(_ copy: PermissionCardCopy) {
+        guard copy != self.copy else { return }
+        self.copy = copy
+        self.title.stringValue = copy.title
+        applyAppearance()
+        relayout()
+    }
+
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(button.frame, cursor: .pointingHand)
@@ -150,7 +184,7 @@ final class PermissionCardView: NSView {
             : NSColor(white: 0.11, alpha: 1)).cgColor
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
-        button.attributedTitle = NSAttributedString(string: "Grant Permission", attributes: [
+        button.attributedTitle = NSAttributedString(string: self.copy.action, attributes: [
             .font: NSFont.systemFont(ofSize: 12.5, weight: .semibold),
             .foregroundColor: dark ? NSColor.black : NSColor.white,
             .paragraphStyle: paragraph,
@@ -177,9 +211,9 @@ final class PermissionCardView: NSView {
         let h = Self.height
 
         let typeface = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
-        let titleW = ceil(Self.textWidth(title.stringValue, font: typeface)) + 4
-        let titleH = ceil(Self.textHeight(title.stringValue, font: typeface))
-        let buttonW = ceil(Self.textWidth("Grant Permission", font: typeface)) + buttonHPad * 2
+        let titleW = ceil(Self.textWidth(self.copy.title, font: typeface)) + 4
+        let titleH = ceil(Self.textHeight(self.copy.title, font: typeface))
+        let buttonW = ceil(Self.textWidth(self.copy.action, font: typeface)) + buttonHPad * 2
 
         var width = pad + iconSide + gapIcon + titleW + gapButton + buttonW + pad
         var fittedTitleW = titleW
@@ -253,6 +287,7 @@ final class PermissionModalController {
     nonisolated static let visibleDuration: Double = 10.0
 
     private var panel: NSPanel?
+    private var card: PermissionCardView?
     private var contentWidth: CGFloat = 0
     private var hideTask: Task<Void, Never>?
     private var showGeneration: UInt64 = 0
@@ -274,6 +309,7 @@ final class PermissionModalController {
             let card = PermissionCardView(onGrant: { [weak self] in
                 self?.grant()
             })
+            self.card = card
             contentWidth = card.contentSize.width
             panel = FlowBarPanel.makePanel(
                 contentView: card,
@@ -284,6 +320,12 @@ final class PermissionModalController {
 
     func show(displayID: CGDirectDisplayID?, position: FlowBarPosition) {
         prewarm()
+        // The card's words follow the live status: macOS prompts natively
+        // only while undetermined; after a denial this card is the route.
+        if let card {
+            card.configure(PermissionCardCopy.forStatus(PermissionsManager().microphoneStatus()))
+            contentWidth = card.contentSize.width
+        }
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let frame = FlowBarPosition.frame(
             width: contentWidth, height: Self.height, on: screen.visibleFrame, position: position

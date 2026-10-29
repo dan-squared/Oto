@@ -7,6 +7,10 @@
 //  cards, captions and rules stay with the panes, so no pane changes pixels.
 //  Driven by the hoisted SettingsUIState, like the panes themselves.
 //
+//  One control per row. A state that has a remedy is the button: the pill
+//  reads "Not allowed" and opens the System Settings pane that can undo it.
+//  Nothing stacks a second button under the status.
+//
 
 import Speech
 import SwiftUI
@@ -19,17 +23,28 @@ struct MicStatusRow: View {
 
     var body: some View {
         LabeledContent(title) {
-            if uiState.micPermission == .notDetermined {
-                Button("Allow microphone access") {
+            switch uiState.micAction {
+            case .none:
+                OtoStatus(text: uiState.micText, tone: uiState.micTone)
+            case .allow:
+                OtoStatusAction(
+                    text: uiState.micText,
+                    tone: uiState.micTone,
+                    help: "Ask for microphone access"
+                ) {
                     Task {
                         _ = await uiState.ensureMicrophoneGrant()
                         uiState.refreshPermissions()
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            } else {
-                OtoStatus(text: uiState.micText, tone: uiState.micTone)
+            case .openSettings:
+                OtoStatusAction(
+                    text: uiState.micText,
+                    tone: uiState.micTone,
+                    help: "Open System Settings → Privacy & Security → Microphone"
+                ) {
+                    SettingsLinkOpener.open(MicSettingsLink.candidates())
+                }
             }
         }
     }
@@ -41,18 +56,19 @@ struct AccessibilityRow: View {
 
     var body: some View {
         LabeledContent("Accessibility") {
-            VStack(alignment: .trailing, spacing: 8) {
-                OtoStatus(text: uiState.axTrusted ? "Allowed" : "Not allowed", tone: uiState.axTrusted ? .ok : .warn)
-                if !uiState.axTrusted {
-                    Button("Open Accessibility settings") {
-                        uiState.requestAccessibilityPrompt()
-                        Task {
-                            try? await Task.sleep(for: .seconds(2))
-                            uiState.refreshPermissions()
-                        }
+            if uiState.axTrusted {
+                OtoStatus(text: "Allowed", tone: .ok)
+            } else {
+                OtoStatusAction(
+                    text: "Not allowed",
+                    tone: .warn,
+                    help: "Open System Settings → Privacy & Security → Accessibility"
+                ) {
+                    uiState.requestAccessibilityPrompt()
+                    Task {
+                        try? await Task.sleep(for: .seconds(2))
+                        uiState.refreshPermissions()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
                 }
             }
         }
@@ -60,26 +76,35 @@ struct AccessibilityRow: View {
 }
 
 /// Speech-recognition status row. Identical in both panes. One trailing
-/// slot, always exactly one control: the Allow button sits IN the status
-/// slot (never below it) while a prompt exists; otherwise the status
-/// pill. Denied gets Settings guidance instead of a dead button — no
-/// prompt exists to show, so a button would lie.
+/// control: the pill is the button where a grant or a Settings trip exists,
+/// and the readout where there is nothing left to do.
 struct SpeechStatusRow: View {
     let uiState: SettingsUIState
 
     var body: some View {
         LabeledContent("Speech recognition") {
-            if uiState.speechPermission == .notDetermined {
-                Button("Allow speech recognition") {
+            switch uiState.speechAction {
+            case .none:
+                OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
+            case .allow:
+                OtoStatusAction(
+                    text: uiState.speechText,
+                    tone: uiState.speechTone,
+                    help: "Ask for speech recognition access"
+                ) {
                     Task {
                         _ = await uiState.ensureSpeechGrant()
                         uiState.refreshPermissions()
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            } else {
-                OtoStatus(text: uiState.speechText, tone: uiState.speechTone)
+            case .openSettings:
+                OtoStatusAction(
+                    text: uiState.speechText,
+                    tone: uiState.speechTone,
+                    help: "Open System Settings → Privacy & Security → Speech Recognition"
+                ) {
+                    SettingsLinkOpener.open(SpeechSettingsLink.candidates())
+                }
             }
         }
     }

@@ -161,7 +161,12 @@ enum VersionedStoreFile {
     static func load<T: Codable>(_ type: T.Type, filename: String, via persistence: LocalPersistence) async -> [T] {
         guard let data = await persistence.read(filename: filename) else { return [] }
         do {
-            let envelope = try JSONDecoder().decode(VersionedFile<T>.self, from: data)
+            // Symmetric with `save`: dates are ISO-8601 strings. A default
+            // decoder expects reference-date Doubles and would mark every
+            // file this app writes as corrupt on the next launch.
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let envelope = try decoder.decode(VersionedFile<T>.self, from: data)
             guard envelope.schemaVersion == LocalPersistence.schemaVersion else {
                 await persistence.moveAside(filename: filename, reason: "schema")
                 return []

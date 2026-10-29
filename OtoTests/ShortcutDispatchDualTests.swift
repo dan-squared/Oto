@@ -102,6 +102,31 @@ struct ShortcutDispatchDualTests {
         #expect(await inserter.calls.count == 1)
     }
 
+    @Test func combinationCancelsALongHoldWithoutInserting() async {
+        // ⌘ held well past the 1 s "fresh micro-session" window, then ⌘1.
+        // The monitor marks combination use and swallows the release, so the
+        // hold can only end through the routed combination event. It must
+        // discard (never insert) and leave the coordinator terminal.
+        let (coordinator, inserter) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        try? await Task.sleep(for: .milliseconds(1100))
+        dispatch.receiveForTests(.combinationBegan, from: .hold)
+        await waitFor(coordinator) { if case .cancelled = $0 { true } else { false } }
+
+        #expect(await coordinator.state.isTerminal)
+        #expect(await inserter.calls.isEmpty)
+        // The next hold still begins: no stuck pressed state.
+        try? await Task.sleep(for: .milliseconds(60))
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold)
+        await waitFor(coordinator) { if case .completed = $0 { true } else { false } }
+        #expect(await inserter.calls.count == 1)
+    }
+
     @Test func handsFreeDownDownTogglesBeginAndFinish() async {
         let (coordinator, inserter) = makeCoordinator()
         let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
@@ -240,8 +265,44 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.configuration.hold.kind == hold.kind)
     }
 
-    @Test func disabledSlotReadsNotSetWhileOtherSlotStaysLive() {
-        // Gating level (no modal): hold off with an assigned hands-free
+    /// The recorder's Remove/⌫ must empty the keys themselves, not only the
+    /// enable flag: an off slot that still stores its old kind kept drawing
+    /// keycaps that could no longer fire. Clearing one slot must leave the
+    /// other exactly as it was.
+    @Test func clearSlotEmptiesKeysAndOnlyItsSlot() {
+        let mods = CarbonModifiers.command | CarbonModifiers.control
+        var config = DualShortcutConfiguration.default()
+        config.handsFree = ShortcutTrigger(
+            kind: combo(kVK_ANSI_J, modifiers: mods), interaction: .handsFree
+        )
+        let (coordinator, _) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: config)
+        defer { cleanDualKey() }
+
+        dispatch.clearSlot(.hold)
+        #expect(dispatch.configuration.hold.kind == .unassigned)
+        #expect(dispatch.configuration.holdEnabled == false)
+        #expect(dispatch.configuration.handsFree == config.handsFree)
+        #expect(dispatch.configuration.handsFreeEnabled == true)
+        #expect(dispatch.calibrationHold == .notSet)
+
+        // A fresh capture after Remove re-enables the slot (no one-way door).
+        let hold = ShortcutTrigger(
+            kind: combo(kVK_ANSI_K, modifiers: mods), interaction: .holdToTalk
+        )
+        #expect(dispatch.updateHoldTrigger(hold) == .applied)
+        #expect(dispatch.configuration.holdEnabled == true)
+        #expect(dispatch.configuration.hold.kind == hold.kind)
+
+        // Mirror: clearing hands-free never touches the live hold slot.
+        dispatch.clearSlot(.handsFree)
+        #expect(dispatch.configuration.handsFree == .unassignedHandsFree())
+        #expect(dispatch.configuration.handsFreeEnabled == false)
+        #expect(dispatch.configuration.hold == hold)
+        #expect(dispatch.configuration.holdEnabled == true)
+    }
+
+    @Test func disabledSlotReadsNotSetWhileOtherSlotStaysLive() {        // Gating level (no modal): hold off with an assigned hands-free
         // on — hold reports notSet, hands-free never reads as off.
         // Distinctive J/K combos avoid the G/H users elsewhere in this file.
         let mods = CarbonModifiers.command | CarbonModifiers.control

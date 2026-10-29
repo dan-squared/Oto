@@ -4,8 +4,9 @@
 //
 //  Everything the chapters do. Ported from Firstlight's flow, but with Oto's
 //  content and Oto's real services: the recorder applies immediately, the
-//  permission rows grant for real, and the speech chapter prepares for real.
-//  The flow owns the step machine's moves so the views stay declarative.
+//  permission rows grant for real, and the on-device model downloads in the
+//  background from the permissions chapter. The flow owns the step machine's
+//  moves so the views stay declarative.
 //
 
 import AppKit
@@ -45,7 +46,7 @@ final class OnboardingFlow: ObservableObject {
         switch self.stage.step {
         case .welcome: "Continue"
         case .how: self.stage.row < OnboardingStage.Step.how.rows - 1 ? "Next" : "Continue"
-        case .catcher, .shortcut, .permissions, .speech: "Continue"
+        case .catcher, .shortcut, .permissions: "Continue"
         case .tryIt, .handoff: "Finish"
         }
     }
@@ -68,8 +69,6 @@ final class OnboardingFlow: ObservableObject {
         case .shortcut:
             self.stage.advance(to: .permissions)
         case .permissions:
-            self.stage.advance(to: .speech)
-        case .speech:
             self.stage.advance(to: .tryIt)
         case .tryIt:
             self.finish()
@@ -90,10 +89,8 @@ final class OnboardingFlow: ObservableObject {
             self.stage.advance(to: .catcher)
         case .permissions:
             self.stage.advance(to: .shortcut)
-        case .speech:
-            self.stage.advance(to: .permissions)
         case .tryIt:
-            self.stage.advance(to: .speech)
+            self.stage.advance(to: .permissions)
         case .handoff:
             self.stage.advance(to: .tryIt)
         }
@@ -133,7 +130,7 @@ final class OnboardingFlow: ObservableObject {
         self.holdKind = self.dispatch.configuration.hold.kind
     }
 
-    // MARK: - Permissions and speech
+    // MARK: - Permissions
 
     func grantMicrophone() {
         Task {
@@ -167,7 +164,13 @@ final class OnboardingFlow: ObservableObject {
         }
     }
 
-    func prepareSpeech() {
+    /// There is no speech chapter any more, so a fresh Mac can reach "Try it"
+    /// before the on-device model exists. The permissions chapter is the last
+    /// point where the flow knows the reader is about to dictate, so the
+    /// download starts there — silently, no UI, no chapter. `runPrepare()` is
+    /// idempotent and a no-op once the language is ready.
+    func prepareSpeechInBackground() {
+        guard !self.uiState.speechReady, !self.uiState.isPreparing else { return }
         Task { await self.uiState.runPrepare() }
     }
 }

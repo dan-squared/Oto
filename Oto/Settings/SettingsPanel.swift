@@ -28,3 +28,38 @@ struct OtoPanelNote: View {
             .textSelection(.enabled)
     }
 }
+
+/// The scrollable card stack every list pane uses. The `Form` lives here
+/// rather than in `SettingsRoot` so a pane can choose the borderless canvas
+/// instead — an empty state is the pane, not a card inside one.
+struct OtoPaneForm<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        Form { content() }
+            .formStyle(.grouped)
+            // The titlebar's back/forward pill and the pane's switch sit 8 pt
+            // from the detail column's edge; the grouped Form's default 20 pt
+            // margin left the cards hanging 12 pt inside them (reported
+            // 2026-10-29). Matching the toolbar's inset lines the top controls
+            // up with the card edges on both sides.
+            .contentMargins(.horizontal, 8, for: .scrollContent)
+    }
+}
+
+/// The borderless pane: content centred in the whole detail column, with no
+/// card or row chrome around it. Used only for empty states.
+struct OtoPaneCanvas<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            content()
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 16)
+    }
+}

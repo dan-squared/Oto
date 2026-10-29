@@ -214,8 +214,16 @@ final class HIDEventMonitor {
         let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         let flags = event.flags
         if MainActor.assumeIsolated({ self.slotMode }) {
-            let routed: (slot: ShortcutSlot?, emit: ShortcutEvent?, consume: Bool) = MainActor.assumeIsolated {
+            let routed: (slot: ShortcutSlot?, emit: ShortcutEvent?, combination: ShortcutSlot?, consume: Bool) = MainActor.assumeIsolated {
                 self.decideRouted(type: type, keyCode: keyCode, isRepeat: isRepeat, flags: flags)
+            }
+            // Combination first: the hold that this press just disqualified is
+            // cancelled before the press's own event (e.g. another slot's
+            // function key) reaches dispatch.
+            if let combination = routed.combination {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onSlotEvent?(.combinationBegan, combination)
+                }
             }
             if let emit = routed.emit, let slot = routed.slot {
                 DispatchQueue.main.async { [weak self] in self?.onSlotEvent?(emit, slot) }
@@ -328,26 +336,28 @@ final class HIDEventMonitor {
         keyCode: Int64,
         isRepeat: Bool,
         flags: CGEventFlags
-    ) -> (slot: ShortcutSlot?, emit: ShortcutEvent?, consume: Bool) {
+    ) -> (slot: ShortcutSlot?, emit: ShortcutEvent?, combination: ShortcutSlot?, consume: Bool) {
         switch type {
         case .flagsChanged:
-            return decideRoutedHold(keyCode: keyCode, flags: flags)
+            let decided = decideRoutedHold(keyCode: keyCode, flags: flags)
+            return (decided.slot, decided.emit, nil, decided.consume)
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            markAllHoldsCombinationUse()
-            return (nil, nil, false)
+            return (nil, nil, markAllHoldsCombinationUse(), false)
         case .keyDown:
-            markAllHoldsCombinationUse()
+            let combination = markAllHoldsCombinationUse()
             if escapeObserved, keyCode == Int64(kVK_Escape) {
                 let onEscape = onEscape
                 DispatchQueue.main.async { onEscape?() }
-                return (nil, nil, false)
+                return (nil, nil, combination, false)
             }
-            return decideRoutedFunction(keyCode: keyCode, isRepeat: isRepeat, flags: flags, isDown: true)
+            let decided = decideRoutedFunction(keyCode: keyCode, isRepeat: isRepeat, flags: flags, isDown: true)
+            return (decided.slot, decided.emit, combination, decided.consume)
         case .keyUp:
-            markAllHoldsCombinationUse()
-            return decideRoutedFunction(keyCode: keyCode, isRepeat: false, flags: flags, isDown: false)
+            let combination = markAllHoldsCombinationUse()
+            let decided = decideRoutedFunction(keyCode: keyCode, isRepeat: false, flags: flags, isDown: false)
+            return (decided.slot, decided.emit, combination, decided.consume)
         default:
-            return (nil, nil, false)
+            return (nil, nil, nil, false)
         }
     }
 
@@ -367,10 +377,20 @@ final class HIDEventMonitor {
         return (slot, emit, false)
     }
 
-    private func markAllHoldsCombinationUse() {
-        for code in slotHolds.keys {
-            _ = slotHolds[code]?.step(.otherActivity)
+    /// Marks every held modifier slot as combination use and returns the
+    /// first slot that *became* a combination on this input. Only the first
+    /// other input emits: dispatch cancels the stranded hold once, and later
+    /// keys in the same press are already accounted for.
+    @discardableResult
+    private func markAllHoldsCombinationUse() -> ShortcutSlot? {
+        var transitioned: ShortcutSlot?
+        for (code, slot) in holdSlots {
+            guard var state = slotHolds[code], state.isDown, !state.usedInCombination else { continue }
+            _ = state.step(.otherActivity)
+            slotHolds[code] = state
+            if transitioned == nil { transitioned = slot }
         }
+        return transitioned
     }
 
     private func decideRoutedFunction(

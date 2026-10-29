@@ -46,6 +46,35 @@ struct HotkeyTransitionStateTests {
         #expect(machine.step(.event(.keyUp), mode: .holdToTalk) == .finish)
     }
 
+    // MARK: - Combination (a bare-modifier hold became a shortcut)
+
+    @Test func combinationCancelsLiveHoldAndForgetsThePress() {
+        // ⌘ held for push-to-talk, then ⌘1: the press was a shortcut, not
+        // dictation. Discard it; the release the monitor swallows must not
+        // finish (insert) anything.
+        var machine = HotkeyTransitionState()
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .holdToTalk) == .begin)
+        #expect(machine.step(.event(.combinationBegan), mode: .holdToTalk) == .cancel)
+        #expect(machine.step(.event(.keyUp), mode: .holdToTalk) == .ignore)
+        // Next press begins cleanly — no stuck "pressed" state.
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .holdToTalk) == .begin)
+    }
+
+    @Test func combinationWithoutAHoldIsIgnored() {
+        var machine = HotkeyTransitionState()
+        #expect(machine.step(.event(.combinationBegan), mode: .holdToTalk) == .ignore)
+        #expect(machine.step(.event(.combinationBegan), mode: .handsFree) == .ignore)
+    }
+
+    @Test func combinationNeverCancelsHandsFree() {
+        // Hands-free is meant to keep running while you do other things.
+        var machine = HotkeyTransitionState()
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .begin)
+        #expect(machine.step(.event(.combinationBegan), mode: .handsFree) == .ignore)
+        // The toggle still finishes on its second press.
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .finish)
+    }
+
     // MARK: - Hands-free
 
     @Test func handsFreeTogglesOnDownsIgnoresUps() {

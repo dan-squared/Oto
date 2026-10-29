@@ -372,6 +372,21 @@ struct OtoStatus: View {
 
     let text: String
     let tone: Tone
+    /// Fill override for surfaces that are not a settings card (the
+    /// onboarding stage). Defaults to the quiet well.
+    var fill: Color = OtoPalette.wash
+
+    var body: some View {
+        OtoStatusFace(text: text, tone: tone, fill: fill)
+    }
+}
+
+/// The pill's face: dot + label on a capsule. Shared by the readout and its
+/// actionable twin so the two can never drift apart.
+struct OtoStatusFace: View {
+    let text: String
+    let tone: OtoStatus.Tone
+    var fill: Color = OtoPalette.wash
 
     var body: some View {
         HStack(spacing: 6) {
@@ -381,9 +396,50 @@ struct OtoStatus: View {
             Text(text)
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(OtoPalette.ink)
+                .lineLimit(1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(OtoPalette.wash, in: Capsule())
+        .background(fill, in: Capsule())
+        .contentShape(Capsule())
+    }
+}
+
+/// The same pill, made pressable. One control per row: when a state has a
+/// remedy, the state *is* the button — "Not allowed" opens the pane that can
+/// undo it, "Allow" asks, "Not prepared" downloads. No second button sits
+/// under it, and no state is ever a dead end.
+///
+/// Hover is the only affordance added: no chevron, no underline, no size
+/// change — the label already says what the state is, and `.help` says where
+/// the press goes.
+struct OtoStatusAction: View {
+    let text: String
+    let tone: OtoStatus.Tone
+    /// Where the press goes, for the tooltip and VoiceOver.
+    var help: String?
+    /// Work in flight: the face reads "Preparing…" and the press is inert.
+    var busy = false
+    var fill: Color = OtoPalette.wash
+    var hoverFill: Color = OtoPalette.hover
+    let action: () -> Void
+
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            OtoStatusFace(
+                text: busy ? "Preparing…" : text,
+                tone: tone,
+                fill: hovering && !busy ? hoverFill : fill
+            )
+        }
+        .buttonStyle(OtoBounce())
+        .onHover { hovering = $0 }
+        .disabled(busy)
+        .opacity(isEnabled ? 1 : 0.55)
+        .help(help ?? text)
+        .accessibilityHint(help ?? "")
     }
 }

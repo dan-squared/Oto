@@ -12,33 +12,35 @@ import SwiftUI
 
 struct AboutPane: View {
     var body: some View {
-        Section {
-            VStack(spacing: 4) {
-                Image(nsImage: NSApplication.shared.applicationIconImage)
-                    .resizable()
-                    .frame(width: 72, height: 72)
-                    .padding(.bottom, 4)
-                Text("Oto")
-                    .font(.system(size: 20, weight: .semibold))
-                Text(Self.versionLine)
-                    .foregroundStyle(.secondary)
-                Text("Press a shortcut, speak, release. The text lands where you were working.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
-                Text("© 2026 Daniel Girma. All rights reserved.")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
+        OtoPaneForm {
+            Section {
+                VStack(spacing: 4) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                        .resizable()
+                        .frame(width: 72, height: 72)
+                        .padding(.bottom, 4)
+                    Text("Oto")
+                        .font(.system(size: 20, weight: .semibold))
+                    Text(Self.versionLine)
+                        .foregroundStyle(.secondary)
+                    Text("Press a shortcut, speak, release. The text lands where you were working.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 6)
+                    Text("© 2026 Daniel Girma. All rights reserved.")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .accessibilityElement(children: .combine)
             }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .accessibilityElement(children: .combine)
-        }
 
-        Section("Details") {
-            LabeledContent("Version", value: Self.versionLine)
-            LabeledContent("Bundle identifier", value: Bundle.main.bundleIdentifier ?? "—")
+            Section("Details") {
+                LabeledContent("Version", value: Self.versionLine)
+                LabeledContent("Bundle identifier", value: Bundle.main.bundleIdentifier ?? "—")
+            }
         }
     }
 

@@ -14,8 +14,12 @@ import SwiftUI
 struct IntelligencePane: View {
     let polish: any PolishServing
     let transforms: TransformDispatch
+    let chrome: SettingsChrome
 
-    @AppStorage(CleanupSettings.enabledKey) private var enabled = true
+    /// Off until the person asks for it: the same opt-in shape as History.
+    /// Cleanup and transforms both read this key at run time, so "off" is
+    /// honest — no shortcut fires, no cleanup runs.
+    @AppStorage(CleanupSettings.enabledKey) private var enabled = false
     @AppStorage(CleanupSettings.levelKey) private var levelRaw = CleanupLevel.none.rawValue
     /// History switch mirror (same key as HistoryPane): the Auto Cleanup
     /// footnote below must not promise raw-word recovery while History is
@@ -45,43 +49,15 @@ struct IntelligencePane: View {
     }
 
     var body: some View {
-        // No "Intelligence" header — the sidebar already says it.
-
-        Section {
-            LabeledContent("Apple Intelligence") {
-                OtoStatus(text: statusText, tone: statusTone)
-            }
-            Toggle("Use Apple Intelligence", isOn: $enabled)
-            if let statusDetail {
-                OtoPanelNote(statusDetail)
+        Group {
+            if !enabled {
+                self.offState
+            } else {
+                self.settings
             }
         }
-
-        Section {
-            OtoSegmented(
-                options: [(.none, "None"), (.light, "Light"), (.medium, "Medium")],
-                selection: level
-            )
-            Text(cleanupDescription)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            OtoPanelNote(cleanupFooting(historyEnabled: historyEnabled))
-        } header: {
-            Text("Auto Cleanup")
-        }
-        .disabled(!enabled)
-
-        Section {
-            OtoPanelNote("Select text in any app, press the shortcut — the pill shows the rewrite while it runs.")
-            ForEach(TransformPreset.allCases, id: \.rawValue) { preset in
-                transformRow(for: preset)
-            }
-            OtoPanelNote("On-device only — transcripts and prompts never leave this Mac.")
-        } header: {
-            Text("My Transforms")
-        }
-        .disabled(!enabled)
         .onAppear {
+            self.publishAccessory()
             CleanupMigrator.migrateIfNeeded()
             availability = polish.availability()
             refreshTransforms()
@@ -89,6 +65,98 @@ struct IntelligencePane: View {
                 polish.prewarm(job: .cleanup(level.wrappedValue))
             }
         }
+        .onChange(of: enabled) { _, on in
+            self.publishAccessory()
+            guard on else { return }
+            self.availability = self.polish.availability()
+            self.refreshTransforms()
+            if self.level.wrappedValue != .none, self.availability == .available {
+                self.polish.prewarm(job: .cleanup(self.level.wrappedValue))
+            }
+        }
+    }
+
+    // MARK: - Off state
+
+    /// The pane's opt-in state, in the same vocabulary as Dictionary,
+    /// Snippets and History: what it does, what it runs on, one button.
+    private var offState: some View {
+        OtoPaneCanvas {
+            OtoEmptyState(
+                symbol: "sparkles",
+                title: self.unavailableCopy == nil ? "Apple Intelligence is off" : "Not available",
+                message: self.unavailableCopy
+                    ?? "Oto can tidy your words on this Mac — fillers, grammar, and a light rewrite. Nothing is uploaded.",
+                chips: [
+                    .init(symbol: "wand.and.stars", label: "Cleanup", tint: .violet),
+                    .init(symbol: "arrow.triangle.2.circlepath", label: "Transforms", tint: .blue),
+                    .init(symbol: "cpu", label: "On-device", tint: .green),
+                ],
+                actionTitle: self.unavailableCopy == nil ? "Turn On Apple Intelligence" : nil,
+                action: self.unavailableCopy == nil ? { enabled = true } : nil,
+                footnote: OtoEmptyFootnote(
+                    lead: "Runs on this Mac's Neural Engine. Turn it off anytime."
+                )
+            )
+        }
+    }
+
+    private var unavailableCopy: String? {
+        if case .unavailable(let copy) = availability { return copy }
+        return nil
+    }
+
+    // MARK: - Settings
+
+    private var settings: some View {
+        OtoPaneForm {
+            // No "Intelligence" header — the sidebar already says it.
+
+            Section {
+                LabeledContent("Apple Intelligence") {
+                    OtoStatus(text: statusText, tone: statusTone)
+                }
+                Toggle("Use Apple Intelligence", isOn: $enabled)
+                if let statusDetail {
+                    OtoPanelNote(statusDetail)
+                }
+            }
+
+            Section {
+                OtoSegmented(
+                    options: [(.none, "None"), (.light, "Light"), (.medium, "Medium")],
+                    selection: level
+                )
+                Text(cleanupDescription)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                OtoPanelNote(cleanupFooting(historyEnabled: historyEnabled))
+            } header: {
+                Text("Auto Cleanup")
+            }
+            .disabled(!enabled)
+
+            Section {
+                OtoPanelNote("Select text in any app, press the shortcut — the pill shows the rewrite while it runs.")
+                ForEach(TransformPreset.allCases, id: \.rawValue) { preset in
+                    transformRow(for: preset)
+                }
+                OtoPanelNote("On-device only — transcripts and prompts never leave this Mac.")
+            } header: {
+                Text("My Transforms")
+            }
+            .disabled(!enabled)
+        }
+    }
+
+    /// The switch takes the detail column's top-right corner, exactly like
+    /// History's: the pane's master control is never buried in a card.
+    private func publishAccessory() {
+        chrome.publish(
+            .toggle(isOn: enabled, help: "Use Apple Intelligence") { new in
+                enabled = new
+            }
+        )
     }
 
     // MARK: - Transforms

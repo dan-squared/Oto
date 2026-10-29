@@ -18,7 +18,7 @@ enum ShortcutEvent: Equatable, Sendable {
         switch (lhs, rhs) {
         case (.keyDown(let a), .keyDown(let b)):
             return a == b
-        case (.keyUp, .keyUp), (.monitorLost, .monitorLost):
+        case (.keyUp, .keyUp), (.monitorLost, .monitorLost), (.combinationBegan, .combinationBegan):
             return true
         default:
             return false
@@ -32,6 +32,11 @@ enum ShortcutEvent: Equatable, Sendable {
     /// The backend lost the trail (tap timeout, deactivation, revocation).
     /// Local pressed state resets; the coordinator owns the session outcome.
     case monitorLost
+    /// Another key/mouse went down while this slot's bare modifier was held.
+    /// Emitted once per press: the hold became a shortcut, so a live
+    /// hold-to-talk session is discarded instead of being left to strand on
+    /// a release the monitor will swallow.
+    case combinationBegan
 }
 
 /// Transition out of the pure state machine. `begin`/`finish` map to one
@@ -40,7 +45,8 @@ enum ShortcutTransition: Equatable, Sendable {
     // Explicit: compared in transition tests from any domain (Swift 6).
     nonisolated static func == (lhs: ShortcutTransition, rhs: ShortcutTransition) -> Bool {
         switch (lhs, rhs) {
-        case (.begin, .begin), (.finish, .finish), (.ignore, .ignore), (.reset, .reset):
+        case (.begin, .begin), (.finish, .finish), (.ignore, .ignore), (.reset, .reset),
+             (.cancel, .cancel):
             return true
         default:
             return false
@@ -51,6 +57,9 @@ enum ShortcutTransition: Equatable, Sendable {
     case finish
     case ignore
     case reset
+    /// Another key/mouse went down while this slot's bare modifier was held:
+    /// the press was a shortcut, not dictation. Discard, never insert.
+    case cancel
 }
 
 /// What the person holds. Carbon combos need a real key; bare modifiers
@@ -115,6 +124,13 @@ struct ShortcutTrigger: Equatable, Sendable, Codable {
     /// path; the toggle is strictly opt-in.
     static func unassignedHandsFree() -> ShortcutTrigger {
         ShortcutTrigger(kind: .unassigned, interaction: .handsFree)
+    }
+
+    /// Empty push-to-talk slot. Remove/⌫ in the recorder clears the keys
+    /// themselves (never only the slot's enable flag), so the row can offer
+    /// "Record shortcut" instead of showing keys that no longer fire.
+    static func unassignedHoldToTalk() -> ShortcutTrigger {
+        ShortcutTrigger(kind: .unassigned, interaction: .holdToTalk)
     }
 
     /// Copy with the interaction replaced. Dispatch enforces the slot's

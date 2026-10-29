@@ -27,6 +27,26 @@ struct PermissionModalTests {
         #expect(PermissionModalController.action(for: .granted) == .openSettings)
     }
 
+    @Test func copyMatchesWhatTheSystemWillDo() {
+        // Before the first answer macOS shows its own dialog, so the card
+        // asks. After a denial the system never asks again, so the card
+        // sends the person to the pane that owns the switch.
+        let undetermined = PermissionCardCopy.forStatus(.notDetermined)
+        #expect(undetermined.title == "Microphone Permission Required")
+        #expect(undetermined.action == "Allow Microphone")
+        let denied = PermissionCardCopy.forStatus(.denied)
+        #expect(denied.title == "Microphone Access Is Off")
+        #expect(denied.action == "Open Settings")
+    }
+
+    @Test func configureRewordsAndRefits() {
+        let card = PermissionCardView(onGrant: nil)
+        card.configure(PermissionCardCopy.forStatus(.denied))
+        #expect(card.titleText() == "Microphone Access Is Off")
+        #expect(!card.titleClipped())
+        #expect(card.contentWidth() <= PermissionCardView.maxWidth)
+    }
+
     @Test func geometryAndTimeoutPinned() {
         #expect(PermissionCardView.maxWidth == 460)
         #expect(PermissionModalController.visibleDuration == 10.0)

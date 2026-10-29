@@ -40,6 +40,19 @@ struct HotkeyTransitionState: Equatable, Sendable {
         case .event(.monitorLost):
             isDown = false
             return .reset
+        case .event(.combinationBegan):
+            // Bare-modifier hold turned into a shortcut (⌘1 while holding ⌘).
+            // A hold-to-talk press was never dictation: forget it and discard
+            // the session. Hands-free keeps running — that is its point, and
+            // its key-up is ignored anyway.
+            switch mode {
+            case .holdToTalk:
+                guard isDown else { return .ignore }
+                isDown = false
+                return .cancel
+            case .handsFree:
+                return .ignore
+            }
         case .event(.keyDown(let isRepeat)):
             switch mode {
             case .holdToTalk:

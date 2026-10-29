@@ -178,4 +178,50 @@ struct HIDDecideDualTests {
         // Untracked codes never report combination use.
         #expect(monitor.isInCombination(code: UInt16(kVK_RightOption)) == false)
     }
+
+    // MARK: - Combination event (dispatch cancels the stranded hold)
+
+    @Test func combinationEmitsOnceForTheHeldSlot() {
+        let monitor = HIDEventMonitor()
+        monitor.configure(
+            holdSlots: [UInt16(kVK_Command): .hold],
+            functionSlots: [:]
+        )
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Command),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        // First other key: the hold became a shortcut — one routed event.
+        let first = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_1),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        #expect(first.combination == .hold)
+        // Same press, more keys: already accounted for, never repeated.
+        let second = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_2),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        #expect(second.combination == nil)
+        let up = monitor.decideRouted(
+            type: .keyUp, keyCode: Int64(kVK_ANSI_2),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        #expect(up.combination == nil)
+        // A clean press (no other input) emits no combination at all.
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Command),
+            isRepeat: false, flags: []
+        )
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Command),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        let clean = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Command),
+            isRepeat: false, flags: []
+        )
+        #expect(clean.combination == nil)
+        #expect(clean.emit == .keyUp)
+    }
 }

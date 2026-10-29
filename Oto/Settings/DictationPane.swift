@@ -13,51 +13,71 @@ struct DictationPane: View {
     let dispatch: ShortcutDispatch
     let uiState: SettingsUIState
 
-    @State private var shortcutRefreshID = UUID()
     @State private var capturePopoverSlot: ShortcutSlot?
     @State private var shortcutMessage: String?
+    /// Row snapshots of the two live kinds. `ShortcutDispatch` is not
+    /// observable, so the rows read these (seeded in `init`, refreshed on
+    /// every recorder change) — the pane body then redraws even while the
+    /// recorder popover is still open.
+    @State private var holdKind: ShortcutTrigger.Kind
+    @State private var handsFreeKind: ShortcutTrigger.Kind
 
     @State private var trialText = ""
-    // Catcher kill-switch (6C1): default ON — the modal teaches the
-    // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
-    // pinned equal to it by NoTargetModalTests.
-    @AppStorage("app.Oto.noTargetModal") private var catcherEnabled = true
-    // Media-duck kill-switch (Phase 7, spike-green): default ON — bleed
-    // ruins transcripts, resume is automatic. Key owned by
-    // MediaDuckSettings; the literal is pinned equal to it by MediaDuckTests.
-    @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
+
+    init(dispatch: ShortcutDispatch, uiState: SettingsUIState) {
+        self.dispatch = dispatch
+        self.uiState = uiState
+        _holdKind = State(initialValue: dispatch.configuration.hold.kind)
+        _handsFreeKind = State(initialValue: dispatch.configuration.handsFree.kind)
+    }
 
     var body: some View {
-        // No "Dictation" header — the sidebar already says it.
+        OtoPaneForm {
+            // No "Dictation" header — the sidebar already says it.
 
-        Section {
-            LabeledContent("Readiness") {
-                if uiState.speechReady {
-                    OtoStatus(text: "Ready", tone: .ok)
-                } else {
-                    Button(uiState.isPreparing ? "Preparing…" : "Prepare offline speech") {
-                        Task { await uiState.runPrepare() }
+            Section {
+                LabeledContent("Readiness") {
+                    if uiState.speechReady {
+                        OtoStatus(text: "Ready", tone: .ok)
+                    } else if uiState.speechReadiness == nil {
+                        OtoStatus(text: "Checking…", tone: .idle)
+                    } else if uiState.isPreparing {
+                        OtoStatusAction(text: "Preparing…", tone: .idle, busy: true) {}
+                    } else {
+                        // The state is the button: one control, no second
+                        // "Prepare" button under a "Not prepared" pill.
+                        OtoStatusAction(
+                            text: "Not prepared",
+                            tone: .warn,
+                            help: "Download the on-device speech model for this language"
+                        ) {
+                            Task { await uiState.runPrepare() }
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(uiState.isPreparing)
                 }
+                OtoPanelNote(uiState.speechReady ? uiState.languageText : (uiState.prepareFeedback ?? uiState.readinessText))
+            } header: {
+                Text("Speech")
             }
-            OtoPanelNote(uiState.speechReady ? uiState.languageText : (uiState.prepareFeedback ?? uiState.readinessText))
-        } header: {
-            Text("Speech")
-        }
-        .onAppear {
-            // Fast only: shortcut summary (the config can change in the
-            // modal or onboarding, so re-sync on every visit and on modal
-            // close) plus grant-in-System-Settings flows live with no
-            // flash (never re-probes speech or devices here).
-            syncFromDispatch()
-            uiState.refreshPermissions()
-        }
+            .onReceive(NotificationCenter.default.publisher(for: .otoProbeOpenRecorder)) { note in
+                // Probe-only (never posted in normal use): opens a recorder so
+                // the popover's footer and ⌫ path can be captured.
+                guard let raw = note.object as? String else { return }
+                capturePopoverSlot = raw == "handsFree" ? .handsFree : .hold
+            }
+            .onAppear {
+                // Fast only: shortcut summary (the config can change in the
+                // modal or onboarding, so re-sync on every visit and on modal
+                // close) plus grant-in-System-Settings flows live with no
+                // flash (never re-probes speech or devices here).
+                syncFromDispatch()
+                uiState.refreshPermissions()
+            }
 
-        Section("Shortcut") {
-            VStack(alignment: .leading, spacing: 12) {
+            // One row per shortcut: the grouped Form draws the same divider
+            // between them that every other section gets. A single VStack
+            // row read as one control with two keycaps.
+            Section("Shortcut") {
                 shortcutRow("Push-to-talk", slot: .hold)
                 shortcutRow("Hands-free", slot: .handsFree)
 
@@ -75,52 +95,42 @@ struct DictationPane: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.vertical, 4)
-            .id(shortcutRefreshID)
-        }
 
-        Section {
-            Picker("Input", selection: microphoneSelection) {
-                ForEach(uiState.inputDevices) { device in
-                    Text(device.name).tag(device.uid)
+            Section {
+                Picker("Input", selection: microphoneSelection) {
+                    ForEach(uiState.inputDevices) { device in
+                        Text(device.name).tag(device.uid)
+                    }
                 }
+                .disabled(uiState.inputDevices.isEmpty)
+                .help("Choose the Mac's default input device")
+                MicStatusRow(uiState: uiState, title: "Status")
+                OtoPanelNote("Sets the Mac's input — every app follows it.")
+            } header: {
+                Text("Microphone")
             }
-            .disabled(uiState.inputDevices.isEmpty)
-            .help("Choose the Mac's default input device")
-            MicStatusRow(uiState: uiState, title: "Status")
-            OtoPanelNote("Sets the Mac's input — every app follows it.")
-        } header: {
-            Text("Microphone")
-        }
 
-        Section("Permissions") {
-            AccessibilityRow(uiState: uiState)
-            SpeechStatusRow(uiState: uiState)
-        }
+            Section("Permissions") {
+                AccessibilityRow(uiState: uiState)
+                SpeechStatusRow(uiState: uiState)
+            }
 
-        Section {
-            Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
-                .accessibilityIdentifier("CatcherToggle")
-            Toggle("Mute media while dictating", isOn: $muteMedia)
-            OtoPanelNote("Catcher: no text field? Oto opens a small window. Off: auto-copies instead.\nMute: silences speakers, restores volume automatically.")
-        } header: {
-            Text("Behavior")
-        }
-
-        Section {
-            TextEditor(text: $trialText)
-                .font(.body)
-                .frame(minHeight: 70)
-            OtoPanelNote("Dictate anywhere, or here — Oto captures the frontmost app.")
-        } header: {
-            Text("Try it")
+            Section {
+                TextEditor(text: $trialText)
+                    .font(.body)
+                    .frame(minHeight: 70)
+                OtoPanelNote("Dictate anywhere, or here — Oto captures the frontmost app.")
+            } header: {
+                Text("Try it")
+            }
         }
     }
 
     // MARK: - Shortcut
 
     private func syncFromDispatch() {
-        shortcutRefreshID = UUID()
+        holdKind = dispatch.configuration.hold.kind
+        handsFreeKind = dispatch.configuration.handsFree.kind
     }
 
     private var requiresAccessibility: Bool {
@@ -128,12 +138,11 @@ struct DictationPane: View {
             if case .modifierHold = kind { return true }
             return false
         }
-        return isModifier(dispatch.configuration.hold.kind)
-            || isModifier(dispatch.configuration.handsFree.kind)
+        return isModifier(holdKind) || isModifier(handsFreeKind)
     }
 
     private func shortcutRow(_ title: String, slot: ShortcutSlot) -> some View {
-        let kind = slot == .hold ? dispatch.configuration.hold.kind : dispatch.configuration.handsFree.kind
+        let kind = slot == .hold ? holdKind : handsFreeKind
         let chips = KeyNames.chips(for: kind)
 
         return HStack(spacing: 8) {
@@ -150,10 +159,15 @@ struct DictationPane: View {
             )
             .help("Click to record a shortcut")
             .popover(isPresented: capturePopoverBinding(for: slot), arrowEdge: .top) {
-                ShortcutCapturePopover(dispatch: dispatch, slot: slot) {
-                    capturePopoverSlot = nil
-                    syncFromDispatch()
-                }
+                ShortcutCapturePopover(
+                    dispatch: dispatch,
+                    slot: slot,
+                    onChange: syncFromDispatch,
+                    onClose: {
+                        capturePopoverSlot = nil
+                        syncFromDispatch()
+                    }
+                )
             }
         }
     }

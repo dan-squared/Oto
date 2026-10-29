@@ -13,6 +13,21 @@
 import AppKit
 import Metal
 
+extension Notification.Name {
+    /// Probe-only: ask the settings shell to show a pane, and ask a list pane
+    /// to open its first row's details or copy it. Never posted in normal use.
+    static let otoProbeSelectPane = Notification.Name("otoProbeSelectPane")
+    static let otoProbeSearch = Notification.Name("otoProbeSearch")
+    static let otoProbeOpenInfo = Notification.Name("otoProbeOpenInfo")
+    static let otoProbeCloseInfo = Notification.Name("otoProbeCloseInfo")
+    static let otoProbeCopyFirst = Notification.Name("otoProbeCopyFirst")
+    /// Probe-only: open the Dictation recorder popover ("hold" or
+    /// "handsFree") so its footer can be captured outside the pane's window.
+    static let otoProbeOpenRecorder = Notification.Name("otoProbeOpenRecorder")
+    /// Probe-only: drive the recorder's Remove path (same code as ⌫).
+    static let otoProbeClearRecorder = Notification.Name("otoProbeClearRecorder")
+}
+
 @MainActor
 enum OtoProbe {
     static func forceAppearance() {
@@ -123,7 +138,7 @@ enum OtoProbe {
             try? await Task.sleep(for: .seconds(1.2))
             let steps: [(OnboardingStage.Step, Int)] = [
                 (.how, 0), (.how, 1), (.catcher, 0), (.shortcut, 0),
-                (.permissions, 0), (.speech, 0), (.tryIt, 0),
+                (.permissions, 0), (.tryIt, 0),
             ]
             for (step, row) in steps {
                 OnboardingStage.shared.advance(to: step, row: row)
@@ -144,13 +159,92 @@ enum OtoProbe {
         let dir = URL(fileURLWithPath: path, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         settings.show()
+        // The window appears under the pointer; a stray mouse-up would be
+        // read by the sidebar table as a click and select a random pane.
+        // Screenshots need the pane the walk asked for, so no mouse at all.
+        settings.window?.ignoresMouseEvents = true
         Task {
             try? await Task.sleep(for: .seconds(1.6))
-            if let window = settings.window, let view = window.contentView {
-                capture(view, name: "settings", dir: dir)
+            let panes = (ProcessInfo.processInfo.environment["OTO_SETTINGS_PANES"] ?? "")
+                .split(separator: ",")
+                .compactMap { SettingsPane(rawValue: String($0).trimmingCharacters(in: .whitespaces)) }
+            guard !panes.isEmpty else {
+                if let window = settings.window, let view = shotView(window) {
+                    capture(view, name: "settings", dir: dir)
+                }
+                exit(0)
             }
+            let wantsInfo = ProcessInfo.processInfo.environment["OTO_SETTINGS_INFO"] == "1"
+            let wantsCopy = ProcessInfo.processInfo.environment["OTO_SETTINGS_COPY"] == "1"
+            // Typed-search layout is only visible with text in the field
+            // (the list is replaced by "No results"), so the walk can seed it.
+            let search = ProcessInfo.processInfo.environment["OTO_SETTINGS_SEARCH"]
+            for pane in panes {
+                NotificationCenter.default.post(name: .otoProbeSelectPane, object: pane.rawValue)
+                try? await Task.sleep(for: .seconds(0.9))
+                if let search {
+                    NotificationCenter.default.post(name: .otoProbeSearch, object: search)
+                    try? await Task.sleep(for: .seconds(0.5))
+                }
+                guard let window = settings.window, let view = shotView(window) else { continue }
+                capture(view, name: "settings-\(pane.rawValue)", dir: dir)
+                if let slot = ProcessInfo.processInfo.environment["OTO_SETTINGS_RECORDER"] {
+                    // The recorder lives in its own popover window, so the
+                    // pane's cached view can never contain it.
+                    NotificationCenter.default.post(name: .otoProbeOpenRecorder, object: slot)
+                    try? await Task.sleep(for: .seconds(1.0))
+                    for window in NSApp.windows where window.isVisible && window !== settings.window {
+                        guard let popoverView = window.contentView else { continue }
+                        capture(popoverView, name: "settings-\(pane.rawValue)-recorder", dir: dir)
+                    }
+                    for window in NSApp.windows where window.isVisible {
+                        print("probe window \(type(of: window)) frame=\(window.frame)")
+                    }
+                    if ProcessInfo.processInfo.environment["OTO_SETTINGS_RECORDER_CLEAR"] == "1" {
+                        NotificationCenter.default.post(name: .otoProbeClearRecorder, object: slot)
+                        try? await Task.sleep(for: .seconds(0.7))
+                        for window in NSApp.windows where window.isVisible && window !== settings.window {
+                            guard let popoverView = window.contentView else { continue }
+                            capture(popoverView, name: "settings-\(pane.rawValue)-recorder-cleared", dir: dir)
+                        }
+                        capture(view, name: "settings-\(pane.rawValue)-after-clear", dir: dir)
+                    }
+                }
+                if wantsInfo {
+                    NotificationCenter.default.post(name: .otoProbeOpenInfo, object: nil)
+                    try? await Task.sleep(for: .seconds(0.7))
+                    // A SwiftUI popover lives in its own window, so it is
+                    // not part of the theme-frame capture. Print the frames
+                    // to check the arrow lands on the row's eye button.
+                    for window in NSApp.windows where window.isVisible {
+                        print("probe window \(type(of: window)) frame=\(window.frame)")
+                    }
+                    capture(view, name: "settings-\(pane.rawValue)-info", dir: dir)
+                    NotificationCenter.default.post(name: .otoProbeCloseInfo, object: nil)
+                    try? await Task.sleep(for: .seconds(0.4))
+                }
+                if wantsCopy {
+                    NotificationCenter.default.post(name: .otoProbeCopyFirst, object: nil)
+                    try? await Task.sleep(for: .seconds(0.3))
+                    capture(view, name: "settings-\(pane.rawValue)-copied", dir: dir)
+                }
+            }
+            // OTO_SETTINGS_HOLD=1 keeps the window on screen for an external
+            // screencapture (vibrancy and toolbar glass only render live).
+            if ProcessInfo.processInfo.environment["OTO_SETTINGS_HOLD"] == "1" { return }
             exit(0)
         }
+    }
+
+    /// `OTO_SETTINGS_FRAME=1` captures the theme frame (titlebar included)
+    /// instead of the content view, so a toolbar accessory can be checked
+    /// against back/forward. Off by default: content-only shots stay
+    /// comparable with the existing probe library.
+    private static func shotView(_ window: NSWindow) -> NSView? {
+        if ProcessInfo.processInfo.environment["OTO_SETTINGS_FRAME"] == "1" {
+            return window.contentView?.superview ?? window.contentView
+        }
+        return window.contentView
     }
 
     private static func capture(_ view: NSView, name: String, dir: URL) {

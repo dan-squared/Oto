@@ -2,8 +2,11 @@
 //  SnippetsPane.swift
 //  Oto
 //
-//  Saved expansions. Every control binds the real store; the sheet
-//  carries validation; deletion is per-row.
+//  Saved expansions. Every control binds the real store; the sheet carries
+//  validation; copying keeps the clipboard discipline.
+//
+//  One name, one preview line, one cluster: copy, details, edit, delete. The
+//  full expansion and the apps it applies in live behind the info button.
 //
 
 import AppKit
@@ -11,66 +14,59 @@ import SwiftUI
 
 struct SnippetsPane: View {
     let snippets: SnippetStore
+    let dispatch: ShortcutDispatch
+    let chrome: SettingsChrome
 
     @State private var editingSnippet: Snippet?
     @State private var addingSnippet = false
     @State private var confirmCopyOverwrite = false
     @State private var pendingCopySnippet: Snippet?
+    @State private var infoSnippetID: UUID?
+    @State private var copyFlash = OtoCopyFlash()
 
     var body: some View {
-        // No "Snippets" header — the sidebar already says it.
-        if snippets.snippets.isEmpty {
-            Section {
-                ContentUnavailableView(
-                    "No snippets",
-                    systemImage: "text.quote",
-                    description: Text("Save repeated text once, then copy it wherever you need it.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 240)
-            }
-        } else {
-            Section {
-                ForEach(snippets.snippets) { snippet in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(snippet.name)
-                            .font(.system(size: 13))
-                        Text(snippet.preview())
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        if !snippet.bundleIDs.isEmpty {
-                            Text(InstalledApps.names(for: snippet.bundleIDs))
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.tertiary)
+        Group {
+            if snippets.snippets.isEmpty {
+                OtoPaneCanvas {
+                    OtoEmptyState(
+                        symbol: "text.quote",
+                        title: "Text you say once, use often",
+                        message: "Save the paragraph, the address, the signature. Copy it from here whenever you need it.",
+                        chips: [
+                            .init(symbol: "signature", label: "Signature", tint: .violet),
+                            .init(symbol: "mappin.and.ellipse", label: "Address", tint: .blue),
+                            .init(symbol: "link", label: "Meeting link", tint: .green),
+                        ],
+                        actionTitle: "Save your first snippet",
+                        action: { addingSnippet = true },
+                        footnote: dictationFootnote()
+                    )
+                }
+            } else {
+                OtoPaneForm {
+                    Section {
+                        ForEach(snippets.snippets) { snippet in
+                            self.row(for: snippet)
                         }
-                        HStack(spacing: 16) {
-                            Button("Edit") { editingSnippet = snippet }
-                                .buttonStyle(.borderless)
-                            Button("Copy") { copySnippet(snippet) }
-                                .buttonStyle(.borderless)
-                            Button("Delete") {
-                                Task { await snippets.remove(id: snippet.id) }
-                            }
-                            .buttonStyle(.borderless)
-                            .tint(.red)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.top, 4)
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture { editingSnippet = snippet }
+
+                    Section {
+                        OtoPanelNote("Snippets only insert when you choose — saying the name never expands it.")
+                    }
                 }
             }
         }
-
-        Section {
-            HStack {
-                Button("Add snippet") { addingSnippet = true }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                Spacer(minLength: 0)
-            }
-            OtoPanelNote("Snippets only insert when you choose — saying the name never expands it.")
+        .onAppear { publishAccessory() }
+        .onChange(of: snippets.snippets.count) { _, _ in publishAccessory() }
+        // Probe-only (never posted in normal use): first row's details + copy.
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeOpenInfo)) { _ in
+            infoSnippetID = snippets.snippets.first?.id
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeCloseInfo)) { _ in
+            infoSnippetID = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeCopyFirst)) { _ in
+            if let first = snippets.snippets.first { writeSnippet(first) }
         }
         .sheet(isPresented: $addingSnippet) {
             SnippetEditor(snippet: nil, snippets: snippets) {
@@ -97,6 +93,78 @@ struct SnippetsPane: View {
         }
     }
 
+    // MARK: - Row
+
+    private func row(for snippet: Snippet) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(snippet.name)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                Text(snippet.preview())
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { editingSnippet = snippet }
+
+            OtoRowActions {
+                OtoRowButton(
+                    symbol: self.copyFlash.isCopied(snippet.id) ? "checkmark" : "doc.on.doc",
+                    help: self.copyFlash.isCopied(snippet.id) ? "Copied" : "Copy snippet",
+                    tint: self.copyFlash.isCopied(snippet.id) ? OtoStatus.Tone.ok.color : OtoPalette.ink
+                ) {
+                    copySnippet(snippet)
+                }
+                OtoRowButton(symbol: "info.circle", help: "Snippet details") {
+                    infoSnippetID = snippet.id
+                }
+                .popover(isPresented: self.infoBinding(for: snippet.id), arrowEdge: .top) {
+                    OtoInfoPopover(
+                        title: snippet.name,
+                        rows: [
+                            .init(label: "Applies in", value: snippet.bundleIDs.isEmpty
+                                ? "Everywhere"
+                                : InstalledApps.names(for: snippet.bundleIDs)),
+                            .init(label: "Length", value: "\(snippet.expansion.count) characters"),
+                        ],
+                        note: snippet.expansion
+                    )
+                }
+                OtoRowButton(symbol: "pencil", help: "Edit snippet") {
+                    editingSnippet = snippet
+                }
+                OtoRowButton(symbol: "trash", help: "Delete snippet", danger: true) {
+                    Task { await snippets.remove(id: snippet.id) }
+                }
+            }
+        }
+    }
+
+    private func infoBinding(for id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { infoSnippetID == id },
+            set: { if !$0, infoSnippetID == id { infoSnippetID = nil } }
+        )
+    }
+
+    // MARK: - Plumbing
+
+    /// The add action takes the corner; the empty state's button mirrors it.
+    private func publishAccessory() {
+        chrome.publish(.action(symbol: "plus", help: "Add snippet") { addingSnippet = true })
+    }
+
+    private func dictationFootnote() -> OtoEmptyFootnote {
+        let keys = KeyNames.chips(for: dispatch.configuration.hold.kind)
+        return keys.isEmpty
+            ? OtoEmptyFootnote(lead: "Nothing inserts itself — you choose when to copy.")
+            : OtoEmptyFootnote(lead: "Dictate first, then copy. Your key is", keys: keys, tail: ".")
+    }
+
     private func copySnippet(_ snippet: Snippet) {
         // Overwrite guard (clipboard discipline): foreign content confirms.
         if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
@@ -111,6 +179,7 @@ struct SnippetsPane: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet.expansion, forType: .string)
         ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
+        self.copyFlash.flash(snippet.id)
     }
 }
 

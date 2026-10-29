@@ -9,7 +9,7 @@
 import SwiftUI
 import AppKit
 
-enum SettingsPane: Hashable, CaseIterable, Identifiable {
+enum SettingsPane: String, Hashable, CaseIterable, Identifiable {
     case general
     case dictation
     case dictionary
@@ -53,9 +53,9 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
         let terms: String
         switch self {
         case .general:
-            terms = "launch login dock flow bar position"
+            terms = "launch login dock flow bar position catcher media mute"
         case .dictation:
-            terms = "speech shortcut microphone permissions catcher media offline"
+            terms = "speech shortcut microphone permissions offline"
         case .dictionary:
             terms = "spoken words replacements rules apps"
         case .snippets:
@@ -290,17 +290,44 @@ struct SettingsRoot: View {
     nonisolated static let minimumSidebarWidth: CGFloat = 170
     nonisolated static let sidebarWidth: CGFloat = 180
 
-    @State private var selection: SettingsPane = .dictation
+    @State private var selection: SettingsPane = SettingsRoot.initialPane
     @State private var searchText = ""
-    @State private var visitedPanes: [SettingsPane] = [.dictation]
+    @State private var visitedPanes: [SettingsPane] = [SettingsRoot.initialPane]
     @State private var historyIndex = 0
+    /// The visible pane's master control (switch or add button), rendered in
+    /// the detail column's top-right corner. Panes publish; the root renders.
+    @State private var chrome = SettingsChrome()
+
+    /// Probe-only entry point: `OTO_SETTINGS_PANE=intelligence` opens that
+    /// pane so the screenshot probe can capture it. Absent in normal use.
+    private static var initialPane: SettingsPane {
+        guard let raw = ProcessInfo.processInfo.environment["OTO_SETTINGS_PANE"],
+              let pane = SettingsPane(rawValue: raw)
+        else { return .dictation }
+        return pane
+    }
+
+    /// One selection path for every entry point (sidebar, search, history):
+    /// the old pane's accessory is cleared before the new pane appears, so a
+    /// `+` can never leak into a pane that has none.
+    private var sidebarSelection: Binding<SettingsPane> {
+        Binding(
+            get: { self.selection },
+            set: { self.select($0) }
+        )
+    }
 
     private var filteredPanes: [SettingsPane] {
         SettingsPane.allCases.filter { $0.matches(search: searchText) }
     }
 
     var body: some View {
-        SettingsSplitView(sidebar: sidebarContent, detail: detailContent)
+        // Read the accessory at body-evaluation time (see `detailContent`):
+        // a read inside a toolbar builder runs during AppKit's toolbar
+        // validation, where @Observable does not register a dependency, so
+        // the item would never appear or update.
+        let accessory = self.chrome.accessory
+        return SettingsSplitView(sidebar: sidebarContent, detail: detailContent)
         .ignoresSafeArea()
         // The split must own the window's full height, not the safe area:
         // AppKit supplies a full-height sidebar glass behind the traffic
@@ -320,6 +347,27 @@ struct SettingsRoot: View {
                 .help("Forward")
                 .disabled(historyIndex >= visitedPanes.count - 1)
             }
+
+            // The pane's master control belongs in the titlebar's trailing
+            // cluster, on the same baseline as back/forward. It was a
+            // safe-area strip below the toolbar before; that strip sat
+            // under the titlebar material, so the switch was masked and the
+            // button overflowed the window edge (reported 2026-10-29).
+            if let accessory {
+                // The title is removed, so SwiftUI packs every item into the
+                // leading cluster; the flexible spacer is what puts the
+                // accessory at the trailing edge (measured 2026-10-29).
+                ToolbarSpacer(.flexible)
+                ToolbarItem(placement: .primaryAction) {
+                    self.accessoryView(accessory)
+                }
+                // The shared plate is cut for a 36 pt glyph; a switch is
+                // wider and shorter, so the plate framed it instead of
+                // hugging it (reported 2026-10-29). `sharedBackgroundVisibility`
+                // is the SDK's own opt-out (macOS 26+); the `+` keeps its
+                // circle on the same API.
+                .sharedBackgroundVisibility(accessory.usesSharedBackground ? .visible : .hidden)
+            }
         }
         .toolbar(removing: .title)
         .frame(
@@ -332,6 +380,25 @@ struct SettingsRoot: View {
         )
         .task {
             uiState.ensureLoaded()
+        }
+        // Probe-only: lets the screenshot walk visit panes without a mouse.
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeSelectPane)) { note in
+            guard let raw = note.object as? String,
+                  let pane = SettingsPane(rawValue: raw)
+            else { return }
+            self.select(pane)
+        }
+        // Probe-only: seeds the sidebar search so a typed search state can be
+        // captured (the list collapses to "No results").
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeSearch)) { note in
+            guard let text = note.object as? String else { return }
+            searchText = text
+        }
+        // Granting happens in System Settings, so coming back must refresh
+        // the rows: a permission granted there has to turn the pill green
+        // without closing and reopening Settings.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            uiState.refreshPermissions()
         }
     }
 
@@ -372,7 +439,7 @@ struct SettingsRoot: View {
                         .padding(.horizontal, 18)
                         .transition(.opacity)
                 } else {
-                    OtoSettingsList(items: filteredPanes, selection: $selection)
+                    OtoSettingsList(items: filteredPanes, selection: self.sidebarSelection)
                         .accessibilityLabel("Settings sections")
                 }
             }
@@ -382,7 +449,7 @@ struct SettingsRoot: View {
             }
             .animation(.easeOut(duration: 0.2).delay(filteredPanes.isEmpty ? 0.18 : 0), value: filteredPanes.isEmpty)
         }
-        .frame(minWidth: Self.minimumSidebarWidth, maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: Self.minimumSidebarWidth, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
         .font(.system(size: 13))
         .fontDesign(.rounded)
@@ -434,14 +501,39 @@ struct SettingsRoot: View {
     }
 
     private var detailContent: some View {
-        Form {
-            paneContent
+        // The card stack belongs to the panes (see `OtoPaneForm`), not to the
+        // shell: a pane with nothing to list draws a borderless canvas
+        // instead, and the shell cannot know that from here.
+        paneContent
+            .font(.system(size: 13))
+            .fontDesign(.rounded)
+            .controlSize(.regular)
+            .textFieldStyle(.roundedBorder)
+    }
+
+    /// The pane's master control, in the titlebar's trailing cluster. A real
+    /// on/off is a switch; the pane's primary action is a toolbar button, so
+    /// it inherits the same glass circle as back/forward and sits on their
+    /// baseline. Sized by the toolbar, never by a fixed frame: the old 28 pt
+    /// frame plus large control size overflowed the 30 pt titlebar controls
+    /// and read as a second, heavier button (reported 2026-10-29).
+    @ViewBuilder
+    private func accessoryView(_ accessory: SettingsChrome.Accessory) -> some View {
+        switch accessory {
+        case .toggle(let isOn, let help, let set):
+            // A bare Toggle in a vibrant dark toolbar resolves both its
+            // track and its knob to white: the off state vanishes. Hosting
+            // it under a pinned non-vibrant appearance keeps the native
+            // switch (and its keyboard/VoiceOver behavior) legible in both
+            // polarities.
+            OtoToolbarSwitch(isOn: isOn, help: help, set: set)
+        case .action(let symbol, let help, let run):
+            Button(action: run) {
+                Image(systemName: symbol)
+            }
+            .help(help)
+            .accessibilityLabel(help)
         }
-        .formStyle(.grouped)
-        .font(.system(size: 13))
-        .fontDesign(.rounded)
-        .controlSize(.regular)
-        .textFieldStyle(.roundedBorder)
     }
 
     @ViewBuilder
@@ -452,40 +544,97 @@ struct SettingsRoot: View {
         case .dictation:
             DictationPane(dispatch: dispatch, uiState: uiState)
         case .dictionary:
-            DictionaryPane(coordinator: coordinator, dictionary: dictionary)
+            DictionaryPane(
+                coordinator: coordinator, dictionary: dictionary,
+                dispatch: dispatch, chrome: chrome
+            )
         case .snippets:
-            SnippetsPane(snippets: snippets)
+            SnippetsPane(snippets: snippets, dispatch: dispatch, chrome: chrome)
         case .history:
-            HistoryPane(history: history, polish: polish)
+            HistoryPane(history: history, polish: polish, dispatch: dispatch, chrome: chrome)
         case .privacy:
             PrivacyPane(uiState: uiState)
         case .intelligence:
-            IntelligencePane(polish: polish, transforms: transforms)
+            IntelligencePane(polish: polish, transforms: transforms, chrome: chrome)
         case .about:
             AboutPane()
         }
     }
 
     private func navigate(to destination: SettingsPane) {
-        guard destination != selection else { return }
-        selection = destination
+        self.select(destination)
+    }
 
-        if historyIndex < visitedPanes.count - 1 {
-            visitedPanes.removeSubrange((historyIndex + 1)..<visitedPanes.count)
+    /// The only place `selection` changes for a user-initiated move: clears
+    /// the old pane's accessory, then records the visit so back/forward see
+    /// sidebar clicks too (they used to be invisible to the history stack).
+    private func select(_ destination: SettingsPane) {
+        guard destination != self.selection else { return }
+        self.chrome.publish(nil)
+        self.selection = destination
+
+        if self.historyIndex < self.visitedPanes.count - 1 {
+            self.visitedPanes.removeSubrange((self.historyIndex + 1) ..< self.visitedPanes.count)
         }
-        visitedPanes.append(destination)
-        historyIndex = visitedPanes.count - 1
+        self.visitedPanes.append(destination)
+        self.historyIndex = self.visitedPanes.count - 1
     }
 
     private func moveBack() {
         guard historyIndex > 0 else { return }
+        chrome.publish(nil)
         historyIndex -= 1
         selection = visitedPanes[historyIndex]
     }
 
     private func moveForward() {
         guard historyIndex < visitedPanes.count - 1 else { return }
+        chrome.publish(nil)
         historyIndex += 1
         selection = visitedPanes[historyIndex]
+    }
+}
+
+/// A native switch hosted with a non-vibrant appearance.
+///
+/// A toolbar item inherits the titlebar's vibrant appearance, where the
+/// switch's off track and knob both resolve to white — the off state
+/// disappears on dark glass (measured 2026-10-29). Pinning `.darkAqua` /
+/// `.aqua` on the hosting view restores the normal switch palette while
+/// keeping the real control: no hand-drawn toggle, no lost keyboard or
+/// VoiceOver behavior.
+private struct OtoToolbarSwitch: NSViewRepresentable {
+    let isOn: Bool
+    let help: String
+    let set: (Bool) -> Void
+
+    func makeNSView(context: Context) -> NSHostingView<AnyView> {
+        let host = NSHostingView(rootView: self.toggle)
+        self.pin(host)
+        return host
+    }
+
+    func updateNSView(_ host: NSHostingView<AnyView>, context: Context) {
+        host.rootView = self.toggle
+        self.pin(host)
+    }
+
+    private var toggle: AnyView {
+        AnyView(
+            Toggle(self.help, isOn: Binding(get: { self.isOn }, set: self.set))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help(self.help)
+        )
+    }
+
+    private func pin(_ host: NSHostingView<AnyView>) {
+        let source = host.window?.effectiveAppearance ?? NSApp.effectiveAppearance
+        let dark = source.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let name: NSAppearance.Name = dark ? .darkAqua : .aqua
+        if host.appearance?.name != name {
+            host.appearance = NSAppearance(named: name)
+        }
     }
 }

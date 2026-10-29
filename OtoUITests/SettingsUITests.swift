@@ -69,11 +69,14 @@ final class SettingsUITests: XCTestCase {
         // construction — the runner leaves the pref as it found it.
         // (The Dock toggle above stays existence-only: flipping it would
         // hide the runner's Dock.)
-        settingsWindow.descendants(matching: .any)["Dictation"].click()
+        //
+        // Behavior lives on General (it is how a dictation lands, not what
+        // makes dictation work), so the catcher is asserted here rather than
+        // on Dictation.
         let catcher = settingsWindow.toggles["CatcherToggle"]
         XCTAssertTrue(
             catcher.waitForExistence(timeout: 10),
-            "Dictation must expose the catcher toggle"
+            "General must expose the catcher toggle"
         )
         guard let before = catcher.value as? String else {
             XCTFail("Catcher toggle must expose an On/Off value")
@@ -107,7 +110,7 @@ final class SettingsUITests: XCTestCase {
         // What matters is that onboarding is the only real surface.
         let finish = onboarding.buttons["Finish"]
         // Welcome, then the chapters: how walks three rows (Next, Next,
-        // Continue), then shortcut, permissions, speech, and tryIt finishes.
+        // Continue), then shortcut, permissions, and tryIt finishes.
         for _ in 0 ..< 12 {
             if finish.exists { break }
             let button = onboarding.buttons["Continue"].exists

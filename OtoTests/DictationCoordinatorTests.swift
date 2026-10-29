@@ -231,12 +231,12 @@ struct DictationCoordinatorTests {
     // calls replaceLast.
 
     @Test func cleanupPrefsReadPerSession() {
-        // Absent keys ⇒ shipped defaults (enabled + None: exact words until
-        // the user opts in). Present but unknown level ⇒ fail-safe None.
+        // Absent keys ⇒ shipped defaults (off + None: Apple Intelligence is
+        // opt-in like History). Present but unknown level ⇒ fail-safe None.
         // Explicit values round-trip. Legacy Slice-B keys map read-only
         // (manual→None, upgrade→Light, automatic→Medium).
         let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
-        #expect(CleanupBehavior.current(defaults: defaults) == CleanupBehavior(enabled: true, level: .none))
+        #expect(CleanupBehavior.current(defaults: defaults) == CleanupBehavior(enabled: false, level: .none))
         defaults.set(false, forKey: CleanupSettings.enabledKey)
         defaults.set("medium", forKey: CleanupSettings.levelKey)
         #expect(CleanupBehavior.current(defaults: defaults) == CleanupBehavior(enabled: false, level: .medium))
@@ -244,6 +244,7 @@ struct DictationCoordinatorTests {
         #expect(CleanupBehavior.current(defaults: defaults).level == .none)
 
         let legacy = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        legacy.set(true, forKey: LegacyIntelligenceSettings.enabledKey)
         legacy.set("manual", forKey: LegacyIntelligenceSettings.modeKey)
         #expect(CleanupBehavior.current(defaults: legacy) == CleanupBehavior(enabled: true, level: .none))
         legacy.set("upgrade", forKey: LegacyIntelligenceSettings.modeKey)

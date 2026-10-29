@@ -353,6 +353,9 @@ extension View {
 struct ShortcutCapturePopover: View {
     let dispatch: ShortcutDispatch
     let slot: ShortcutSlot
+    /// Called whenever the slot's value changes while the popover is still
+    /// open (clear, capture), so the row behind it can redraw at once.
+    var onChange: () -> Void = {}
     let onClose: () -> Void
 
     @State private var isListening = false
@@ -362,6 +365,10 @@ struct ShortcutCapturePopover: View {
     @State private var attemptedChips: [String] = []
     @State private var refusal: String?
     @State private var glow: OtoRecorderGlow.Tone?
+    /// The slot has no shortcut: seeded on appear and flipped by Remove/⌫.
+    /// Local because `ShortcutDispatch` is not observable — the popover's
+    /// own answer must not wait for the row to re-render.
+    @State private var isCleared = false
     @State private var closeTask: Task<Void, Never>?
 
     var body: some View {
@@ -370,9 +377,17 @@ struct ShortcutCapturePopover: View {
                 ForEach(shownChips, id: \.self) { chip in
                     OtoKey(text: chip)
                 }
-                Text(attemptedChips.isEmpty ? "…and a key" : "not available")
-                    .font(.callout)
-                    .foregroundStyle(refusal == nil ? Color.secondary : Color.red)
+                if !isCleared || !shownChips.isEmpty {
+                    Text(attemptedChips.isEmpty ? "…and a key" : "not available")
+                        .font(.callout)
+                        .foregroundStyle(refusal == nil ? Color.secondary : Color.red)
+                } else {
+                    // An empty slot asks for a shortcut in the row's own
+                    // words, so Remove and the pill tell the same story.
+                    Text("Record shortcut")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, minHeight: 94)
             .background { OtoRecorderGlow(tone: glow) }
@@ -385,10 +400,10 @@ struct ShortcutCapturePopover: View {
                     finishCapture(kind: .modifierHold(keyCode: code), conflicts: [])
                 },
                 onClear: {
-                    dispatch.setSuspended(false)
-                    dispatch.setSlotEnabled(false, for: slot)
-                    isListening = false
-                    onClose()
+                    // ⌫ removes the shortcut instead of closing the glass:
+                    // the recorder stays armed for the replacement, and the
+                    // row behind it already reads "Record shortcut".
+                    clearShortcut()
                 },
                 onCancel: {
                     dispatch.setSuspended(false)
@@ -414,7 +429,19 @@ struct ShortcutCapturePopover: View {
             }
 
             Divider()
-            HStack {
+            HStack(spacing: 8) {
+                if !isCleared {
+                    Button {
+                        clearShortcut()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Remove")
+                            OtoKey(text: "⌫", compact: true)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this shortcut")
+                }
                 Spacer()
                 Button {
                     dispatch.setSuspended(false)
@@ -436,6 +463,7 @@ struct ShortcutCapturePopover: View {
         .presentationBackground(.ultraThinMaterial)
         .presentationCornerRadius(20)
         .onAppear {
+            isCleared = currentKind == .unassigned
             dispatch.setSuspended(true)
             isListening = true
             modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
@@ -462,6 +490,11 @@ struct ShortcutCapturePopover: View {
                 NSEvent.removeMonitor(modifierMonitor)
                 self.modifierMonitor = nil
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeClearRecorder)) { _ in
+            // Probe-only (never posted in normal use): exercises the same
+            // path as ⌫ so the cleared glass can be captured.
+            clearShortcut()
         }
     }
 
@@ -510,14 +543,33 @@ struct ShortcutCapturePopover: View {
         glow = .refused
     }
 
+    private var currentKind: ShortcutTrigger.Kind {
+        slot == .hold ? dispatch.configuration.hold.kind : dispatch.configuration.handsFree.kind
+    }
+
+    /// Remove (and ⌫): the keys leave the slot, the glass stays. A recorder
+    /// that closed on clear hid the one fact the person needed — that the
+    /// shortcut was gone — behind a row still showing the old chips.
+    private func clearShortcut() {
+        dispatch.clearSlot(slot)
+        attemptedChips = []
+        refusal = nil
+        message = nil
+        glow = nil
+        isCleared = true
+        onChange()
+    }
+
     /// A saved combination answers on the glass, then the popover goes: the
     /// row behind it already shows the new keys. Dispatch resumes at once so
     /// the shortcut is live during the flash.
     private func accept() {
         dispatch.setSuspended(false)
         isListening = false
+        isCleared = false
         refusal = nil
         glow = .accepted
+        onChange()
         closeTask?.cancel()
         closeTask = Task {
             try? await Task.sleep(for: .milliseconds(450))

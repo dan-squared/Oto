@@ -46,60 +46,67 @@ struct GeneralPane: View {
     // Default is the shared freshDefault (Top) — the same constant
     // current() falls back to, so a fresh profile shows the truth.
     @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .freshDefault
+    // Catcher kill-switch (6C1): default ON — the modal teaches the
+    // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
+    // pinned equal to it by NoTargetModalTests.
+    @AppStorage("app.Oto.noTargetModal") private var catcherEnabled = true
+    // Media-duck kill-switch (Phase 7, spike-green): default ON — bleed
+    // ruins transcripts, resume is automatic. Key owned by
+    // MediaDuckSettings; the literal is pinned equal to it by MediaDuckTests.
+    @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
 
     var body: some View {
-        // No "General" header — the sidebar already says it.
-        Section {
-            Toggle("Launch at login", isOn: Binding(
-                get: { loginStatus == .enabled },
-                set: { newValue in setLogin(enabled: newValue) }
-            ))
-            if let loginError {
-                Text(loginError)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+        OtoPaneForm {
+            // No "General" header — the sidebar already says it.
+            Section {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { loginStatus == .enabled },
+                    set: { newValue in setLogin(enabled: newValue) }
+                ))
+                if let loginError {
+                    Text(loginError)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Toggle("Show Oto in Dock", isOn: Binding(
+                    get: { showInDock },
+                    set: { newValue in setDockVisibility(shown: newValue) }
+                ))
+                .accessibilityIdentifier("ShowInDockToggle")
+                if let dockError {
+                    Text(dockError)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
-            Toggle("Show Oto in Dock", isOn: Binding(
-                get: { showInDock },
-                set: { newValue in setDockVisibility(shown: newValue) }
-            ))
-            .accessibilityIdentifier("ShowInDockToggle")
-            if let dockError {
-                Text(dockError)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            if let loginCaption {
-                OtoPanelNote("\(loginCaption)\n\nOff: menu bar only — no Dock, no ⌘Tab.")
-            } else {
-                OtoPanelNote("Off: menu bar only — no Dock, no ⌘Tab.")
-            }
-        }
-        .task { refreshLogin() }
+            .task { refreshLogin() }
 
-        Section {
-            OtoSegmented(
-                options: [(.top, "Top"), (.bottom, "Bottom")],
-                selection: $flowPosition
-            )
-            OtoPanelNote("Top sits below the notch. Drag the pill anytime — it snaps.")
-        } header: {
-            Text("Flow Bar")
+            Section {
+                OtoSegmented(
+                    options: [(.top, "Top"), (.bottom, "Bottom")],
+                    selection: $flowPosition
+                )
+                OtoPanelNote("Top sits below the notch. Drag the pill anytime — it snaps.")
+            } header: {
+                Text("Flow Bar")
+            }
+
+            // Behavior lives here, not in Dictation: it is how the app acts
+            // when dictation lands, not what makes dictation work.
+            Section {
+                Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
+                    .accessibilityIdentifier("CatcherToggle")
+                Toggle("Mute media while dictating", isOn: $muteMedia)
+                OtoPanelNote("Catcher: no text field? Oto opens a small window. Off: auto-copies instead.\nMute: silences speakers, restores volume automatically.")
+            } header: {
+                Text("Behavior")
+            }
         }
     }
 
-    /// Four states, never two: revoked consent and lookup failure both
-    /// read as guidance, not as a broken toggle.
-    private var loginCaption: String? {
-        if loginStatus == .requiresApproval {
-            return "Approved in System Settings, then revoked. Re-enable it under System Settings → General → Login Items."
-        }
-        if loginStatus == .notFound {
-            return "Login item status is unavailable right now."
-        }
-        return nil
-    }
-
+    /// Read the live login-item status on every visit: System Settings can
+    /// revoke approval behind the app's back. The card carries no permanent
+    /// caption — only failed actions speak (toggle, Dock error).
     private func refreshLogin() {
         loginStatus = login.status()
         loginError = nil

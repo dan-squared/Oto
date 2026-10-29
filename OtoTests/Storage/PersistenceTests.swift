@@ -16,6 +16,13 @@ struct PersistenceTests {
         var name: String
     }
 
+    /// The stores carry `Date` fields (history timestamps). The envelope
+    /// must round-trip them: `save` writes ISO-8601, so `load` must read it.
+    private struct DatedRecord: Codable, Equatable, Sendable {
+        var name: String
+        var createdAt: Date
+    }
+
     private func makePersistence() -> LocalPersistence {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -29,6 +36,27 @@ struct PersistenceTests {
         try await VersionedStoreFile.save([Record(name: "a"), Record(name: "b")], filename: "t.v1.json", via: persistence)
         let loaded: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
         #expect(loaded == [Record(name: "a"), Record(name: "b")])
+    }
+
+    @Test func datedEnvelopeRoundTrips() async throws {
+        // Regression: save encoded dates as ISO-8601 while load used the
+        // default (reference-date Double) strategy, so the app moved its own
+        // history file to Backups as "corrupt" on the next launch.
+        let persistence = makePersistence()
+        let date = Date(timeIntervalSince1970: 1_790_000_000)
+        try await VersionedStoreFile.save(
+            [DatedRecord(name: "a", createdAt: date)],
+            filename: "t.v1.json",
+            via: persistence
+        )
+        let loaded: [DatedRecord] = await VersionedStoreFile.load(DatedRecord.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded.count == 1)
+        #expect(abs(loaded.first!.createdAt.timeIntervalSince(date)) < 1)
+        // And it was not moved aside.
+        let backups = try persistence.url(for: "t.v1.json")
+            .deletingLastPathComponent().appendingPathComponent("Backups", isDirectory: true)
+        let contents = (try? FileManager.default.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil)) ?? []
+        #expect(contents.isEmpty)
     }
 
     @Test func deleteRemovesFile() async throws {

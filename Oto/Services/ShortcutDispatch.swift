@@ -292,6 +292,25 @@ final class ShortcutDispatch {
         start()
     }
 
+    /// The recorder's Remove (and ⌫): the slot goes back to deliberately
+    /// empty rather than merely switched off. Leaving the old trigger in
+    /// place made a clear invisible — the row kept drawing keys that could
+    /// no longer fire. Unassigned registers nothing, claims nothing, and
+    /// calibrates as `.notSet`; recording again re-enables the slot through
+    /// `updateSlot`.
+    func clearSlot(_ slot: ShortcutSlot) {
+        cancelActiveSession()
+        if slot == .hold {
+            configuration.hold = .unassignedHoldToTalk()
+            configuration.holdEnabled = false
+        } else {
+            configuration.handsFree = .unassignedHandsFree()
+            configuration.handsFreeEnabled = false
+        }
+        resetCalibration(for: slot)
+        start()
+    }
+
     /// Atomic exchange of the two slots' triggers (the modal's Swap).
     /// Always safe without gating: the kind *pair* is unchanged, only the
     /// assignment flips, so no new conflict can exist by construction.
@@ -471,6 +490,23 @@ final class ShortcutDispatch {
         }
     }
 
+    /// Cancel that cannot miss a begin still in flight. A combination press
+    /// can arrive before the routed begin's ID has landed; spinning on the
+    /// generation gate (the same one the double-tap conversion uses) makes
+    /// "discard this hold" deterministic instead of a race.
+    private func cancelSessionAfterPendingBegins() {
+        let generation = beginGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            while self.beginSettledThrough < generation {
+                await Task.yield()
+            }
+            if let current = self.activeSessionID {
+                await self.coordinator.cancel(current)
+            }
+        }
+    }
+
     /// One Task per user gesture at most (begin/finish only — repeats and
     /// ignores never hop). The 12 "no per-event task" limit constrains
     /// event streams, not gesture intents.
@@ -490,6 +526,11 @@ final class ShortcutDispatch {
             noteObserved(down: true, slot: slot)
         } else if case .keyUp = event {
             noteObserved(down: false, slot: slot)
+        }
+        if case .combinationBegan = event, slot == .hold {
+            // A press that became a shortcut can never pair with the next
+            // tap: the release is swallowed, so the tracker must forget it.
+            holdTap.reset()
         }
         // Modes are slot properties: hold is always hold-to-talk,
         // hands-free always toggles. The transition machines are already
@@ -560,6 +601,10 @@ final class ShortcutDispatch {
             }
         case .monitorLost:
             dropFnPending()
+        case .combinationBegan:
+            // fn's own confirmation path already drops on combination use
+            // (isInCombination); the routed event never targets fn.
+            break
         }
     }
 
@@ -633,6 +678,11 @@ final class ShortcutDispatch {
         switch action {
         case .ignore, .reset:
             break
+        case .cancel:
+            // The press was a shortcut, not dictation: discard it (nothing
+            // has been inserted yet) and never finish it on the release the
+            // monitor swallows.
+            cancelSessionAfterPendingBegins()
         case .begin:
             // Generation-gated by convertDoubleTapToHandsFree: bumped
             // synchronously here, settled by the Task after storing.

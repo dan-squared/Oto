@@ -5,73 +5,72 @@
 //  Spoken-form → replacement rules. Every control binds the real store;
 //  the sheet carries validation + test/preview; deletion confirms.
 //
+//  A rule is one line and a cluster of actions. The scope it applies in and
+//  whether it is on live behind the info button — the row itself stays a
+//  readable sentence.
+//
 
 import SwiftUI
 
 struct DictionaryPane: View {
     let coordinator: DictationCoordinator
     let dictionary: DictionaryStore
+    let dispatch: ShortcutDispatch
+    let chrome: SettingsChrome
 
     @State private var editingRule: DictionaryRule?
     @State private var addingRule = false
     @State private var showClearDictionaryConfirm = false
+    @State private var infoRuleID: UUID?
 
     var body: some View {
-        // No "Dictionary" header — the sidebar already says it.
-        if dictionary.rules.isEmpty {
-            Section {
-                ContentUnavailableView(
-                    "No dictionary rules",
-                    systemImage: "text.book.closed",
-                    description: Text("Add a spoken form and its replacement. Rules apply to future dictation.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 240)
-            }
-        } else {
-            Section {
-                ForEach(dictionary.rules) { rule in
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("\"\(rule.spoken)\" → \"\(rule.replacement)\"")
-                                .font(.system(size: 13))
-                            if !rule.bundleIDs.isEmpty {
-                                Text(InstalledApps.names(for: rule.bundleIDs))
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.secondary)
-                            }
+        Group {
+            if dictionary.rules.isEmpty {
+                OtoPaneCanvas {
+                    OtoEmptyState(
+                        symbol: "character.book.closed",
+                        title: "Your words, your way",
+                        message: "Teach Oto how you say things. A spoken form becomes the replacement every time you dictate.",
+                        chips: [
+                            .init(symbol: "person.text.rectangle", label: "Names", tint: .violet),
+                            .init(symbol: "textformat.abc", label: "Jargon", tint: .blue),
+                            .init(symbol: "arrow.right", label: "Shorthand", tint: .green),
+                        ],
+                        actionTitle: "Add your first rule",
+                        action: { addingRule = true },
+                        footnote: dictationFootnote("Applies whenever you dictate with")
+                    )
+                }
+            } else {
+                OtoPaneForm {
+                    Section {
+                        ForEach(dictionary.rules) { rule in
+                            self.row(for: rule)
                         }
-                        .opacity(rule.isEnabled ? 1 : 0.45)
-                        Spacer(minLength: 8)
-                        Button("Edit") { editingRule = rule }
-                            .buttonStyle(.borderless)
-                        Button("Delete") {
-                            Task {
-                                await dictionary.remove(id: rule.id)
-                                pushRules()
-                            }
-                        }
-                        .buttonStyle(.borderless)
-                        .tint(.red)
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture { editingRule = rule }
+
+                    Section {
+                        HStack(spacing: 12) {
+                            Spacer(minLength: 0)
+                            Button("Clear") { showClearDictionaryConfirm = true }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(.red)
+                        }
+                        OtoPanelNote("Whole words only — never inside links or paths. App rules win in their app.")
+                    }
                 }
             }
         }
-
-        Section {
-            HStack(spacing: 12) {
-                Button("Add rule") { addingRule = true }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                Spacer(minLength: 0)
-                Button("Clear") { showClearDictionaryConfirm = true }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .tint(.red)
-                    .disabled(dictionary.rules.isEmpty)
-            }
-            OtoPanelNote("Whole words only — never inside links or paths. App rules win in their app.")
+        .onAppear { publishAccessory() }
+        .onChange(of: dictionary.rules.count) { _, _ in publishAccessory() }
+        // Probe-only (never posted in normal use): opens the first rule's
+        // details so the popover anchor can be checked from a real capture.
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeOpenInfo)) { _ in
+            infoRuleID = dictionary.rules.first?.id
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .otoProbeCloseInfo)) { _ in
+            infoRuleID = nil
         }
         .sheet(isPresented: $addingRule) {
             DictionaryRuleEditor(rule: nil, dictionary: dictionary) { saved in
@@ -101,6 +100,74 @@ struct DictionaryPane: View {
         } message: {
             Text("This removes every dictionary rule on this Mac. Cannot be undone.")
         }
+    }
+
+    // MARK: - Row
+
+    private func row(for rule: DictionaryRule) -> some View {
+        HStack(spacing: 10) {
+            Text("\"\(rule.spoken)\" → \"\(rule.replacement)\"")
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .opacity(rule.isEnabled ? 1 : 0.45)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { editingRule = rule }
+
+            OtoRowActions {
+                OtoRowButton(symbol: "info.circle", help: "Rule details") {
+                    infoRuleID = rule.id
+                }
+                // Anchored to the button that opens it: the glass arrow must
+                // point at the eye, never at the row's leading edge.
+                .popover(isPresented: self.infoBinding(for: rule.id), arrowEdge: .top) {
+                    OtoInfoPopover(
+                        title: rule.spoken,
+                        rows: [
+                            .init(label: "Applies in", value: rule.bundleIDs.isEmpty
+                                ? "Everywhere"
+                                : InstalledApps.names(for: rule.bundleIDs)),
+                            .init(label: "Status", value: rule.isEnabled ? "On" : "Off"),
+                        ],
+                        note: "Becomes “\(rule.replacement)”"
+                    )
+                }
+                OtoRowButton(symbol: "pencil", help: "Edit rule") {
+                    editingRule = rule
+                }
+                OtoRowButton(symbol: "trash", help: "Delete rule", danger: true) {
+                    Task {
+                        await dictionary.remove(id: rule.id)
+                        pushRules()
+                    }
+                }
+            }
+        }
+    }
+
+    private func infoBinding(for id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { infoRuleID == id },
+            set: { if !$0, infoRuleID == id { infoRuleID = nil } }
+        )
+    }
+
+    // MARK: - Plumbing
+
+    /// The add action takes the corner: it is this pane's master control, and
+    /// the empty state's button does exactly the same thing.
+    private func publishAccessory() {
+        chrome.publish(.action(symbol: "plus", help: "Add rule") { addingRule = true })
+    }
+
+    /// The real hold key, so the footnote teaches the gesture the app is
+    /// actually using.
+    private func dictationFootnote(_ lead: String) -> OtoEmptyFootnote {
+        let keys = KeyNames.chips(for: dispatch.configuration.hold.kind)
+        return keys.isEmpty
+            ? OtoEmptyFootnote(lead: "\(lead) your shortcut.")
+            : OtoEmptyFootnote(lead: lead, keys: keys, tail: ".")
     }
 
     private func pushRules() {

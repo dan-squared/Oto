@@ -16,6 +16,17 @@ import Foundation
 import Speech
 import SwiftUI
 
+/// The one remedy a permission status has. Kept as a type so the row's single
+/// control and its label can never disagree about whether there is an action.
+enum PermissionAction: Equatable {
+    /// Nothing left to do: render the readout.
+    case none
+    /// An in-product system prompt exists: ask.
+    case allow
+    /// Only System Settings can undo it: open the pane.
+    case openSettings
+}
+
 @Observable @MainActor
 final class SettingsUIState {
     // Speech readiness display (locale tags stay plain strings — display
@@ -142,6 +153,31 @@ final class SettingsUIState {
     }
 
     var micAllowed: Bool { micPermission == .granted }
+
+    /// What the mic row's single control can do. `.none` still renders the
+    /// readout ("Allowed", or "Checking…" before the first read) — a button
+    /// never appears before the state is known.
+    var micAction: PermissionAction {
+        switch micPermission {
+        case .granted: .none
+        case .notDetermined: .allow
+        case .denied: .openSettings
+        case nil: .none
+        }
+    }
+
+    /// The same mapping for speech recognition: authorized has nothing left
+    /// to do, not-asked can prompt in-product, denied/restricted is a trip to
+    /// System Settings (no prompt exists once denied).
+    var speechAction: PermissionAction {
+        switch speechPermission {
+        case .authorized: .none
+        case .notDetermined: .allow
+        case .denied, .restricted: .openSettings
+        case nil: .none
+        @unknown default: .openSettings
+        }
+    }
 
     var micTone: OtoStatus.Tone {
         micAllowed ? .ok : (micPermission == .notDetermined ? .idle : .warn)

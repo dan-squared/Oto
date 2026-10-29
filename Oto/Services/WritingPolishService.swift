@@ -263,8 +263,8 @@ enum WorkLabel: Sendable, Equatable {
 /// Effective Auto Cleanup behavior for one session: master switch + level.
 /// Read per session from UserDefaults (thread-safe) so Settings flips apply
 /// to the next dictation with no restart. Absent keys ⇒ shipped default
-/// (on + None: exact words until the user opts into cleanup). Present-but-
-/// unknown level ⇒ None (fail-safe: future values can never trigger unbuilt
+/// (off + None: the feature is opt-in, like History). Present-but-unknown
+/// level ⇒ None (fail-safe: future values can never trigger unbuilt
 /// behavior — pinned by test). Legacy Slice-B keys
 /// (`app.Oto.intelligenceEnabled` / `app.Oto.intelligenceMode`) are honored
 /// read-only when the new keys are absent (manual→None, upgrade→Light,
@@ -281,7 +281,7 @@ struct CleanupBehavior: Equatable, Sendable {
         } else if defaults.object(forKey: LegacyIntelligenceSettings.enabledKey) != nil {
             enabled = defaults.bool(forKey: LegacyIntelligenceSettings.enabledKey)
         } else {
-            enabled = true
+            enabled = false
         }
         let level: CleanupLevel
         if let raw = defaults.string(forKey: CleanupSettings.levelKey) {

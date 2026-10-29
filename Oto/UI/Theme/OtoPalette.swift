@@ -22,6 +22,13 @@ enum OtoPalette {
     static let safe = Color(nsColor: NS.safe)
     static let unsafe = Color(nsColor: NS.unsafe)
 
+    /// Empty-state example chips — the only hue in the app. Three pairs, each
+    /// muted in Dark Mode so a chip never becomes the loudest thing on glass.
+    /// Used by `OtoEmptyState` alone; nothing else may reach for them.
+    static let chipViolet = Color(nsColor: NS.chipViolet)
+    static let chipBlue = Color(nsColor: NS.chipBlue)
+    static let chipGreen = Color(nsColor: NS.chipGreen)
+
     /// Opacity of the selected sidebar row's monochrome fill. Both schemes
     /// share this alpha with opposite polarity (white on dark, black on
     /// light), so the two looks stay mirrored by construction and the
@@ -50,6 +57,11 @@ enum OtoPalette {
         nonisolated static let hover = pair(0.965, 0.15)
         nonisolated static let safe = tint(light: (0.08, 0.50, 0.24), dark: (0.29, 0.87, 0.50))
         nonisolated static let unsafe = tint(light: (0.71, 0.33, 0.04), dark: (0.98, 0.75, 0.14))
+        // Empty-state chips: the reference's three pastels, dropped in value
+        // for Dark Mode so the label (near-white ink) keeps its contrast.
+        nonisolated static let chipViolet = tint(light: (0.71, 0.63, 0.93), dark: (0.33, 0.27, 0.47))
+        nonisolated static let chipBlue = tint(light: (0.64, 0.78, 0.91), dark: (0.24, 0.36, 0.45))
+        nonisolated static let chipGreen = tint(light: (0.66, 0.78, 0.61), dark: (0.27, 0.38, 0.24))
 
         nonisolated private static func tint(light: (CGFloat, CGFloat, CGFloat), dark: (CGFloat, CGFloat, CGFloat)) -> NSColor {
             NSColor(name: nil) { appearance in

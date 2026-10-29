@@ -24,17 +24,17 @@ final class OnboardingStage: ObservableObject {
         case catcher
         /// Asked: the hold key. The recorder applies immediately.
         case shortcut
-        /// Asked: the three permissions dictation needs.
+        /// Asked: the three permissions dictation needs. The on-device model
+        /// downloads in the background from here — readiness is a Settings
+        /// row, not a chapter.
         case permissions
-        /// Shown, and asked only if the language is not ready: offline speech.
-        case speech
         /// Shown: a field to try it in.
         case tryIt
         /// The mark leaves the header for the menu bar; the window goes.
         case handoff
 
         /// The chapters, in order: what the dashes in the footer count.
-        static let chapters: [Step] = [.how, .catcher, .shortcut, .permissions, .speech, .tryIt]
+        static let chapters: [Step] = [.how, .catcher, .shortcut, .permissions, .tryIt]
 
         var isChapter: Bool { Self.chapters.contains(self) }
 

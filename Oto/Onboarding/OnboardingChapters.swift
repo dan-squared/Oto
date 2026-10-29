@@ -60,11 +60,6 @@ struct OnboardingChapterCopy {
                 tag: "Permissions", symbol: "lock.shield", title: "Three grants",
                 subtitle: "Oto asks only when needed — here and now."
             )
-        case .speech:
-            .init(
-                tag: "Speech", symbol: "arrow.down.circle", title: "Works offline",
-                subtitle: "One download, and your words never leave this Mac."
-            )
         case .tryIt:
             .init(
                 tag: "Try it", symbol: "text.cursor", title: "Say something",
@@ -205,8 +200,6 @@ struct OnboardingChaptersView: View {
             OnboardingShortcutPlate(flow: self.flow)
         case .permissions:
             OnboardingPermissionsPlate(flow: self.flow)
-        case .speech:
-            OnboardingSpeechPlate(flow: self.flow)
         case .tryIt:
             OnboardingTryPlate(flow: self.flow)
         case .welcome,

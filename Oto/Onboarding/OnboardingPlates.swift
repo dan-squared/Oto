@@ -3,9 +3,10 @@
 //  Oto
 //
 //  The right side of each chapter. Every control here is the real one from
-//  Settings — the recorder applies immediately, the permission rows grant for
-//  real, Prepare downloads for real — so the chapter is a rehearsal of the
-//  product, not a picture of it.
+//  Settings — the recorder applies immediately and the permission rows grant
+//  for real — so the chapter is a rehearsal of the product, not a picture of
+//  it. The on-device model downloads in the background from the permissions
+//  chapter, so readiness never needs a chapter of its own.
 //
 
 import ApplicationServices
@@ -171,10 +172,15 @@ struct OnboardingShortcutPlate: View {
                     )
                     .help("Click to record a shortcut")
                     .popover(isPresented: self.$recorderShown, arrowEdge: .top) {
-                        ShortcutCapturePopover(dispatch: self.flow.dispatch, slot: .hold) {
-                            self.recorderShown = false
-                            self.flow.reloadHold()
-                        }
+                        ShortcutCapturePopover(
+                            dispatch: self.flow.dispatch,
+                            slot: .hold,
+                            onChange: { self.flow.reloadHold() },
+                            onClose: {
+                                self.recorderShown = false
+                                self.flow.reloadHold()
+                            }
+                        )
                     }
                 }
 
@@ -212,8 +218,10 @@ struct OnboardingShortcutPlate: View {
     }
 }
 
-/// The three grants, live. Every row can be acted on in every state: a denial
-/// is a route to System Settings, never a dead end.
+/// The three grants, live. One control per row, exactly as in Settings: the
+/// pill is the button wherever a grant or a Settings trip exists. A denial is
+/// a route to System Settings, never a dead end — and never a second button
+/// stacked under the status.
 struct OnboardingPermissionsPlate: View {
     @ObservedObject var flow: OnboardingFlow
 
@@ -224,61 +232,51 @@ struct OnboardingPermissionsPlate: View {
                     icon: "mic",
                     title: "Microphone",
                     status: self.flow.uiState.micText,
+                    tone: self.flow.uiState.micTone,
+                    action: self.flow.uiState.micAction,
                     guidance: self.flow.uiState.micDeniedGuidance,
-                    actionTitle: self.micActionTitle,
-                    action: { self.micAction() }
+                    run: { self.micAction() }
                 )
                 self.row(
                     icon: "accessibility",
                     title: "Accessibility",
                     status: self.flow.uiState.axTrusted ? "Allowed" : "Not allowed",
+                    tone: self.flow.uiState.axTrusted ? .ok : .warn,
+                    action: self.flow.uiState.axTrusted ? .none : .openSettings,
                     guidance: self.flow.uiState.axTrusted
                         ? nil
                         : "Needed to type into other apps. Turn Oto on in the list.",
-                    actionTitle: self.flow.uiState.axTrusted ? nil : "Open Settings",
-                    action: { self.flow.openAccessibility() }
+                    run: { self.flow.openAccessibility() }
                 )
                 self.row(
                     icon: "checkmark.bubble",
                     title: "Speech recognition",
                     status: self.flow.uiState.speechText,
+                    tone: self.flow.uiState.speechTone,
+                    action: self.flow.uiState.speechAction,
                     guidance: self.flow.uiState.speechDeniedGuidance,
-                    actionTitle: self.speechActionTitle,
-                    action: { self.speechAction() }
+                    run: { self.speechAction() }
                 )
             }
         }
-    }
-
-    private var micActionTitle: String? {
-        switch self.flow.uiState.micPermission {
-        case .granted: nil
-        case .denied: "Open Settings"
-        case .notDetermined, nil: "Allow"
-        }
+        // No speech chapter: the model downloads here, in the background,
+        // so "Try it" on the next chapter is not the first time Oto needs it.
+        .task { self.flow.prepareSpeechInBackground() }
     }
 
     private func micAction() {
-        switch self.flow.uiState.micPermission {
-        case .denied: self.flow.openMicrophoneSettings()
-        default: self.flow.grantMicrophone()
-        }
-    }
-
-    private var speechActionTitle: String? {
-        switch self.flow.uiState.speechPermission {
-        case .authorized: nil
-        case .denied, .restricted: "Open Settings"
-        case .notDetermined, nil: "Allow"
-        @unknown default: "Open Settings"
+        switch self.flow.uiState.micAction {
+        case .openSettings: self.flow.openMicrophoneSettings()
+        case .allow: self.flow.grantMicrophone()
+        case .none: break
         }
     }
 
     private func speechAction() {
-        switch self.flow.uiState.speechPermission {
-        case .denied, .restricted: self.flow.openSpeechSettings()
-        case .authorized: break
-        default: self.flow.grantSpeech()
+        switch self.flow.uiState.speechAction {
+        case .openSettings: self.flow.openSpeechSettings()
+        case .allow: self.flow.grantSpeech()
+        case .none: break
         }
     }
 
@@ -286,9 +284,10 @@ struct OnboardingPermissionsPlate: View {
         icon: String,
         title: String,
         status: String,
+        tone: OtoStatus.Tone,
+        action: PermissionAction,
         guidance: String?,
-        actionTitle: String?,
-        action: @escaping () -> Void
+        run: @escaping () -> Void
     ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
@@ -299,9 +298,6 @@ struct OnboardingPermissionsPlate: View {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(OnboardingTheme.ink)
-                Text(status)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OnboardingTheme.muted)
                 if let guidance {
                     Text(guidance)
                         .font(.system(size: 11.5))
@@ -310,67 +306,21 @@ struct OnboardingPermissionsPlate: View {
                 }
             }
             Spacer(minLength: 8)
-            if let actionTitle {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(OnboardingTheme.pill)
+            // One control: the state itself is the button where a remedy
+            // exists, and a readout where there is nothing left to do.
+            if action == .none {
+                OtoStatus(text: status, tone: tone, fill: OnboardingTheme.tagIdle)
             } else {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(OnboardingTheme.ink.opacity(0.9))
-                    .frame(width: 18, height: 18)
+                OtoStatusAction(
+                    text: status,
+                    tone: tone,
+                    help: action == .allow ? "Ask for access" : "Open System Settings",
+                    fill: OnboardingTheme.tagIdle,
+                    hoverFill: OnboardingTheme.tagActive,
+                    action: run
+                )
             }
         }
-    }
-}
-
-/// Offline speech: readiness and the real download.
-struct OnboardingSpeechPlate: View {
-    @ObservedObject var flow: OnboardingFlow
-
-    var body: some View {
-        OnboardingCard {
-            VStack(alignment: .leading, spacing: 14) {
-                if self.flow.uiState.readinessText == "Checking…" {
-                    self.status(text: "Checking…", tone: .idle)
-                } else if self.flow.uiState.speechReady {
-                    HStack(spacing: 8) {
-                        self.status(text: "Ready", tone: .ok)
-                        Text(self.flow.uiState.languageText)
-                            .font(.system(size: 12))
-                            .foregroundStyle(OnboardingTheme.muted)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 8) {
-                            self.status(text: "Not prepared yet", tone: .idle)
-                            Text(self.flow.uiState.prepareFeedback ?? "Works offline once prepared.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(OnboardingTheme.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Button(
-                            self.flow.uiState.isPreparing ? "Preparing…" : "Prepare offline speech",
-                            action: { self.flow.prepareSpeech() }
-                        )
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
-                        .tint(OnboardingTheme.pill)
-                        .disabled(self.flow.uiState.isPreparing)
-                    }
-                }
-
-                Text("Nothing is uploaded — the language model is downloaded once and runs on this Mac.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(OnboardingTheme.faint)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private func status(text: String, tone: OtoStatus.Tone) -> some View {
-        OtoStatus(text: text, tone: tone)
     }
 }
 
