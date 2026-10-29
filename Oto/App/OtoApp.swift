@@ -21,7 +21,10 @@ final class DockRestoreDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = DockVisibility.apply(shown: DockVisibility.isShown())
+        OtoProbe.forceAppearance()
         Self.onboarding?.showIfNeeded()
+        OtoProbe.captureIfRequested(onboarding: Self.onboarding)
+        OtoProbe.captureSettingsIfRequested(settings: Self.settings)
         // Product rule: onboarding owns first-run. A restored Settings window
         // (stale Saved Application State, or quit-mid-onboarding) must not
         // stand while onboarding is unfinished — restoration runs before this
@@ -89,6 +92,7 @@ struct OtoApp: App {
         // Dev-only AX tree dump (`--ax-dump[=<bundle>|pid]`): prints and
         // exits before any scene exists. See AXDump.
         AXDump.runIfRequested()
+        OtoProbe.runShaderProbeIfRequested()
         // Crash backstop first: a kill mid-dictation leaves the duck flag
         // set — put the user's volume back before anything else runs.
         // One-shot migrations precede it (audit F7): Container-scoped

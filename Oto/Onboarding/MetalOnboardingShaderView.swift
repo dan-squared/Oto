@@ -94,7 +94,9 @@ struct MetalOnboardingShaderView: NSViewRepresentable {
         context.coordinator.renderer?.onPresented = self.onPresented
         let state = ShaderState(
             elapsed: elapsed, inset: inset, nativeSurface: nativeSurface, variant: variant,
-            targetSize: targetSize, targetOffset: targetOffset, rayLogoRect: rayLogoRect, rayLogoExit: rayLogoExit
+            targetSize: targetSize, targetOffset: targetOffset, rayLogoRect: rayLogoRect, rayLogoExit: rayLogoExit,
+            // The window is a native one: the light inverts with the system.
+            darkAppearance: context.environment.colorScheme != .light
         )
         // A prewarm can assign this state while the window is hidden and no
         // drawable is available. The reveal must retry even at the same time.
@@ -131,7 +133,8 @@ struct ShaderState: Equatable {
     var rayLogoRect: CGRect = .zero
     /// 0 while the settled mark stays, 1 once it has softened and faded away.
     var rayLogoExit: Float = 0
-    /// Onboarding is presented in the dark appearance; the surface color follows it.
+    /// The window follows the system appearance; the surface color and the
+    /// stage's polarity follow the same flag.
     var darkAppearance = true
     /// Verification only: freeze temporal noise while inspecting optical transport.
     var rayPhaseLock: Float = -1

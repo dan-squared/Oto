@@ -76,12 +76,30 @@ enum OtoMarkSource {
         let cropRect: CGRect
     }
 
-    /// The icon as a plain image, cropped exactly as the shader crops it, so
+    /// The mark as a plain image, cropped exactly as the shader crops it, so
     /// it can take the shader's place once the light has become the mark.
     static let cropped: NSImage? = {
         guard let prepared, let image = OtoMarkSource.makeImage(prepared, cropped: true) else { return nil }
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }()
+
+    /// The same silhouette in one flat colour. The asset's bars are white, so
+    /// a light stage draws them in ink; the flying copy at the handoff uses
+    /// this too, or the mark would vanish against a light menu bar.
+    static func tinted(_ color: NSColor) -> NSImage? {
+        guard let cropped else { return nil }
+        let size = cropped.size
+        let image = NSImage(size: size)
+        image.lockFocus()
+        color.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        cropped.draw(
+            in: NSRect(origin: .zero, size: size), from: .zero,
+            operation: .destinationIn, fraction: 1
+        )
+        image.unlockFocus()
+        return image
+    }
 
     static let prepared: Prepared? = {
         guard let icon = OtoMarkSource.iconImage(),

@@ -19,11 +19,8 @@ final class OnboardingFlow: ObservableObject {
     let onFinish: () -> Void
 
     // Hold-key card state. `holdKind` mirrors the live config after every
-    // apply (single source stays in dispatch); messages are local.
+    // capture (single source stays in dispatch).
     @Published private(set) var holdKind: ShortcutTrigger.Kind
-    @Published var isRecording = false
-    @Published var holdMessage: String?
-    @Published var showSwap = false
     @Published private(set) var fnUsage = SystemFnUsage.unknown
 
     // Try-it field. Owned here so it survives a chapter transition.
@@ -48,7 +45,7 @@ final class OnboardingFlow: ObservableObject {
         switch self.stage.step {
         case .welcome: "Continue"
         case .how: self.stage.row < OnboardingStage.Step.how.rows - 1 ? "Next" : "Continue"
-        case .shortcut, .permissions, .speech: "Continue"
+        case .catcher, .shortcut, .permissions, .speech: "Continue"
         case .tryIt, .handoff: "Finish"
         }
     }
@@ -64,8 +61,10 @@ final class OnboardingFlow: ObservableObject {
             if self.stage.row < step.rows - 1 {
                 self.stage.open(row: self.stage.row + 1)
             } else {
-                self.stage.advance(to: .shortcut)
+                self.stage.advance(to: .catcher)
             }
+        case .catcher:
+            self.stage.advance(to: .shortcut)
         case .shortcut:
             self.stage.advance(to: .permissions)
         case .permissions:
@@ -85,8 +84,10 @@ final class OnboardingFlow: ObservableObject {
             break
         case .how:
             self.stage.advance(to: .welcome)
-        case .shortcut:
+        case .catcher:
             self.stage.advance(to: .how, row: OnboardingStage.Step.how.rows - 1)
+        case .shortcut:
+            self.stage.advance(to: .catcher)
         case .permissions:
             self.stage.advance(to: .shortcut)
         case .speech:
@@ -106,8 +107,7 @@ final class OnboardingFlow: ObservableObject {
     /// The window controller owns what finishing looks like (the mark flies
     /// to the menu bar); the flow only says the reader asked for it.
     func finish() {
-        self.dispatch.setSuspended(false)
-        self.isRecording = false
+        self.disarm()
         self.onFinish()
     }
 
@@ -121,71 +121,16 @@ final class OnboardingFlow: ObservableObject {
         Task { await self.uiState.refreshSpeech() }
     }
 
-    /// Toggle: clicking an armed field disarms it, so a recording can never
-    /// get stuck with no way out.
-    func arm() {
-        if self.isRecording {
-            self.dispatch.setSuspended(false)
-            self.isRecording = false
-        } else {
-            self.dispatch.setSuspended(true)
-            self.isRecording = true
-        }
-    }
-
+    /// Nothing of the flow is listening; dispatch is live again. Called when
+    /// the window goes and when the recorder closes.
     func disarm() {
         self.dispatch.setSuspended(false)
-        self.isRecording = false
     }
 
-    /// Immediate-apply save: the gate either saves (or no-ops on equality) or
-    /// refuses without saving — `.blocked` always keeps the old binding, so
-    /// the message + Swap path can never strand an empty slot.
-    func applyHold(kind: ShortcutTrigger.Kind) {
-        let result = self.dispatch.updateHoldTrigger(
-            ShortcutTrigger(kind: kind, interaction: .holdToTalk)
-        )
+    /// After the recorder closes: the card shows whatever the dispatch now
+    /// holds, so a second capture reads as a second capture.
+    func reloadHold() {
         self.holdKind = self.dispatch.configuration.hold.kind
-        if result == .blocked {
-            self.holdMessage = "Same as Hands-free — pick another or swap."
-            self.showSwap = true
-        } else {
-            self.holdMessage = nil
-            self.showSwap = false
-        }
-    }
-
-    func swapHoldAndHandsFree() {
-        self.dispatch.swapHoldAndHandsFree()
-        self.holdKind = self.dispatch.configuration.hold.kind
-        self.holdMessage = nil
-        self.showSwap = false
-    }
-
-    func captureCombo(modifiers: UInt32, keyCode: UInt32, conflicts: [RecorderConflict]) {
-        self.dispatch.setSuspended(false)
-        self.isRecording = false
-        if ShortcutRecorderConflicts.blocksSaving(conflicts) {
-            self.holdMessage = ShortcutRecorderConflicts.describe(conflicts)
-            self.showSwap = false
-            return
-        }
-        self.applyHold(kind: .combo(modifiers: modifiers, keyCode: keyCode))
-        if self.holdMessage == nil, !conflicts.isEmpty {
-            self.holdMessage = ShortcutRecorderConflicts.describe(conflicts)
-        }
-    }
-
-    func captureModifier(code: UInt16) {
-        self.dispatch.setSuspended(false)
-        self.isRecording = false
-        self.applyHold(kind: .modifierHold(keyCode: code))
-    }
-
-    func refuse(_ reason: RecorderInvalidReason) {
-        NSSound.beep()
-        self.holdMessage = reason.message
-        self.showSwap = false
     }
 
     // MARK: - Permissions and speech
@@ -195,6 +140,16 @@ final class OnboardingFlow: ObservableObject {
             _ = await self.uiState.ensureMicrophoneGrant()
             self.uiState.refreshPermissions()
         }
+    }
+
+    /// A denial has no prompt left: the row routes to the pane that can undo
+    /// it instead of ending the chapter at a dead status.
+    func openMicrophoneSettings() {
+        SettingsLinkOpener.open(MicSettingsLink.candidates())
+    }
+
+    func openSpeechSettings() {
+        SettingsLinkOpener.open(SpeechSettingsLink.candidates())
     }
 
     func openAccessibility() {

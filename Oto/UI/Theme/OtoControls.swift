@@ -241,71 +241,70 @@ struct OtoRecorderGlow: View {
     }
 }
 
-/// The compact shortcut face shared by Dictation and Intelligence rows.
-/// Its quiet well and keycaps match Firstlight; the glass belongs to the
-/// anchored recorder popover, never to the key faces themselves.
+/// The shortcut's face: one capsule holding the glyphs, the way macOS draws a
+/// key combination. No box per key and no clear button — a shortcut is one
+/// value, and Delete inside the recorder is how it is cleared. The glass and
+/// the red/green glow belong to the recorder popover, never to this face.
+struct OtoShortcutPill: View {
+    let chips: [String]
+    var placeholder: String?
+    var isRecording = false
+    /// Hover or active: the capsule brightens instead of growing a border.
+    var lit = false
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: compact ? 4 : 6) {
+            if isRecording {
+                Text("…and a key")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else if chips.isEmpty {
+                if let placeholder {
+                    Text(placeholder)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            } else {
+                ForEach(chips, id: \.self) { chip in
+                    Text(chip)
+                        .font(.system(size: compact ? 11 : 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, compact ? 8 : 12)
+        .frame(height: compact ? 20 : 26)
+        .background {
+            Capsule().fill(Color.primary.opacity(lit ? 0.11 : 0.065))
+        }
+        .contentShape(Capsule())
+    }
+}
+
+/// The compact shortcut face shared by Dictation and Intelligence rows: the
+/// capsule above, made pressable. The recorder rides a popover on the row.
 struct OtoShortcutField: View {
     let chips: [String]
     var isRecording = false
     var placeholder = "Record Shortcut"
     var recordLabel = "Record shortcut"
-    var clearHelp = "Remove shortcut"
-    var canClear = false
     let onRecord: () -> Void
-    var onClear: (() -> Void)? = nil
 
     @State private var hovering = false
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
-        HStack(spacing: 5) {
-            Button(action: onRecord) {
-                HStack(spacing: 4) {
-                    if isRecording {
-                        Text("…and a key")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    } else if chips.isEmpty {
-                        Text(placeholder)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        ForEach(chips, id: \.self) { chip in
-                            OtoKey(text: chip, compact: true)
-                        }
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isRecording ? "Recording shortcut" : recordLabel)
-
-            if canClear, !chips.isEmpty, let onClear {
-                Button(action: onClear) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(2)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .opacity(hovering ? 1 : 0.4)
-                .accessibilityLabel("Remove shortcut")
-                .help(clearHelp)
-            }
+        Button(action: onRecord) {
+            OtoShortcutPill(
+                chips: chips,
+                placeholder: placeholder,
+                isRecording: isRecording,
+                lit: hovering
+            )
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
-        .frame(minWidth: 84, minHeight: 22)
-        .background {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.primary.opacity(hovering && !isRecording ? 0.07 : 0.035))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(Color.primary.opacity(isRecording ? 0.3 : 0.12), lineWidth: 0.7)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .buttonStyle(.plain)
+        .accessibilityLabel(isRecording ? "Recording shortcut" : recordLabel)
         .onHover { hovering = $0 }
         .opacity(isEnabled ? 1 : 0.5)
     }

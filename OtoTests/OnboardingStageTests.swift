@@ -15,7 +15,7 @@ import Testing
 @MainActor
 struct OnboardingStepTests {
     @Test func chaptersAreTheStepsBetweenWelcomeAndHandoff() {
-        #expect(OnboardingStage.Step.chapters == [.how, .shortcut, .permissions, .speech, .tryIt])
+        #expect(OnboardingStage.Step.chapters == [.how, .catcher, .shortcut, .permissions, .speech, .tryIt])
         #expect(OnboardingStage.Step.allCases.first == .welcome)
         #expect(OnboardingStage.Step.allCases.last == .handoff)
         for step in OnboardingStage.Step.chapters {
@@ -26,7 +26,7 @@ struct OnboardingStepTests {
     }
 
     @Test func onlyTheShowingChapterWalksRows() {
-        #expect(OnboardingStage.Step.how.rows == 3)
+        #expect(OnboardingStage.Step.how.rows == 2)
         for step in OnboardingStage.Step.allCases where step != .how {
             #expect(step.rows == 0)
         }

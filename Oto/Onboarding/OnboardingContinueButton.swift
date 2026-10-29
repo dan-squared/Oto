@@ -87,8 +87,8 @@ struct OnboardingContinuePill: View {
                 .background(
                     LinearGradient(
                         colors: self.lit
-                            ? [Color(white: 0.90), Color(white: 0.82)]
-                            : [Color(white: 1), Color(white: 0.94)],
+                            ? [OnboardingTheme.pill.opacity(0.90), OnboardingTheme.pill.opacity(0.82)]
+                            : [OnboardingTheme.pill, OnboardingTheme.pill.opacity(0.94)],
                         startPoint: .top, endPoint: .bottom
                     ),
                     in: Capsule()
@@ -96,7 +96,7 @@ struct OnboardingContinuePill: View {
                 .overlay {
                     Capsule().strokeBorder(
                         LinearGradient(
-                            colors: [.white.opacity(0.95), .white.opacity(0.45)],
+                            colors: [OnboardingTheme.pill.opacity(0.95), OnboardingTheme.pill.opacity(0.45)],
                             startPoint: .top, endPoint: .bottom
                         ),
                         lineWidth: 1
@@ -109,7 +109,7 @@ struct OnboardingContinuePill: View {
         .focused(self.$focused)
         .overlay {
             if self.focused {
-                Capsule().stroke(.white.opacity(0.85), lineWidth: 2).padding(-4)
+                Capsule().stroke(OnboardingTheme.pillLabel.opacity(0.85), lineWidth: 2).padding(-4)
             }
         }
         .opacity(self.spec.isEnabled ? 1 : 0.6)
@@ -126,7 +126,7 @@ struct OnboardingContinuePill: View {
             OnboardingMorphLabel(self.spec.title)
                 .font(.system(size: 13, weight: .semibold))
         }
-        .foregroundStyle(.black)
+        .foregroundStyle(OnboardingTheme.pillLabel)
         .padding(.horizontal, 20)
         .frame(height: 36)
         .fixedSize()

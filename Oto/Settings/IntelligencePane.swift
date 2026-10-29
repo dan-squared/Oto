@@ -131,15 +131,9 @@ struct IntelligencePane: View {
                     chips: KeyNames.chips(for: kind),
                     isRecording: false,
                     recordLabel: "\(preset.displayName) shortcut, \(transformShortcutLabel(kind: kind)). Activate to record a new shortcut.",
-                    canClear: kind != .unassigned,
                     onRecord: {
                         transforms.stop()
                         recording = preset
-                    },
-                    onClear: {
-                        transforms.clearShortcut(for: preset)
-                        messages[preset] = nil
-                        refreshTransforms()
                     }
                 )
                 .disabled(othersRecording)

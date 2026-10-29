@@ -222,6 +222,16 @@ float logoReach(RayLogoUniforms logo,float scale) {
     return reach;
 }
 
+// The stage's polarity. Dark: additive light on a dark field, where the
+// tone-mapped radiance IS the colour. Light: the same density as ink on
+// paper, where a fully lit pixel hides the paper completely and a faint one
+// barely stains it. One number per pixel, opposite signs.
+float3 stageColor(float3 tone,float3 base,bool dark) {
+    if (dark) return tone;
+    float density = clamp(max(tone.r,max(tone.g,tone.b)),0.0,1.0);
+    return base*(1.0-density);
+}
+
 float logoAssetMask(float4 ink,float2 uv) {
     float peak = max(ink.r,max(ink.g,ink.b));
     float mask = smoothstep(0.012,0.07,peak)*ink.a;
@@ -628,6 +638,10 @@ fragment half4 rayCompositeFragment(VertexOutput in [[stage_in]],
                                     texture2d<float> logoColor [[texture(2)]]) {
     float2 pixel = in.position.xy;
     float2 uv = pixel/u.resolution;
+    // transition.z has carried the appearance since the port; nothing read it
+    // until the stage learned to invert.
+    bool dark = transition.z > 0.5;
+    float3 base = surface.rgb;
     constexpr sampler s(coord::normalized,address::clamp_to_edge,filter::linear);
     float4 directLight = float4(radiance.read(uint2(pixel)));
     float4 light = directLight;
@@ -708,7 +722,7 @@ fragment half4 rayCompositeFragment(VertexOutput in [[stage_in]],
     bool flow = int(transition.x) == 1;
     float reveal = flow ? smoother(1.70,2.20,u.time) : smoother(2.25,3.25,u.time);
     float opacity = transition.w >= 0 ? transition.w : mix(1.0,surface.a,reveal);
-    float3 emitted = color*opacity;
+    float3 emitted = stageColor(color,base,dark)*opacity;
     if (logo.options.x > 0.5) {
         float2 extent = fit*0.60;
         float2 centered = p-u.targetOffset-logo.frame.xy;
@@ -735,7 +749,7 @@ fragment half4 rayCompositeFragment(VertexOutput in [[stage_in]],
         float support = mix(1.0,attachedMask,shape);
         opacity = support*mix(1.0,logo.ending.y,pow(gather,0.72));
         opacity *= 1.0-exp(-max(light.r,max(light.g,light.b))*6.0);
-        emitted = color*opacity;
+        emitted = stageColor(color,base,dark)*opacity;
 
         // The shader is already wholly contained by the original silhouette;
         // pigment only replaces its moving light with the asset's exact color.
@@ -745,7 +759,8 @@ fragment half4 rayCompositeFragment(VertexOutput in [[stage_in]],
         float pigment = logoSpatialClip(pigmentProgress,centered,extent,int(logo.options.z));
         if (pigment > 0.0) {
             float rayOpacity = opacity;
-            emitted = mix(color*rayOpacity,ink.rgb*assetMask,pigment);
+            emitted = mix(stageColor(color,base,dark)*rayOpacity,
+                          dark ? ink.rgb*assetMask : float3(0.0),pigment);
             opacity = mix(rayOpacity,assetMask,pigment);
             // End on the original asset's exact colors. No shader tint,
             // exposure adjustment, glint or animated modulation survives.

@@ -127,8 +127,8 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         native.titlebarAppearsTransparent = true
         native.titlebarSeparatorStyle = .none
         // The form must remain readable even before Metal presents a frame,
-        // especially when reopening skips the animated intro.
-        native.appearance = NSAppearance(named: .darkAqua)
+        // especially when reopening skips the animated intro. The window
+        // follows the system appearance; the shader is told the same thing.
         native.backgroundColor = .windowBackgroundColor
         native.isOpaque = true
         native.hasShadow = true
@@ -214,7 +214,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
             guard !reduceMotion,
                   let start = self.headerMarkScreenRect(),
                   let screen = self.window?.screen ?? NSScreen.main,
-                  let image = OtoMarkSource.cropped
+                  let image = OtoMarkSource.tinted(Self.ink)
             else {
                 self.complete()
                 return
@@ -246,6 +246,16 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     }
 
     // MARK: Private
+
+    /// The system appearance at the moment the window is built.
+    private static var isDark: Bool {
+        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    /// The mark's own colour: white bars on a dark stage, ink on paper.
+    private static var ink: NSColor {
+        NSColor(white: Self.isDark ? 0.93 : 0.09, alpha: 1)
+    }
 
     private let dispatch: ShortcutDispatch
     private let uiState: SettingsUIState
@@ -307,7 +317,8 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                     defer: false
                 )
                 dimmer.title = "Oto Desktop Dimmer"
-                dimmer.backgroundColor = .black
+                // A dark veil over a dark desktop, a light one over paper.
+                dimmer.backgroundColor = Self.isDark ? .black : .white
                 dimmer.isOpaque = false
                 dimmer.hasShadow = false
                 dimmer.alphaValue = 0

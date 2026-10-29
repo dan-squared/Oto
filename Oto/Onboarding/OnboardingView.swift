@@ -11,6 +11,7 @@
 //  Owns no services: the flow owns dispatch and the shared SettingsUIState.
 //
 
+import AppKit
 import SwiftUI
 
 struct OnboardingView: View {
@@ -60,11 +61,16 @@ struct OnboardingView: View {
             }
         }
         .fontDesign(.rounded)
-        // The intro is always dark, whatever the system appearance: one look.
-        .preferredColorScheme(.dark)
+        // A native window: the stage follows the system appearance, and the
+        // shader inverts with it (light on a dark field, ink on paper).
         .ignoresSafeArea()
         .task { self.flow.load() }
         .onDisappear { self.flow.disarm() }
+        // A grant made in System Settings is only visible once the person
+        // comes back; the chapter must not stay on the old status.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.flow.uiState.refreshPermissions()
+        }
         // The tap that closes the rise: felt as the pair lands in the header,
         // a little before its spring is over.
         .onChange(of: self.pairRisen) { _, risen in
@@ -133,7 +139,7 @@ struct OnboardingView: View {
                 VStack(spacing: spacing) {
                     Text("Hold a key, speak anywhere, release — your words land where you type.")
                         .font(.system(size: compact ? 14 : 15))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(OnboardingTheme.muted)
                         .multilineTextAlignment(.center)
                         .lineSpacing(2)
                         .padding(.horizontal, 28)
@@ -193,7 +199,7 @@ struct OnboardingView: View {
                 }
             }
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(OnboardingTheme.ink)
         .animation(OnboardingStage.stepAnimation, value: self.stage.isWelcome)
     }
 }
@@ -223,7 +229,10 @@ private struct WelcomePair: View, Animatable {
         ZStack {
             // The plain image of the asset, in the rect the shader's mark had.
             if self.markOpacity > 0, let mark = OtoMarkSource.cropped {
+                // The asset is white bars; as a template it takes the stage's
+                // ink, so it reads on a dark field and on paper alike.
                 Image(nsImage: mark)
+                    .renderingMode(.template)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: slot.width, height: slot.height)

@@ -43,11 +43,12 @@ struct OnboardingChapterCopy {
                         symbol: "hand.tap", title: "Hands-free",
                         detail: "Double-tap the same key for long talks. Press again to stop."
                     ),
-                    .init(
-                        symbol: "tray.full", title: "Never lose words",
-                        detail: "No text field? The catcher keeps the transcript — one click to copy."
-                    ),
                 ]
+            )
+        case .catcher:
+            .init(
+                tag: "Never lose words", symbol: "tray.full", title: "Nothing gets lost",
+                subtitle: "No text field? The catcher keeps the transcript — one click to copy."
             )
         case .shortcut:
             .init(
@@ -120,7 +121,7 @@ struct OnboardingChaptersView: View {
             }
             .frame(width: size.width, height: size.height)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(OnboardingTheme.ink)
         .animation(OnboardingStage.stepAnimation, value: self.stage.step)
     }
 
@@ -154,9 +155,9 @@ struct OnboardingChaptersView: View {
                 Text(copy.tag).font(.system(size: 12, weight: .medium))
             }
             .padding(.horizontal, 10).frame(height: 24)
-            .foregroundStyle(copy.rows.isEmpty ? Color.white.opacity(0.7) : Color.white)
+            .foregroundStyle(copy.rows.isEmpty ? OnboardingTheme.tagIdleText : OnboardingTheme.ink)
             .background(
-                copy.rows.isEmpty ? Color.white.opacity(0.08) : Color.white.opacity(0.16),
+                copy.rows.isEmpty ? OnboardingTheme.tagIdle : OnboardingTheme.tagActive,
                 in: Capsule()
             )
             Text(copy.title)
@@ -168,7 +169,7 @@ struct OnboardingChaptersView: View {
                 .accessibilityAddTraits(.isHeader)
             Text(copy.subtitle)
                 .font(.system(size: compact ? 14 : 15))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(OnboardingTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 8)
             if !copy.rows.isEmpty {
@@ -197,7 +198,9 @@ struct OnboardingChaptersView: View {
     private func thing(for step: OnboardingStage.Step) -> some View {
         switch step {
         case .how:
-            OnboardingFlowBarPreview(row: self.stage.row)
+            OnboardingFlowBarPreview(row: self.stage.row, chips: KeyNames.chips(for: self.flow.holdKind))
+        case .catcher:
+            OnboardingCatcherPlate()
         case .shortcut:
             OnboardingShortcutPlate(flow: self.flow)
         case .permissions:
@@ -262,10 +265,10 @@ struct OnboardingProgressDashes: View {
                 let width: CGFloat = current ? (chapter.rows > 0 ? 42 : 28) : 12
                 let share: CGFloat = chapter < self.step ? 1 : !current ? 0 :
                     chapter.rows > 0 ? (CGFloat(self.row) + self.dwell) / CGFloat(chapter.rows) : 1
-                Capsule().fill(.white.opacity(0.18))
+                Capsule().fill(OnboardingTheme.dashTrack)
                     .frame(width: width, height: 4)
                     .overlay(alignment: .leading) {
-                        Capsule().fill(.white.opacity(0.92)).frame(width: width * share, height: 4)
+                        Capsule().fill(OnboardingTheme.dashFill).frame(width: width * share, height: 4)
                     }
                     .clipShape(Capsule())
                     .contentShape(Rectangle().inset(by: -6))
@@ -299,14 +302,14 @@ struct OnboardingChapterRows: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 10) {
                         OnboardingGlyph(name: row.symbol, size: 18)
-                            .foregroundStyle(Color.white.opacity(0.8))
+                            .foregroundStyle(OnboardingTheme.muted)
                             .frame(width: 20)
                         Text(row.title).font(.system(size: 14, weight: .medium))
                     }
                     if isOpen {
                         Text(row.detail)
                             .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(OnboardingTheme.muted)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.leading, 30)
                             .transition(.opacity.combined(with: .offset(y: -4)))
@@ -317,7 +320,7 @@ struct OnboardingChapterRows: View {
                 .background {
                     if isOpen {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(.white.opacity(0.07))
+                            .fill(OnboardingTheme.card)
                             .matchedGeometryEffect(id: "open", in: self.surface)
                     }
                 }
@@ -385,11 +388,11 @@ struct OnboardingCard<Content: View>: View {
             .frame(maxWidth: 430, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.white.opacity(0.055))
+                    .fill(OnboardingTheme.card)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+                    .strokeBorder(OnboardingTheme.cardEdge, lineWidth: 1)
             )
     }
 }
@@ -405,7 +408,7 @@ struct OnboardingPreviewPlate<Content: View>: View {
         GeometryReader { proxy in
             let scale = min(1, (proxy.size.width - 32) / self.width, (proxy.size.height - 32) / self.height)
             ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.white.opacity(0.04))
+                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(OnboardingTheme.card.opacity(0.7))
                 self.content()
                     .frame(width: self.width, height: self.height)
                     .scaleEffect(max(scale, 0.5))

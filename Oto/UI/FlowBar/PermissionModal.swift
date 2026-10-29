@@ -45,6 +45,29 @@ enum MicSettingsLink {
     }
 }
 
+/// The same three-step ladder for speech recognition: the pane anchor first,
+/// then the Privacy list, then System Settings itself.
+enum SpeechSettingsLink {
+    nonisolated static func candidates() -> [URL] {
+        [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy",
+            "x-apple.systempreferences:",
+        ].compactMap(URL.init(string:))
+    }
+}
+
+/// Opens the first candidate System Settings URL that the system accepts.
+/// One call, no retries: a pane anchor that opens is the right pane.
+enum SettingsLinkOpener {
+    @MainActor
+    static func open(_ candidates: [URL]) {
+        for url in candidates {
+            if NSWorkspace.shared.open(url) { break }
+        }
+    }
+}
+
 /// The card itself: clear container + one shape layer + label + real button.
 /// No self-drawn shadow (window owns depth — pill v5 gotcha); no hosting view
 /// (pill v2 frame-bug class — never again).

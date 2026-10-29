@@ -14,10 +14,11 @@ import Speech
 import SwiftUI
 
 /// What the first chapter shows while its rows are read: the Flow Bar pill,
-/// the hands-free hint, or the catcher — one at a time, where the words are
-/// pointing.
+/// or the hands-free hint — one at a time, where the words are pointing.
 struct OnboardingFlowBarPreview: View {
     let row: Int
+    /// The live hold key, so the preview teaches the real gesture.
+    var chips: [String] = []
 
     var body: some View {
         OnboardingPreviewPlate(width: 390, height: 300) {
@@ -25,8 +26,7 @@ struct OnboardingFlowBarPreview: View {
                 Spacer(minLength: 0)
                 switch self.row {
                 case 0: self.listening
-                case 1: self.handsFree
-                default: self.catcher
+                default: self.handsFree
                 }
                 Spacer(minLength: 0)
             }
@@ -47,44 +47,15 @@ struct OnboardingFlowBarPreview: View {
     private var handsFree: some View {
         VStack(spacing: 18) {
             self.pill(title: "Hands-free")
-            HStack(spacing: 6) {
-                ForEach(0..<2, id: \.self) { _ in
-                    Text("⌥")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 22, height: 22)
-                        .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                }
+            HStack(spacing: 8) {
+                // The key twice, as one capsule: the gesture is the repetition.
+                let chips = self.chips.isEmpty ? ["⌥"] : self.chips
+                OtoShortcutPill(chips: chips + chips, compact: true)
                 Text("tap twice, talk, press again")
                     .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(OnboardingTheme.muted)
             }
         }
-    }
-
-    private var catcher: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "tray.full")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.8))
-                Text("No text field")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-            }
-            Text("Oto kept your words. Copy them anywhere.")
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.55))
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Copy")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.black)
-                .padding(.horizontal, 14).frame(height: 28)
-                .background(.white, in: Capsule())
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func pill(title: String) -> some View {
@@ -92,108 +63,122 @@ struct OnboardingFlowBarPreview: View {
             HStack(spacing: 2.5) {
                 ForEach(Array([8, 14, 22, 30, 22, 14, 8].enumerated()), id: \.offset) { _, height in
                     Capsule()
-                        .fill(.white)
+                        .fill(OnboardingTheme.ink)
                         .frame(width: 2.5, height: CGFloat(height))
                 }
             }
             Text(title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white)
+                .foregroundStyle(OnboardingTheme.ink)
                 .contentTransition(.opacity)
         }
         .padding(.horizontal, 16).frame(height: 34)
-        .background(.white.opacity(0.10), in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1))
+        .background(OnboardingTheme.card, in: Capsule())
+        .overlay(Capsule().strokeBorder(OnboardingTheme.fieldEdge, lineWidth: 1))
     }
 
     private func field(text: String) -> some View {
         HStack(spacing: 2) {
             Text(text)
                 .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(OnboardingTheme.muted)
             Rectangle()
-                .fill(.white.opacity(0.8))
+                .fill(OnboardingTheme.ink.opacity(0.8))
                 .frame(width: 1, height: 13)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
-        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .background(OnboardingTheme.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+                .strokeBorder(OnboardingTheme.divider, lineWidth: 1)
         )
     }
 }
 
-/// The hold key, recorded for real.
+/// The catcher, given the room to be read: the card that keeps the words when
+/// there is nowhere to paste them. Built from the real card's palette, so it
+/// is the thing itself and not a picture of it.
+struct OnboardingCatcherPlate: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let palette = CatcherPalette.current(self.scheme)
+        OnboardingPreviewPlate(width: 390, height: 300) {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "tray.full")
+                            .font(.system(size: 13))
+                            .foregroundStyle(palette.dim)
+                        Text("No text field")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(palette.ink)
+                        Spacer(minLength: 8)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(palette.dim)
+                    }
+                    Text("Oto kept your words. Copy them anywhere.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(palette.transcript)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Copy")
+                        .font(.system(size: 12, weight: .semibold))
+                        // Both palettes put a dark fill behind the label: a
+                        // grey card in Dark Mode, solid ink in Light Mode.
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14).frame(height: 28)
+                        .background(palette.copyBackground, in: Capsule())
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(OnboardingTheme.cardEdge, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(palette.shadowOpacity), radius: 18, y: 8)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 30)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The hold key, recorded for real — the Settings recorder, glass and glow and
+/// all, opened from the same field the Settings row uses.
 struct OnboardingShortcutPlate: View {
     @ObservedObject var flow: OnboardingFlow
+
+    @State private var recorderShown = false
 
     var body: some View {
         OnboardingCard {
             VStack(alignment: .leading, spacing: 14) {
-                KeycapField(
-                    chips: KeyNames.chips(for: self.flow.holdKind),
-                    isRecording: self.flow.isRecording,
-                    disabled: false,
-                    emptyPlaceholder: "Click to record…",
-                    trashHelp: "Oto always needs a hold key",
-                    onArm: { self.flow.arm() },
-                    onTrash: {
-                        self.flow.holdMessage = "Oto needs a hold key — pick one."
-                        self.flow.showSwap = false
-                    },
-                    recorder: ShortcutRecorderModifier(
-                        isListening: Binding(
-                            get: { self.flow.isRecording },
-                            set: { self.flow.isRecording = $0 }
-                        ),
-                        onCapture: { modifiers, keyCode, conflicts in
-                            self.flow.captureCombo(modifiers: modifiers, keyCode: keyCode, conflicts: conflicts)
-                        },
-                        onCaptureModifier: { code in self.flow.captureModifier(code: code) },
-                        onClear: { self.flow.disarm() },
-                        onCancel: { self.flow.disarm() },
-                        onInvalid: { reason in self.flow.refuse(reason) }
+                HStack(spacing: 10) {
+                    Text("Push to talk")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(OnboardingTheme.ink)
+                    Spacer(minLength: 12)
+                    OtoShortcutField(
+                        chips: KeyNames.chips(for: self.flow.holdKind),
+                        recordLabel: "Record push-to-talk key",
+                        onRecord: { self.recorderShown = true }
                     )
-                )
-
-                // Sided modifier menu. The recorder above already covers
-                // combos and bare modifiers; the menu is the sided picker.
-                Menu {
-                    ForEach(KeyNames.holdOptions, id: \.code) { option in
-                        Button(option.label) {
-                            self.flow.applyHold(kind: .modifierHold(keyCode: option.code))
-                        }
-                    }
-                } label: {
-                    Text("Hold key: \(KeyNames.holdMenuLabel(for: self.flow.holdKind))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                .menuStyle(.borderlessButton)
-                .help("Choose which key to hold")
-
-                if let message = self.flow.holdMessage {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.orange)
-                        Text(message)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.white.opacity(0.6))
-                            .fixedSize(horizontal: false, vertical: true)
-                        if self.flow.showSwap {
-                            Spacer(minLength: 6)
-                            Button("Swap") { self.flow.swapHoldAndHandsFree() }
-                                .buttonStyle(.link)
-                                .font(.system(size: 11.5))
+                    .help("Click to record a shortcut")
+                    .popover(isPresented: self.$recorderShown, arrowEdge: .top) {
+                        ShortcutCapturePopover(dispatch: self.flow.dispatch, slot: .hold) {
+                            self.recorderShown = false
+                            self.flow.reloadHold()
                         }
                     }
                 }
 
-                Divider().overlay(.white.opacity(0.10))
+                Divider().overlay(OnboardingTheme.divider)
 
                 // Derived, non-editable double-tap row: always the hold key,
                 // whatever it is — the always-on path with zero setup.
@@ -201,27 +186,34 @@ struct OnboardingShortcutPlate: View {
                     HStack(spacing: 4) {
                         Text("Double tap")
                             .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.55))
-                        ForEach(KeyNames.chips(for: self.flow.holdKind), id: \.self) { chip in
-                            OtoKey(text: chip)
-                        }
+                            .foregroundStyle(OnboardingTheme.muted)
+                        OtoShortcutPill(
+                            chips: KeyNames.chips(for: self.flow.holdKind),
+                            compact: true
+                        )
+                        Text("for hands-free")
+                            .font(.system(size: 12))
+                            .foregroundStyle(OnboardingTheme.muted)
                     }
-                    if case .modifierHold(let code) = self.flow.holdKind, code == UInt16(kVK_Function) {
-                        Text(SystemFnUsage.caption(for: self.flow.fnUsage))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.45))
-                    } else {
-                        Text("An extra hands-free key lives in Settings.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.45))
-                    }
+                    Text(self.caption)
+                        .font(.system(size: 11))
+                        .foregroundStyle(OnboardingTheme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
+
+    private var caption: String {
+        if case .modifierHold(let code) = self.flow.holdKind, code == UInt16(kVK_Function) {
+            return SystemFnUsage.caption(for: self.flow.fnUsage)
+        }
+        return "An extra hands-free key lives in Settings."
+    }
 }
 
-/// The three grants, live.
+/// The three grants, live. Every row can be acted on in every state: a denial
+/// is a route to System Settings, never a dead end.
 struct OnboardingPermissionsPlate: View {
     @ObservedObject var flow: OnboardingFlow
 
@@ -231,14 +223,18 @@ struct OnboardingPermissionsPlate: View {
                 self.row(
                     icon: "mic",
                     title: "Microphone",
-                    status: self.micStatusText,
-                    actionTitle: self.flow.uiState.micPermission == .notDetermined ? "Allow" : nil,
-                    action: { self.flow.grantMicrophone() }
+                    status: self.flow.uiState.micText,
+                    guidance: self.flow.uiState.micDeniedGuidance,
+                    actionTitle: self.micActionTitle,
+                    action: { self.micAction() }
                 )
                 self.row(
                     icon: "accessibility",
                     title: "Accessibility",
                     status: self.flow.uiState.axTrusted ? "Allowed" : "Not allowed",
+                    guidance: self.flow.uiState.axTrusted
+                        ? nil
+                        : "Needed to type into other apps. Turn Oto on in the list.",
                     actionTitle: self.flow.uiState.axTrusted ? nil : "Open Settings",
                     action: { self.flow.openAccessibility() }
                 )
@@ -246,46 +242,70 @@ struct OnboardingPermissionsPlate: View {
                     icon: "checkmark.bubble",
                     title: "Speech recognition",
                     status: self.flow.uiState.speechText,
-                    actionTitle: self.flow.uiState.speechPermission == .notDetermined ? "Allow" : nil,
                     guidance: self.flow.uiState.speechDeniedGuidance,
-                    action: { self.flow.grantSpeech() }
+                    actionTitle: self.speechActionTitle,
+                    action: { self.speechAction() }
                 )
             }
         }
     }
 
-    /// Onboarding's mic-denied copy keeps its guidance suffix; the shared
-    /// model carries the bare status ("Denied") for the panes.
-    private var micStatusText: String {
-        self.flow.uiState.micPermission == .denied
-            ? "Denied — allow it in System Settings."
-            : self.flow.uiState.micText
+    private var micActionTitle: String? {
+        switch self.flow.uiState.micPermission {
+        case .granted: nil
+        case .denied: "Open Settings"
+        case .notDetermined, nil: "Allow"
+        }
+    }
+
+    private func micAction() {
+        switch self.flow.uiState.micPermission {
+        case .denied: self.flow.openMicrophoneSettings()
+        default: self.flow.grantMicrophone()
+        }
+    }
+
+    private var speechActionTitle: String? {
+        switch self.flow.uiState.speechPermission {
+        case .authorized: nil
+        case .denied, .restricted: "Open Settings"
+        case .notDetermined, nil: "Allow"
+        @unknown default: "Open Settings"
+        }
+    }
+
+    private func speechAction() {
+        switch self.flow.uiState.speechPermission {
+        case .denied, .restricted: self.flow.openSpeechSettings()
+        case .authorized: break
+        default: self.flow.grantSpeech()
+        }
     }
 
     private func row(
         icon: String,
         title: String,
         status: String,
+        guidance: String?,
         actionTitle: String?,
-        guidance: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 15))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(OnboardingTheme.muted)
                 .frame(width: 22, height: 22, alignment: .top)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(OnboardingTheme.ink)
                 Text(status)
                     .font(.system(size: 11.5))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(OnboardingTheme.muted)
                 if let guidance {
                     Text(guidance)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(OnboardingTheme.faint)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -294,11 +314,11 @@ struct OnboardingPermissionsPlate: View {
                 Button(actionTitle, action: action)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .tint(.white)
+                    .tint(OnboardingTheme.pill)
             } else {
                 Image(systemName: "checkmark")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(OnboardingTheme.ink.opacity(0.9))
                     .frame(width: 18, height: 18)
             }
         }
@@ -319,7 +339,7 @@ struct OnboardingSpeechPlate: View {
                         self.status(text: "Ready", tone: .ok)
                         Text(self.flow.uiState.languageText)
                             .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundStyle(OnboardingTheme.muted)
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 12) {
@@ -327,7 +347,7 @@ struct OnboardingSpeechPlate: View {
                             self.status(text: "Not prepared yet", tone: .idle)
                             Text(self.flow.uiState.prepareFeedback ?? "Works offline once prepared.")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.white.opacity(0.55))
+                                .foregroundStyle(OnboardingTheme.muted)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Button(
@@ -336,14 +356,14 @@ struct OnboardingSpeechPlate: View {
                         )
                         .buttonStyle(.borderedProminent)
                         .controlSize(.regular)
-                        .tint(.white)
+                        .tint(OnboardingTheme.pill)
                         .disabled(self.flow.uiState.isPreparing)
                     }
                 }
 
                 Text("Nothing is uploaded — the language model is downloaded once and runs on this Mac.")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(OnboardingTheme.faint)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -354,7 +374,8 @@ struct OnboardingSpeechPlate: View {
     }
 }
 
-/// The trial field. The same field the ready page used, on the chapter plate.
+/// The trial field: the same place the words land, at the size of a field
+/// rather than a page.
 struct OnboardingTryPlate: View {
     @ObservedObject var flow: OnboardingFlow
 
@@ -364,22 +385,32 @@ struct OnboardingTryPlate: View {
                 HStack(spacing: 6) {
                     Image(systemName: "text.cursor")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(OnboardingTheme.muted)
                     Text("Hold your key and speak")
                         .font(.system(size: 11.5))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(OnboardingTheme.muted)
                 }
-                TextEditor(text: self.$flow.trialText)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white)
-                    .scrollContentBackground(.hidden)
-                    .frame(height: 150)
-                    .padding(8)
-                    .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                    )
+                ZStack(alignment: .topLeading) {
+                    if self.flow.trialText.isEmpty {
+                        Text("Your words land here.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(OnboardingTheme.faint)
+                            .padding(.horizontal, 13)
+                            .padding(.top, 9)
+                            .allowsHitTesting(false)
+                    }
+                    TextEditor(text: self.$flow.trialText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(OnboardingTheme.ink)
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 92)
+                        .padding(8)
+                        .background(OnboardingTheme.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(OnboardingTheme.fieldEdge, lineWidth: 1)
+                        )
+                }
             }
         }
     }

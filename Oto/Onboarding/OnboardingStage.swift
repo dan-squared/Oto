@@ -20,6 +20,8 @@ final class OnboardingStage: ObservableObject {
         case welcome
         /// Shown, not asked: what Oto does, one row at a time.
         case how
+        /// Shown: the catcher, given the room to be understood.
+        case catcher
         /// Asked: the hold key. The recorder applies immediately.
         case shortcut
         /// Asked: the three permissions dictation needs.
@@ -32,14 +34,14 @@ final class OnboardingStage: ObservableObject {
         case handoff
 
         /// The chapters, in order: what the dashes in the footer count.
-        static let chapters: [Step] = [.how, .shortcut, .permissions, .speech, .tryIt]
+        static let chapters: [Step] = [.how, .catcher, .shortcut, .permissions, .speech, .tryIt]
 
         var isChapter: Bool { Self.chapters.contains(self) }
 
         /// A chapter that shows has rows to step through; one that asks has none.
         var rows: Int {
             switch self {
-            case .how: 3
+            case .how: 2
             default: 0
             }
         }
