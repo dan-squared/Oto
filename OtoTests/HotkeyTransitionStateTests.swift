@@ -130,7 +130,26 @@ struct ModifierHoldStateTests {
     @Test func releaseAfterOtherActivityIsSwallowed() {
         var state = ModifierHoldState()
         #expect(state.step(.flags(down: true)) == .keyDown(isRepeat: false))
-        #expect(state.step(.otherActivity) == nil)
+        #expect(state.step(.otherActivity(usesHeldModifier: true)) == nil)
+        #expect(state.step(.flags(down: false)) == nil)
+    }
+
+    @Test func independentActivityKeepsTheHoldAlive() {
+        // ⌘1 while Right ⌥ is held: the chord does not use Option, so the
+        // hold is still a plain hold and finishes normally on release.
+        var state = ModifierHoldState()
+        #expect(state.step(.flags(down: true)) == .keyDown(isRepeat: false))
+        #expect(state.step(.otherActivity(usesHeldModifier: false)) == nil)
+        #expect(state.step(.flags(down: false)) == .keyUp)
+    }
+
+    @Test func independentActivityThenCombinationStillSwallows() {
+        // Independence early does not immunise the hold: a later chord that
+        // does use Option still wins.
+        var state = ModifierHoldState()
+        #expect(state.step(.flags(down: true)) == .keyDown(isRepeat: false))
+        #expect(state.step(.otherActivity(usesHeldModifier: false)) == nil)
+        #expect(state.step(.otherActivity(usesHeldModifier: true)) == nil)
         #expect(state.step(.flags(down: false)) == nil)
     }
 
@@ -148,7 +167,7 @@ struct ModifierHoldStateTests {
 
     @Test func activityWhileUpIsIgnored() {
         var state = ModifierHoldState()
-        #expect(state.step(.otherActivity) == nil)
+        #expect(state.step(.otherActivity(usesHeldModifier: true)) == nil)
         #expect(state.step(.flags(down: true)) == .keyDown(isRepeat: false))
     }
 

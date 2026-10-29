@@ -263,12 +263,23 @@ struct TransformTests {
 
     // MARK: - Dispatch scope (serial, suspend, live veto)
 
+    /// Mutable "is dictation live" answer, so a cancel hook can flip it the
+    /// way `DictationCoordinator.cancelHoldForCombination` does.
+    private actor LiveFlag {
+        private var live: Bool
+        init(_ live: Bool) { self.live = live }
+        func set(_ value: Bool) { live = value }
+        var value: Bool { live }
+    }
+
     private func makeDispatch(
         selection: String? = "helo wrld",
         chunks: [String] = ["Hello world."],
         dictationLive: @escaping @Sendable () async -> Bool = { false },
         cancelLog: HookLog? = nil,
-        suspendLog: HookLog? = nil
+        suspendLog: HookLog? = nil,
+        liveFlag: LiveFlag? = nil,
+        cancelReturns: Bool = true
     ) -> (TransformDispatch, FakeTextInsertion, FakePolishService, FakeSelectionGrabber) {
         let grabber = FakeSelectionGrabber()
         grabber.selection = selection
@@ -288,7 +299,12 @@ struct TransformTests {
             runner: runner,
             dictationLive: dictationLive,
             dictationKinds: { (holdOpt, .unassigned) },
-            cancelFreshMicroSession: { cancelLog?.bump() },
+            cancelHoldForCombination: {
+                cancelLog?.bump()
+                guard cancelReturns else { return false }
+                await liveFlag?.set(false)
+                return true
+            },
             setDictationSuspended: { suspended in suspendLog?.record(suspended) }
         )
         return (dispatch, inserter, polish, grabber)
@@ -316,19 +332,35 @@ struct TransformTests {
     }
 
     @Test func liveDictationVetoesTransform() async {
-        // Recording: press ignored — no grab, no stream, no suspend. The
-        // combo-wins cancel hook still fires first by design (it is the
-        // safety net; with no micro-session it no-ops inside the
-        // coordinator), then the live check vetoes before anything runs.
-        let suspends = HookLog()
+        // Cross-family live session: the hold is not cancelled (returns
+        // false), so the live check vetoes before anything runs.
+        let cancels = HookLog()
         let (dispatch, _, polish, grabber) = makeDispatch(
-            dictationLive: { true }, suspendLog: suspends
+            dictationLive: { true }, cancelLog: cancels, cancelReturns: false
         )
         dispatch.fireForTests(.polish)
         try? await Task.sleep(for: .milliseconds(300))
         #expect(grabber.grabs == 0)
         #expect(polish.prompts.isEmpty)
-        #expect(suspends.values().isEmpty)
+        #expect(cancels.values().count == 1)
+    }
+
+    @Test func sameFamilyChordCancelsHoldAndTransformProceeds() async {
+        // The combination proves the hold lost, so the cancel is
+        // deterministic at any age: once it returns, the live veto must not
+        // fire (no more "both actions lost" race).
+        let flag = LiveFlag(true)
+        let cancels = HookLog()
+        let (dispatch, inserter, _, _) = makeDispatch(
+            dictationLive: { await flag.value },
+            cancelLog: cancels,
+            liveFlag: flag
+        )
+        #expect(await flag.value)
+        dispatch.fireForTests(.polish)
+        #expect(await waitForReplaces(inserter, count: 1))
+        #expect(cancels.values().count == 1)
+        #expect(await flag.value == false)
     }
 
     // MARK: - Save gate

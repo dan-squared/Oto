@@ -224,4 +224,119 @@ struct HIDDecideDualTests {
         #expect(clean.combination == nil)
         #expect(clean.emit == .keyUp)
     }
+
+    // MARK: - Scoped combination rule (a chord must use the held modifier)
+
+    @Test func crossFamilyChordDoesNotDisqualifyTheHold() {
+        // The reported failure: hold Right ⌥ to dictate, press ⌘1 (a
+        // transform). Command is independent of the held Option, so the
+        // hold survives and its release finishes dictation.
+        let monitor = dualMonitor()
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        let chord = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_1),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        #expect(chord.combination == nil)
+        let release = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: []
+        )
+        #expect(release.emit == .keyUp)
+        #expect(monitor.isInCombination(code: UInt16(kVK_RightOption)) == false)
+    }
+
+    @Test func sameFamilyChordStillDisqualifiesTheHold() {
+        // ⌥U (dead key) uses the held Option: the hold loses, exactly as
+        // before — typing `•` must never dictate.
+        let monitor = dualMonitor()
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        let chord = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_U),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        #expect(chord.combination == .hold)
+        #expect(monitor.isInCombination(code: UInt16(kVK_RightOption)) == true)
+        let release = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: []
+        )
+        #expect(release.emit == nil)
+    }
+
+    @Test func rightCommandHoldIsDisqualifiedByCommandChord() {
+        // Re-binding hold to Right ⌘ inverts the matrix correctly: ⌘1 is
+        // then a same-family chord and wins.
+        let monitor = dualMonitor()
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightCommand),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        let chord = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_1),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        #expect(chord.combination == .handsFree)
+        let release = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightCommand),
+            isRepeat: false, flags: []
+        )
+        #expect(release.emit == nil)
+    }
+
+    @Test func modifiedClickDisqualifiesButPlainClickDoesNot() {
+        // ⌥-click consumes the held Option; a plain click is independent.
+        let monitor = dualMonitor()
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        let plain = monitor.decideRouted(
+            type: .leftMouseDown, keyCode: 0, isRepeat: false, flags: []
+        )
+        #expect(plain.combination == nil)
+        #expect(monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: []
+        ).emit == .keyUp)
+
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        let modified = monitor.decideRouted(
+            type: .leftMouseDown, keyCode: 0, isRepeat: false, flags: [.maskAlternate]
+        )
+        #expect(modified.combination == .hold)
+        #expect(monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: []
+        ).emit == nil)
+    }
+
+    @Test func fnHoldIsStillDisqualifiedByFnChord() {
+        // Regression guard: fn+arrow carries maskSecondaryFn and must stay a
+        // combination (system gesture), never a dictation tap.
+        let monitor = HIDEventMonitor()
+        monitor.configure(
+            holdSlots: [UInt16(kVK_Function): .hold],
+            functionSlots: [:]
+        )
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        let chord = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_LeftArrow),
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(chord.combination == .hold)
+        #expect(monitor.isInCombination(code: UInt16(kVK_Function)) == true)
+    }
 }

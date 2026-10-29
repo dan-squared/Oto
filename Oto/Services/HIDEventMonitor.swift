@@ -25,9 +25,11 @@ import Foundation
 /// - Function keys: bare press only, repeats tracked, matched releases
 ///   consumed (keeps macOS dictation from firing alongside).
 /// - Modifier hold: flagsChanged press/release, NEVER consumed (the
-///   system must still see Option held for app-switching etc.). Any
-///   other key/mouse-down while held marks combination-use and swallows
-///   the release — holding Option to type `•` never dictates.
+///   system must still see Option held for app-switching etc.). Another
+///   key/mouse-down that *uses this modifier* while it is held (Option-U,
+///   Option-click) marks combination-use and swallows the release;
+///   independent input (Command-1 while Option is held) does not, so a
+///   long hold-to-talk is never discarded by an unrelated chord.
 /// - Tap timeout/deactivation → re-enable + `monitorLost` (02 rule 5).
 /// - Empty configuration uninstalls: not in the key path at all unless
 ///   the person asked for it.
@@ -253,14 +255,22 @@ final class HIDEventMonitor {
         case .flagsChanged:
             return decideHold(keyCode: keyCode, flags: flags)
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            // Mouse press while holding = combination use (Option-click).
-            // Never consumed.
-            _ = hold.step(.otherActivity)
+            // Mouse press while holding = combination use only when the
+            // click itself consumes this modifier (Option-click). A plain
+            // click is independent input and must not swallow the hold.
+            _ = hold.step(
+                .otherActivity(usesHeldModifier: holdModifierInUse(holdCode: holdCode, flags: flags))
+            )
             return (nil, false)
         case .keyDown:
-            // Any real press while holding marks combination use (the
-            // emission below is independent of it).
-            _ = hold.step(.otherActivity)
+            // Any real press whose flags contain this hold's modifier marks
+            // combination use (Option-U, Command-1 while holding Command) —
+            // the emission below is independent of it. A chord that does not
+            // use the held modifier (`Command-1` while holding Option) leaves
+            // the hold alone.
+            _ = hold.step(
+                .otherActivity(usesHeldModifier: holdModifierInUse(holdCode: holdCode, flags: flags))
+            )
             if escapeObserved, keyCode == Int64(kVK_Escape) {
                 // Observed only — Escape always passes through to the
                 // focused app AND cancels our session. Async hop below.
@@ -270,7 +280,9 @@ final class HIDEventMonitor {
             }
             return decideFunction(keyCode: keyCode, isRepeat: isRepeat, flags: flags, isDown: true)
         case .keyUp:
-            _ = hold.step(.otherActivity)
+            _ = hold.step(
+                .otherActivity(usesHeldModifier: holdModifierInUse(holdCode: holdCode, flags: flags))
+            )
             return decideFunction(keyCode: keyCode, isRepeat: false, flags: flags, isDown: false)
         default:
             return (nil, false)
@@ -288,6 +300,15 @@ final class HIDEventMonitor {
         // NEVER consume flagsChanged: the system must still see Option
         // held for app-switching, typing, and everything else.
         return (hold.step(.flags(down: down)), false)
+    }
+
+    /// True when this event consumes the hold's own modifier family. This is
+    /// the whole scoping rule: a chord is "combination use" of a hold only
+    /// if it actually uses that modifier. `Command-1` while Option is held is
+    /// independent input; `Option-U` (a dead key) is not.
+    private func holdModifierInUse(holdCode: UInt16?, flags: CGEventFlags) -> Bool {
+        guard let holdCode, let flag = ModifierHoldState.flag(for: holdCode) else { return false }
+        return flags.contains(flag)
     }
 
     func decideFunction(
@@ -342,9 +363,9 @@ final class HIDEventMonitor {
             let decided = decideRoutedHold(keyCode: keyCode, flags: flags)
             return (decided.slot, decided.emit, nil, decided.consume)
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            return (nil, nil, markAllHoldsCombinationUse(), false)
+            return (nil, nil, markAllHoldsCombinationUse(flags: flags), false)
         case .keyDown:
-            let combination = markAllHoldsCombinationUse()
+            let combination = markAllHoldsCombinationUse(flags: flags)
             if escapeObserved, keyCode == Int64(kVK_Escape) {
                 let onEscape = onEscape
                 DispatchQueue.main.async { onEscape?() }
@@ -353,7 +374,7 @@ final class HIDEventMonitor {
             let decided = decideRoutedFunction(keyCode: keyCode, isRepeat: isRepeat, flags: flags, isDown: true)
             return (decided.slot, decided.emit, combination, decided.consume)
         case .keyUp:
-            let combination = markAllHoldsCombinationUse()
+            let combination = markAllHoldsCombinationUse(flags: flags)
             let decided = decideRoutedFunction(keyCode: keyCode, isRepeat: false, flags: flags, isDown: false)
             return (decided.slot, decided.emit, combination, decided.consume)
         default:
@@ -377,18 +398,23 @@ final class HIDEventMonitor {
         return (slot, emit, false)
     }
 
-    /// Marks every held modifier slot as combination use and returns the
+    /// Marks every held modifier slot as combination use — but only for the
+    /// slots whose own modifier the event's flags contain — and returns the
     /// first slot that *became* a combination on this input. Only the first
     /// other input emits: dispatch cancels the stranded hold once, and later
     /// keys in the same press are already accounted for.
+    ///
+    /// Scoping matters: holding Right ⌥ and pressing ⌘1 (a transform) must
+    /// leave the dictation hold alone, while ⌥U must still disqualify it.
     @discardableResult
-    private func markAllHoldsCombinationUse() -> ShortcutSlot? {
+    private func markAllHoldsCombinationUse(flags: CGEventFlags) -> ShortcutSlot? {
         var transitioned: ShortcutSlot?
         for (code, slot) in holdSlots {
             guard var state = slotHolds[code], state.isDown, !state.usedInCombination else { continue }
-            _ = state.step(.otherActivity)
+            let usesHeldModifier = ModifierHoldState.flag(for: code).map(flags.contains) ?? false
+            _ = state.step(.otherActivity(usesHeldModifier: usesHeldModifier))
             slotHolds[code] = state
-            if transitioned == nil { transitioned = slot }
+            if state.usedInCombination, transitioned == nil { transitioned = slot }
         }
         return transitioned
     }
@@ -431,14 +457,22 @@ final class HIDEventMonitor {
 }
 
 /// Pure bare-modifier hold tracking: press → down, clean release → up,
-/// release-after-other-activity → swallowed. No hardware, no async.
+/// release-after-combination-use → swallowed. No hardware, no async.
+///
+/// "Combination use" is scoped to the held modifier: input whose own flags
+/// contain this modifier family (⌥U while holding ⌥, a ⌥-click) disqualifies
+/// the hold; independent input (⌘1 while holding ⌥, a Shift tap, a plain
+/// click) does not, so the release still finishes the dictation.
 struct ModifierHoldState: Equatable, Sendable {
     private(set) var isDown = false
     private(set) var usedInCombination = false
 
     enum HoldEvent: Equatable, Sendable {
         case flags(down: Bool)
-        case otherActivity
+        /// Another input arrived. `usesHeldModifier` is true when that
+        /// input's CGEventFlags contain this slot's modifier family — i.e.
+        /// the modifier is being consumed as part of a chord.
+        case otherActivity(usesHeldModifier: Bool)
     }
 
     nonisolated mutating func step(_ event: HoldEvent) -> ShortcutEvent? {
@@ -455,8 +489,8 @@ struct ModifierHoldState: Equatable, Sendable {
                 defer { usedInCombination = false }
                 return usedInCombination ? nil : .keyUp
             }
-        case .otherActivity:
-            if isDown { usedInCombination = true }
+        case .otherActivity(let usesHeldModifier):
+            if isDown, usesHeldModifier { usedInCombination = true }
             return nil
         }
     }

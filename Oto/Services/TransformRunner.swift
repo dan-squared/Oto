@@ -97,23 +97,26 @@ final class TransformDispatch {
     /// Settle window: a same-family hold `begin` fires on modifier-down
     /// BEFORE any combo completes (queued async emit vs direct Carbon
     /// delivery — order is racy). Every transform press waits this out,
-    /// then cancels a fresh hold micro-session if one landed, so stale
-    /// configs work deterministically instead of flaking. Invisible against
-    /// model latency (seconds); pinned, never tuned by feel.
+    /// then cancels a live hold-to-talk session of its own modifier family,
+    /// so stale configs work deterministically instead of flaking. Invisible
+    /// against model latency (seconds); pinned, never tuned by feel.
     nonisolated static let comboSettle: Duration = .milliseconds(100)
 
     private let runner: TransformRunner
     private let dictationLive: @Sendable () async -> Bool
     private let dictationKinds: () -> (hold: ShortcutTrigger.Kind, handsFree: ShortcutTrigger.Kind)
-    /// Combo-wins safety net: cancels a fresh hold micro-session that this
-    /// press's modifier-down may have started (lossless pre-insertion).
-    private let cancelFreshMicroSession: @Sendable () async -> Void
+    /// Combo-wins safety net: cancels a live hold-to-talk session that this
+    /// press's modifier-down may have started (lossless pre-insertion). Any
+    /// age: the HID layer only reports a combination for a chord that
+    /// actually uses the held modifier, so the hold has already lost.
+    private let cancelHoldForCombination: @Sendable () async -> Bool
     /// Mutual exclusion: dictation keys sleep for the run duration so no
     /// later hold press can strand a session mid-transform. Idle-safe
     /// (nothing active to cancel when a transform legitimately starts).
     private let setDictationSuspended: (Bool) -> Void
 
     private var monitors: [TransformPreset: ModifierHotkeyMonitor] = [:]
+    private let log = Logger(subsystem: "app.Oto", category: "transform")
     private var transformTask: Task<Void, Never>?
     private var transformGeneration = 0
     private(set) var shortcuts: TransformShortcuts {
@@ -125,14 +128,14 @@ final class TransformDispatch {
         shortcuts: TransformShortcuts = .load(),
         dictationLive: @Sendable @escaping () async -> Bool,
         dictationKinds: @escaping () -> (hold: ShortcutTrigger.Kind, handsFree: ShortcutTrigger.Kind),
-        cancelFreshMicroSession: @Sendable @escaping () async -> Void,
+        cancelHoldForCombination: @Sendable @escaping () async -> Bool,
         setDictationSuspended: @escaping (Bool) -> Void
     ) {
         self.runner = runner
         self.shortcuts = shortcuts
         self.dictationLive = dictationLive
         self.dictationKinds = dictationKinds
-        self.cancelFreshMicroSession = cancelFreshMicroSession
+        self.cancelHoldForCombination = cancelHoldForCombination
         self.setDictationSuspended = setDictationSuspended
     }
 
@@ -179,11 +182,15 @@ final class TransformDispatch {
         transformTask = Task { [weak self] in
             guard let self else { return }
             // Settle: let an in-flight hold-begin from THIS press's
-            // modifier-down land, then combo-wins cancel it (lossless).
+            // modifier-down land, then combo-wins cancel it (lossless) if it
+            // is a same-family hold. Any age: the combination already fired.
             try? await Task.sleep(for: Self.comboSettle)
             guard !Task.isCancelled else { return }
-            await self.cancelFreshMicroSession()
-            // Real sessions (old, hands-free, finalizing) still veto.
+            let cancelledHold = await self.cancelHoldForCombination()
+            if cancelledHold {
+                self.log.info("transform cancelled a same-family hold and won")
+            }
+            // Real sessions (hands-free, other-family hold, finalizing) veto.
             guard await !self.dictationLive() else { return }
             self.setDictationSuspended(true)
             defer {

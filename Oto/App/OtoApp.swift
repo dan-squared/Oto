@@ -194,7 +194,7 @@ struct OtoApp: App {
             dictationKinds: {
                 (dispatch.configuration.hold.kind, dispatch.configuration.handsFree.kind)
             },
-            cancelFreshMicroSession: { await coordinator.cancelFreshHoldMicroSession() },
+            cancelHoldForCombination: { await coordinator.cancelHoldForCombination() },
             setDictationSuspended: { dispatch.setSuspended($0) }
         )
         self.transformRunner = transformRunner
@@ -248,9 +248,6 @@ struct OtoApp: App {
     var body: some Scene {
         MenuBarExtra {
             OtoMenuBarView(
-                coordinator: coordinator,
-                inserter: inserter,
-                dispatch: dispatch,
                 onboarding: onboarding,
                 settings: settingsWindowController
             )

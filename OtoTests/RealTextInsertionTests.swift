@@ -359,7 +359,14 @@ struct RealTextInsertionTests {
                 frontmostPID: { 11111 },
                 postedHID: { hid.bump() }
             ),
-            timings: fastTimings(restore: 300_000_000), pasteboard: board
+            timings: fastTimings(restore: 300_000_000), pasteboard: board,
+            // Hermetic delivery: retry probes the REAL frontmost app, so on a
+            // machine whose frontmost app has a focused caret the probe would
+            // report `notLanded` and the test would assert the environment,
+            // not the code. Unavailable probe = unverifiable = posted (the
+            // same contract the shipped app relies on for apps that publish
+            // no caret). Gate/paste/clipboard ownership is what this covers.
+            deliveryCheck: StubDeliveryCheck(scripted: .unavailable)
         )
         let posted = await service.retryPostToFrontmost("kept words")
         #expect(posted == .posted)
@@ -491,6 +498,11 @@ struct RealTextInsertionTests {
         #expect(EditableFocus.classify(role: "AXStaticText") == .unknown)
         #expect(EditableFocus.classify(role: "AXWebArea") == .unknown)
         #expect(EditableFocus.classify(role: "AXGroup") == .unknown)
+        // v7 measured shape (Windscribe): the focused element is the window
+        // itself and publishes no caret — nothing inside the app has focus,
+        // so the gate diverts before any paste is posted.
+        #expect(EditableFocus.classify(role: "AXWindow", publishesCaret: false) == .noField)
+        #expect(EditableFocus.classify(role: "AXWindow", publishesCaret: true) == .unknown)
         #expect(EditableFocus.classify(role: nil) == .unknown)
         #expect(EditableFocus.classify(role: "AXTextField", pidMatches: false) == .unknown)
         #expect(EditableFocus.classify(role: "AXButton", pidMatches: false) == .unknown)

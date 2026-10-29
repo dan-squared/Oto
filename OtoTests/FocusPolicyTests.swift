@@ -69,6 +69,38 @@ struct FocusPolicyTests {
         #expect(EditableFocus.classify(role: "AXButton", pidMatches: false) == .unknown)
     }
 
+    @Test func caretlessContainerDivertsOnlyWithoutACaret() {
+        // v7: a window-family container that publishes no caret means nothing
+        // inside the app has focus (measured: Windscribe). Both facts are
+        // positive evidence, so it diverts before any paste is posted.
+        for role in [
+            "AXWindow", "AXSheet", "AXDrawer", "AXScrollArea",
+            "AXSplitGroup", "AXToolbar", "AXTabGroup",
+        ] {
+            #expect(EditableFocus.classify(role: role, publishesCaret: false) == .noField)
+            // Same role with a caret publisher stays ambiguous — the
+            // container may be hosting a real editor.
+            #expect(EditableFocus.classify(role: role, publishesCaret: true) == .unknown)
+        }
+        // Containers measured to host an unpublished caret in web content
+        // never divert on this rule, caret or not.
+        for role in [
+            "AXGroup", "AXLayoutArea", "AXWebArea", "AXBrowser",
+            "AXTable", "AXList", "AXRow", "AXCell", "AXStaticText",
+        ] {
+            #expect(EditableFocus.classify(role: role, publishesCaret: false) == .unknown)
+        }
+        // A text role wins over caret silence: the role is the stronger fact.
+        #expect(EditableFocus.classify(role: "AXTextField", publishesCaret: false) == .editable)
+        #expect(EditableFocus.classify(role: "AXTextField", subrole: "AXSecureTextField", publishesCaret: false) == .secureField)
+        // No role is still unknown, and another app's focus never diverts.
+        #expect(EditableFocus.classify(role: nil, publishesCaret: false) == .unknown)
+        #expect(EditableFocus.classify(role: "AXWindow", pidMatches: false, publishesCaret: false) == .unknown)
+        // An interactive widget diverts whether or not it has a caret.
+        #expect(EditableFocus.classify(role: "AXButton", publishesCaret: false) == .noField)
+        #expect(EditableFocus.classify(role: "AXButton", publishesCaret: true) == .noField)
+    }
+
     @Test func noValueDivertsOnlyForDesktopShells() {
         // Measured: Claude answers -25212 while a live composer holds the
         // caret. "Did not answer" is not "nothing is here".

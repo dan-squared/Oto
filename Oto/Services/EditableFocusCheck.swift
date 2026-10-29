@@ -31,6 +31,14 @@
 //  verdict is logged with the role and the read that answered, so device
 //  trails are decisive instead of inferred.
 //
+//  v7 narrows ambiguity with a second positive fact. A caret-less *window
+//  family* container (`caretlessContainerRoles`) with no caret publisher
+//  means nothing inside the app has focus — measured on Windscribe, whose
+//  focused element is its own AXWindow and whose only caret publisher is a
+//  scroll bar. That shape used to read `.unknown`, paste, verify nothing,
+//  and claim success. Content/container roles that can host an unpublished
+//  caret (`AXGroup`, `AXWebArea`, tables) stay `.unknown` on purpose.
+//
 
 import ApplicationServices
 import AppKit
@@ -77,8 +85,18 @@ enum EditableFocus: Equatable, Sendable {
     /// owned by another app is ambiguity (`.unknown`, proceed) — the
     /// frontmostPID race guard owns that failure mode with the better
     /// message. Single owner per failure mode.
+    ///
+    /// `publishesCaret` is the second, structural fact v7 adds: whether the
+    /// focused element answered `AXSelectedText`/`AXSelectedTextRange`. It
+    /// only matters for `caretlessContainerRoles`, where "this is a window
+    /// and it has no caret" is positive evidence that nothing inside the
+    /// app has focus (measured: Windscribe's focused element is its own
+    /// `AXWindow`, and the only caret publisher in the tree is a scroll bar).
+    /// Defaulted to `true` — "assume a caret exists" — so a caller that
+    /// knows nothing about carets can never cause a divert.
     nonisolated static func classify(
-        role: String?, subrole: String? = nil, pidMatches: Bool = true
+        role: String?, subrole: String? = nil, pidMatches: Bool = true,
+        publishesCaret: Bool = true
     ) -> EditableFocus {
         guard pidMatches else { return .unknown }
         guard let role else { return .unknown }
@@ -86,6 +104,9 @@ enum EditableFocus: Equatable, Sendable {
             return subrole == kAXSecureTextFieldSubrole as String ? .secureField : .editable
         }
         if nonEditableRoles.contains(role) { return .noField }
+        // A caret-less container: the role cannot host a caret AND the
+        // element publishes none. Positive evidence on both counts.
+        if caretlessContainerRoles.contains(role), !publishesCaret { return .noField }
         return .unknown
     }
 
@@ -142,6 +163,23 @@ enum EditableFocus: Equatable, Sendable {
         kAXSliderRole as String,
         kAXSplitterRole as String,
         kAXValueIndicatorRole as String,
+    ]
+
+    /// Container roles that **cannot** take a caret, used only together with
+    /// "publishes no caret". Deliberately excludes the shapes measured to
+    /// host a caret without publishing one — `AXGroup`, `AXLayoutArea`,
+    /// `AXWebArea`, `AXBrowser`, `AXTable`, `AXList`, `AXRow`, `AXCell` —
+    /// where a false divert would break a real editor. Native window
+    /// furniture is safe: a caret never lives in a window, sheet, drawer,
+    /// scroll area, split group, toolbar or tab group itself.
+    nonisolated static let caretlessContainerRoles: Set<String> = [
+        kAXWindowRole as String,
+        kAXSheetRole as String,
+        kAXDrawerRole as String,
+        kAXScrollAreaRole as String,
+        kAXSplitGroupRole as String,
+        kAXToolbarRole as String,
+        kAXTabGroupRole as String,
     ]
 
     /// AX-error mapping (unit-tested). `noValue` means the app did not
@@ -420,6 +458,10 @@ struct LiveFocusCheck: FocusChecking {
                 return FocusRead(verdict: .unknown, source: source)
             }
         }
+        // One caret read for the whole verdict: the classifier needs it only
+        // for containers, the trail records it always. Read once here so the
+        // new rule costs zero extra AX round-trips.
+        let publishesCaret = selectedTextPresent(element: element)
         var roleRaw: CFTypeRef?
         let roleError = AXUIElementCopyAttributeValue(
             element, kAXRoleAttribute as CFString, &roleRaw
@@ -428,7 +470,7 @@ struct LiveFocusCheck: FocusChecking {
             return FocusRead(
                 verdict: .unknown,
                 axError: roleError,
-                hasSelectedText: selectedTextPresent(element: element),
+                hasSelectedText: publishesCaret,
                 source: source
             )
         }
@@ -436,7 +478,8 @@ struct LiveFocusCheck: FocusChecking {
         var verdict = EditableFocus.classify(
             role: role,
             subrole: secureSubrole(role: role, element: element),
-            pidMatches: true
+            pidMatches: true,
+            publishesCaret: publishesCaret
         )
         // A widget role is only trustworthy on native content. Web hosts map
         // DOM semantics onto arbitrary AX roles — measured on Muse, whose
@@ -448,7 +491,7 @@ struct LiveFocusCheck: FocusChecking {
         }
         return FocusRead(
             verdict: verdict,
-            hasSelectedText: selectedTextPresent(element: element),
+            hasSelectedText: publishesCaret,
             role: role,
             source: source
         )

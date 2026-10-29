@@ -266,31 +266,36 @@ struct DictationCoordinatorTests {
         #expect(migrated.string(forKey: CleanupSettings.levelKey) == "medium")
     }
 
-    // MARK: - Fresh hold micro-session cancel (transform combo-wins net)
+    // MARK: - Same-family transform cancel (combo wins)
 
-    @Test func cancelsFreshHoldMicroSession() async {
+    @Test func cancelHoldForCombinationCancelsAHoldAtAnyAge() async {
         let (coordinator, _, _, _, _) = makeSUT()
         guard await coordinator.beginHold() != nil else {
             Issue.record("beginHold refused")
             return
         }
         _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
-        await coordinator.cancelFreshHoldMicroSession(olderThan: .seconds(10))
+        // Age is irrelevant: the HID layer only reports a combination for a
+        // chord that actually consumed the held modifier.
+        let cancelled = await coordinator.cancelHoldForCombination()
+        #expect(cancelled)
         guard case .cancelled = await coordinator.state else {
             Issue.record("expected cancelled, got \(await coordinator.state)")
             return
         }
     }
 
-    @Test func keepsSessionPastThreshold() async {
+    @Test func cancelHoldForCombinationKeepsHandsFreeSession() async {
+        // Different purpose: a hands-free session is never cancelled by a
+        // transform chord — the live veto keeps the transform out instead.
         let (coordinator, _, _, _, _) = makeSUT()
-        guard let id = await coordinator.beginHold() else {
-            Issue.record("beginHold refused")
+        guard let id = await coordinator.toggleHandsFree() else {
+            Issue.record("toggleHandsFree refused")
             return
         }
         _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
-        // Zero threshold: no live session is younger than nothing — kept.
-        await coordinator.cancelFreshHoldMicroSession(olderThan: .zero)
+        let cancelled = await coordinator.cancelHoldForCombination()
+        #expect(!cancelled)
         guard case .recording = await coordinator.state else {
             Issue.record("expected recording, got \(await coordinator.state)")
             return
@@ -298,20 +303,13 @@ struct DictationCoordinatorTests {
         await coordinator.cancel(id)
     }
 
-    @Test func keepsHandsFreeSession() async {
-        // Different purpose, same freshness: never touched.
+    @Test func cancelHoldForCombinationIsHarmlessWhenIdle() async {
         let (coordinator, _, _, _, _) = makeSUT()
-        guard let id = await coordinator.toggleHandsFree() else {
-            Issue.record("toggleHandsFree refused")
+        #expect(await coordinator.cancelHoldForCombination() == false)
+        guard case .idle = await coordinator.state else {
+            Issue.record("expected idle, got \(await coordinator.state)")
             return
         }
-        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
-        await coordinator.cancelFreshHoldMicroSession(olderThan: .seconds(10))
-        guard case .recording = await coordinator.state else {
-            Issue.record("expected recording, got \(await coordinator.state)")
-            return
-        }
-        await coordinator.cancel(id)
     }
 
     // MARK: - 1. Happy path

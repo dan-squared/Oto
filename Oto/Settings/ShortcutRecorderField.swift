@@ -8,6 +8,16 @@ import Carbon.HIToolbox
 import SwiftUI
 import os
 
+/// Chip labels are display text, not identity. The same label can legitimately
+/// appear twice in one recorder state (measured: `Right ⌥` after a re-arm),
+/// and SwiftUI logs `the ID … occurs multiple times` for duplicate `ForEach`
+/// IDs. De-duplicated in order, so the glass never shows the same keycap
+/// twice; the surviving list is keyed by offset below.
+private func uniqueChips(_ chips: [String]) -> [String] {
+    var seen: Set<String> = []
+    return chips.filter { seen.insert($0).inserted }
+}
+
 /// Product combo recorder + conflict copy + calibration text. Migrated
 /// from the Phase 3 diagnostics section with logic unchanged — only the
 /// label died. The classification rules, Escape-cancels, Delete-clears, and invalid-beeps
@@ -374,7 +384,7 @@ struct ShortcutCapturePopover: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                ForEach(shownChips, id: \.self) { chip in
+                ForEach(Array(shownChips.enumerated()), id: \.offset) { _, chip in
                     OtoKey(text: chip)
                 }
                 if !isCleared || !shownChips.isEmpty {
@@ -508,7 +518,7 @@ struct ShortcutCapturePopover: View {
     }
 
     private var shownChips: [String] {
-        attemptedChips.isEmpty ? heldModifierChips : attemptedChips
+        uniqueChips(attemptedChips.isEmpty ? heldModifierChips : attemptedChips)
     }
 
     private static func chips(for keyCode: UInt16, flags: NSEvent.ModifierFlags) -> [String] {
@@ -606,7 +616,7 @@ struct TransformShortcutCapturePopover: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 5) {
-                ForEach(shownChips, id: \.self) { chip in
+                ForEach(Array(shownChips.enumerated()), id: \.offset) { _, chip in
                     OtoKey(text: chip)
                 }
                 Text(attemptedChips.isEmpty ? "…and a key" : "not available")
@@ -713,7 +723,7 @@ struct TransformShortcutCapturePopover: View {
     }
 
     private var shownChips: [String] {
-        attemptedChips.isEmpty ? heldModifierChips : attemptedChips
+        uniqueChips(attemptedChips.isEmpty ? heldModifierChips : attemptedChips)
     }
 
     private static func chips(for keyCode: UInt16, flags: NSEvent.ModifierFlags) -> [String] {

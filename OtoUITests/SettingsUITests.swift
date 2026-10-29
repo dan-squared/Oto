@@ -73,28 +73,38 @@ final class SettingsUITests: XCTestCase {
         // Behavior lives on General (it is how a dictation lands, not what
         // makes dictation work), so the catcher is asserted here rather than
         // on Dictation.
-        let catcher = settingsWindow.toggles["CatcherToggle"]
+        //
+        // Query by identifier across all types: SwiftUI renders `Toggle` as
+        // an AXSwitch, which the `.toggles` query does not match on macOS
+        // (measured — `.toggles` returns nothing while the switch is present
+        // in the hierarchy). Its value is a number, not "On"/"Off", so the
+        // round-trip compares numeric state.
+        let catcher = settingsWindow.descendants(matching: .any)["CatcherToggle"]
         XCTAssertTrue(
             catcher.waitForExistence(timeout: 10),
             "General must expose the catcher toggle"
         )
-        guard let before = catcher.value as? String else {
-            XCTFail("Catcher toggle must expose an On/Off value")
+        func state() -> Int? {
+            if let number = catcher.value as? NSNumber { return number.intValue }
+            if let text = catcher.value as? String { return Int(text) }
+            return nil
+        }
+        guard let before = state() else {
+            XCTFail("Catcher toggle must expose a value")
             return
         }
         catcher.click()
-        let flipped = before == "On" ? "Off" : "On"
         wait(
-            for: [expectation(for: NSPredicate(format: "value == %@", flipped), evaluatedWith: catcher, handler: nil)],
+            for: [expectation(for: NSPredicate(format: "value.intValue != %d", before), evaluatedWith: catcher, handler: nil)],
             timeout: 5
         )
-        XCTAssertEqual(catcher.value as? String, flipped, "Catcher toggle must flip from \(before) to \(flipped)")
+        XCTAssertNotEqual(state(), before, "Catcher toggle must flip from \(before)")
         catcher.click()
         wait(
-            for: [expectation(for: NSPredicate(format: "value == %@", before), evaluatedWith: catcher, handler: nil)],
+            for: [expectation(for: NSPredicate(format: "value.intValue == %d", before), evaluatedWith: catcher, handler: nil)],
             timeout: 5
         )
-        XCTAssertEqual(catcher.value as? String, before, "Catcher toggle must restore to \(before)")
+        XCTAssertEqual(state(), before, "Catcher toggle must restore to \(before)")
     }
 
     /// First-run onboarding ("Welcome to Oto") is the only window allowed

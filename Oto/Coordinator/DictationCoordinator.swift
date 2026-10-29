@@ -144,24 +144,27 @@ actor DictationCoordinator {
     /// Current pill work feed (see `currentWork`). Nil when idle.
     func workLabel() -> WorkLabel? { currentWork }
 
-    /// Cancels a FRESH hold micro-session only (transform combo-wins safety
-    /// net): hold interaction, still starting/recording, younger than the
-    /// bound. Everything else (hands-free, old, finalizing/inserting) is
-    /// untouched. Lossless by construction — pre-insertion cancel discards
-    /// nothing (no transcript exists yet beyond partial audio).
-    func cancelFreshHoldMicroSession(olderThan threshold: Duration = .seconds(1)) async {
+    /// Cancels a live hold-to-talk session at ANY age — the same-family
+    /// transform chord owns this case ("combo wins"): the combination event
+    /// proves the user pressed a chord that consumes the held modifier, so
+    /// the hold lost by definition and its age is irrelevant. Restricted to
+    /// `holdToTalk` while starting/recording; hands-free and post-finish
+    /// states are untouched. Lossless by construction — pre-insertion cancel
+    /// discards nothing (no transcript exists yet beyond partial audio).
+    func cancelHoldForCombination() async -> Bool {
         guard let context = sessionContext,
               context.interaction == .holdToTalk,
               currentSessionID == context.id
-        else { return }
+        else { return false }
         switch state {
         case .starting, .recording:
             break
         default:
-            return
+            return false
         }
-        guard context.startedAt.duration(to: ContinuousClock().now) < threshold else { return }
         await cancel(context.id)
+        if case .cancelled = state { return true }
+        return false
     }
 
     // MARK: - Intents

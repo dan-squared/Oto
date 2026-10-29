@@ -83,6 +83,25 @@ struct HIDDecideTests {
         #expect(release.emit == nil)
     }
 
+    @Test func independentChordWhileHoldingKeepsTheHold() {
+        // ⌘1 does not consume the held Option: the hold is still a hold and
+        // its release finishes dictation (the long-hold discard bug).
+        let monitor = holdMonitor()
+        _ = monitor.decide(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        _ = monitor.decide(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_1),
+            isRepeat: false, flags: [.maskCommand]
+        )
+        let release = monitor.decide(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: []
+        )
+        #expect(release.emit == .keyUp)
+    }
+
     // MARK: - Function keys: bare press tracked, matched release consumed
 
     @Test func bareFunctionPressEmitsDownConsumed() {
