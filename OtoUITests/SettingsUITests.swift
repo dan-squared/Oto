@@ -101,19 +101,36 @@ final class SettingsUITests: XCTestCase {
     @MainActor
     private func finishOnboardingIfPresent(_ app: XCUIApplication) {
         let onboarding = app.windows["Welcome to Oto"]
-        guard onboarding.waitForExistence(timeout: 5) else { return }
-        XCTAssertEqual(app.windows.count, 1, "First launch shows only onboarding")
-        for _ in 0..<4 {
-            let cont = onboarding.buttons["Continue"]
-            guard cont.waitForExistence(timeout: 5) else { break }
-            cont.click()
-        }
+        guard onboarding.waitForExistence(timeout: 10) else { return }
+        // The intro plays in a borderless carrier above the window for about
+        // ten seconds, so a second, untitled window can exist while it runs.
+        // What matters is that onboarding is the only real surface.
         let finish = onboarding.buttons["Finish"]
-        XCTAssertTrue(finish.waitForExistence(timeout: 5), "Onboarding must reach Finish")
+        // Welcome, then the chapters: how walks three rows (Next, Next,
+        // Continue), then shortcut, permissions, speech, and tryIt finishes.
+        for _ in 0 ..< 12 {
+            if finish.exists { break }
+            let button = onboarding.buttons["Continue"].exists
+                ? onboarding.buttons["Continue"]
+                : onboarding.buttons["Next"]
+            guard self.waitUntilHittable(button, timeout: 30) else { break }
+            button.click()
+        }
+        XCTAssertTrue(finish.waitForExistence(timeout: 10), "Onboarding must reach Finish")
         finish.click()
         XCTAssertTrue(
-            onboarding.waitForNonExistence(timeout: 5),
+            onboarding.waitForNonExistence(timeout: 10),
             "Finish must close onboarding"
         )
+    }
+
+    /// The one button is inert while the intro plays: it exists long before it
+    /// accepts a click, so wait for both.
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 }
