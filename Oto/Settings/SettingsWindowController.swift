@@ -27,7 +27,6 @@ final class OtoSettingsWindowController: NSObject, NSWindowDelegate {
 
     private func makeWindow() {
         let host = NSHostingController(rootView: rootView)
-        host.sizingOptions = []
 
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: NSSize(width: SettingsRoot.width, height: SettingsRoot.height)),
@@ -52,6 +51,12 @@ final class OtoSettingsWindowController: NSObject, NSWindowDelegate {
         window.maxSize = NSSize(width: SettingsRoot.maximumWidth, height: .greatestFiniteMagnitude)
         window.isReleasedWhenClosed = false
         window.delegate = self
+        // Assigning the host and then the unified toolbar lets AppKit replace
+        // the content view. Reapply the measured content size last, as the
+        // Firstlight controller does, or AppKit can retain a transient zero
+        // width from the outer SwiftUI host during the first layout pass.
+        window.setContentSize(NSSize(width: SettingsRoot.width, height: SettingsRoot.height))
+        window.contentView?.layoutSubtreeIfNeeded()
         window.center()
         self.window = window
     }
