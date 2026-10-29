@@ -62,11 +62,11 @@ struct DictionaryPane: View {
         Section {
             HStack(spacing: 12) {
                 Button("Add rule") { addingRule = true }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                 Spacer(minLength: 0)
                 Button("Clear") { showClearDictionaryConfirm = true }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .tint(.red)
                     .disabled(dictionary.rules.isEmpty)
@@ -130,11 +130,7 @@ private struct DictionaryRuleEditor: View {
             Section("Rule") {
                 TextField("What you say", text: $spoken)
                 TextField("Replacement", text: $replacement)
-                Picker("Applies", selection: $scopeGlobal) {
-                    Text("Everywhere").tag(true)
-                    Text("One app").tag(false)
-                }
-                .pickerStyle(.segmented)
+                OtoSegmented(options: [(true, "Everywhere"), (false, "One app")], selection: $scopeGlobal)
                 if !scopeGlobal {
                     // Scope is typed by hand: a "use frontmost" button
                     // cannot work from Settings (clicking it makes Oto
@@ -168,7 +164,7 @@ private struct DictionaryRuleEditor: View {
                 Button("Cancel", role: .cancel) { onDone(nil) }
                 Spacer()
                 Button("Save") { save() }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
             }
         }
         .formStyle(.grouped)

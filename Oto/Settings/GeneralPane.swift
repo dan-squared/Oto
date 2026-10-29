@@ -78,12 +78,10 @@ struct GeneralPane: View {
         .task { refreshLogin() }
 
         Section {
-            Picker("Position", selection: $flowPosition) {
-                Text("Top").tag(FlowBarPosition.top)
-                Text("Bottom").tag(FlowBarPosition.bottom)
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.regular)
+            OtoSegmented(
+                options: [(.top, "Top"), (.bottom, "Bottom")],
+                selection: $flowPosition
+            )
         } header: {
             Text("Flow Bar")
         } footer: {

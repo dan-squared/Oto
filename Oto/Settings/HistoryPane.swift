@@ -99,7 +99,7 @@ struct HistoryPane: View {
                 Section {
                     HStack(spacing: 12) {
                         Button("Clear all…") { showClearConfirm = true }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                             .tint(.red)
                         Spacer(minLength: 0)
@@ -108,7 +108,7 @@ struct HistoryPane: View {
                         Button("Previous") {
                             if historyPage > 1 { historyPage -= 1 }
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(historyPage <= 1)
                         ForEach(1...pageCount, id: \.self) { number in
@@ -117,7 +117,7 @@ struct HistoryPane: View {
                         Button("Next") {
                             if historyPage < pageCount { historyPage += 1 }
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(historyPage >= pageCount)
                         Spacer(minLength: 0)
@@ -205,9 +205,9 @@ struct HistoryPane: View {
         let button = Button("\(number)") { historyPage = number }
             .controlSize(.small)
         if isCurrent {
-            button.buttonStyle(.glassProminent)
+            button.buttonStyle(.borderedProminent)
         } else {
-            button.buttonStyle(.glass)
+            button.buttonStyle(.bordered)
         }
     }
 

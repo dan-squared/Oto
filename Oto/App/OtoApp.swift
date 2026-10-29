@@ -17,6 +17,7 @@ final class DockRestoreDelegate: NSObject, NSApplicationDelegate {
     /// carries it because scenes cannot trigger first-launch presentation:
     /// no Oto view instantiates at launch to call `openWindow` from.
     static var onboarding: OnboardingWindowController?
+    static var settings: OtoSettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = DockVisibility.apply(shown: DockVisibility.isShown())
@@ -72,6 +73,7 @@ struct OtoApp: App {
     // once per app life, never reset by rail navigation; see
     // SettingsUIState). Single instance, audit S2 rule.
     private let settingsUIState: SettingsUIState
+    private let settingsWindowController: OtoSettingsWindowController
     // Intelligence service (Slice A: Manual only). One instance, shared by
     // Settings and History; single instance, audit S2 rule. Init does no
     // model contact (availability is read on demand), so construction is
@@ -209,6 +211,20 @@ struct OtoApp: App {
         // Hoisted UI state first: onboarding shares it (permissions/speech
         // render from one model, never duplicated per surface).
         self.settingsUIState = SettingsUIState(preparer: preparer, permissions: permissions)
+        let settingsRoot = SettingsRoot(
+            dispatch: dispatch,
+            uiState: settingsUIState,
+            login: login,
+            coordinator: coordinator,
+            dictionary: dictionaryStore,
+            snippets: snippetStore,
+            history: historyStore,
+            polish: polishService,
+            transforms: transformDispatch
+        )
+        let settingsController = OtoSettingsWindowController(rootView: settingsRoot)
+        self.settingsWindowController = settingsController
+        DockRestoreDelegate.settings = settingsController
         let onboarding = OnboardingWindowController(
             dispatch: dispatch,
             uiState: settingsUIState
@@ -227,60 +243,30 @@ struct OtoApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            OtoMenuBarView(coordinator: coordinator, inserter: inserter, dispatch: dispatch, onboarding: onboarding)
+            OtoMenuBarView(
+                coordinator: coordinator,
+                inserter: inserter,
+                dispatch: dispatch,
+                onboarding: onboarding,
+                settings: settingsWindowController
+            )
         } label: {
             Image(systemName: "waveform")
                 .accessibilityLabel("Oto")
         }
         .menuBarExtraStyle(.menu)
-
-        Window(SettingsWindowLocator.windowTitle, id: SettingsWindowID.id) {
-            SettingsRoot(
-                dispatch: dispatch,
-                uiState: settingsUIState,
-                login: login,
-                coordinator: coordinator,
-                dictionary: dictionaryStore,
-                snippets: snippetStore,
-                history: historyStore,
-                polish: polishService,
-                transforms: transformDispatch
-            )
-        }
-        .defaultSize(width: SettingsRoot.width, height: SettingsRoot.height)
-        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appSettings) {
-                SettingsCommands()
+                Button("Settings…") {
+                    settingsWindowController.show()
+                }
+                .keyboardShortcut(",", modifiers: .command)
             }
             // This window always keeps its navigation column visible.
             // Remove macOS's Show/Hide Sidebar menu command as well as the
             // toolbar toggle removed by SettingsRoot.
             CommandGroup(replacing: .sidebar) {}
         }
-    }
-}
-
-/// A single native app window gives Settings the same standard window
-/// controls as the reference while keeping the familiar Settings command.
-enum SettingsWindowID {
-    nonisolated static let id = "settings"
-}
-
-private struct SettingsCommands: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button("Settings…") {
-            if let existing = SettingsWindowLocator.settingsWindow(in: NSApp.windows) {
-                existing.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            } else {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: SettingsWindowID.id)
-            }
-        }
-        .keyboardShortcut(",", modifiers: .command)
     }
 }
 

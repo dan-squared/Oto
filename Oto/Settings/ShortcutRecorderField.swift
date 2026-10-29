@@ -202,17 +202,6 @@ enum KeyNames: Sendable {
     }
 }
 
-/// One slot's kind picker. Bare-modifier and F-key capture are NOT in the
-/// recorder; they arrive via these presets (Hold key / Dictation key),
-/// mirroring the old TriggerChoice — zero new validation rules.
-enum SlotKindChoice: String, CaseIterable, Identifiable, Hashable {
-    case holdKey = "Hold key"
-    case dictationKey = "Dictation key"
-    case combo = "Custom"
-
-    var id: String { rawValue }
-}
-
 /// Local key-capture field for combo recording. While `isListening`, a
 /// local monitor feeds presses into the pure rules; global registration
 /// is already suspended by dispatch. Escape cancels (old kept), Delete
@@ -224,6 +213,9 @@ struct ShortcutRecorderModifier: ViewModifier {
     var onClear: () -> Void
     var onCancel: () -> Void
     var onInvalid: (RecorderInvalidReason) -> Void
+    /// The recorder surface can show the exact refused caps without making
+    /// capture policy part of the shared monitor.
+    var onInvalidInput: ((RecorderInvalidReason, UInt16, NSEvent.ModifierFlags) -> Void)? = nil
 
     @State private var box = MonitorBox()
 
@@ -240,6 +232,9 @@ struct ShortcutRecorderModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .onAppear {
+                if isListening { start() }
+            }
             .onChange(of: isListening) { _, listening in
                 if listening {
                     start()
@@ -279,6 +274,7 @@ struct ShortcutRecorderModifier: ViewModifier {
             case .invalid(let reason):
                 ShortcutRecorderModifier.logInvalid(keyCode: event.keyCode, mods: event.modifierFlags.rawValue, reason: String(describing: reason))
                 onInvalid(reason)
+                onInvalidInput?(reason, event.keyCode, event.modifierFlags)
             case .captured(let modifiers, let keyCode, let conflicts):
                 onCapture(modifiers, keyCode, conflicts)
             case .captureModifier(let code):
@@ -305,6 +301,7 @@ struct ShortcutRecorderModifier: ViewModifier {
             case .chord:
                 ShortcutRecorderModifier.logInvalid(keyCode: event.keyCode, mods: event.modifierFlags.rawValue, reason: "chordOnly")
                 onInvalid(.chordOnly)
+                onInvalidInput?(.chordOnly, event.keyCode, event.modifierFlags)
             }
             return event
         }
@@ -346,5 +343,129 @@ extension View {
             onCancel: onCancel,
             onInvalid: onInvalid
         ))
+    }
+}
+
+/// Shared Firstlight-style recorder surface for shortcut rows outside
+/// Dictation. Capture policy remains supplied by the owning feature.
+struct TransformShortcutCapturePopover: View {
+    @Binding var isListening: Bool
+    /// Returns a refusal copy when the pressed combination cannot be saved.
+    /// Keeping the popover open makes a failed record actionable.
+    let onCapture: (UInt32, UInt32, [RecorderConflict]) -> String?
+    let onCaptureModifier: (UInt16) -> String?
+    let onClear: () -> Void
+    let onCancel: () -> Void
+    let onInvalid: (RecorderInvalidReason) -> Void
+
+    @State private var attemptedChips: [String] = []
+    @State private var refusal: String?
+
+    @State private var modifierFlags: NSEvent.ModifierFlags = []
+    @State private var monitor: Any?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 5) {
+                ForEach(shownChips, id: \.self) { chip in
+                    OtoKey(text: chip)
+                }
+                Text(attemptedChips.isEmpty ? "…and a key" : "not available")
+                    .font(.system(size: 11))
+                    .foregroundStyle(refusal == nil ? Color.secondary : Color.red)
+            }
+            .frame(maxWidth: .infinity, minHeight: 94)
+            .overlay {
+                if refusal != nil {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(.red.opacity(0.72), lineWidth: 1.5)
+                        .shadow(color: .red.opacity(0.38), radius: 9)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 22)
+                        .allowsHitTesting(false)
+                }
+            }
+            .modifier(ShortcutRecorderModifier(
+                isListening: $isListening,
+                onCapture: { modifiers, keyCode, conflicts in
+                    if let message = onCapture(modifiers, keyCode, conflicts) {
+                        refusal = message
+                        attemptedChips = Self.chips(for: UInt16(keyCode), flags: NSEvent.modifierFlags)
+                    }
+                },
+                onCaptureModifier: { code in
+                    if let message = onCaptureModifier(code) {
+                        refusal = message
+                        attemptedChips = [KeyNames.holdChip(for: code)]
+                    }
+                },
+                onClear: onClear,
+                onCancel: onCancel,
+                onInvalid: onInvalid,
+                onInvalidInput: { reason, keyCode, flags in
+                    refusal = reason.message
+                    attemptedChips = Self.chips(for: keyCode, flags: flags)
+                }
+            ))
+
+            Divider()
+            HStack {
+                Spacer()
+                Button {
+                    isListening = false
+                    onCancel()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Close")
+                        OtoKey(text: "esc", compact: true)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Close shortcut recorder")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+        }
+        .frame(width: 252)
+        .presentationBackground(.ultraThinMaterial)
+        .presentationCornerRadius(20)
+        .onAppear {
+            modifierFlags = NSEvent.modifierFlags
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                modifierFlags = event.modifierFlags
+                attemptedChips = []
+                refusal = nil
+                return event
+            }
+        }
+        .onDisappear {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+    }
+
+    private var heldModifierChips: [String] {
+        var chips: [String] = []
+        if modifierFlags.contains(.control) { chips.append("⌃") }
+        if modifierFlags.contains(.option) { chips.append("⌥") }
+        if modifierFlags.contains(.shift) { chips.append("⇧") }
+        if modifierFlags.contains(.command) { chips.append("⌘") }
+        return chips
+    }
+
+    private var shownChips: [String] {
+        attemptedChips.isEmpty ? heldModifierChips : attemptedChips
+    }
+
+    private static func chips(for keyCode: UInt16, flags: NSEvent.ModifierFlags) -> [String] {
+        var chips: [String] = []
+        if flags.contains(.control) { chips.append("⌃") }
+        if flags.contains(.option) { chips.append("⌥") }
+        if flags.contains(.shift) { chips.append("⇧") }
+        if flags.contains(.command) { chips.append("⌘") }
+        chips.append(KeyNames.keyName(for: UInt32(keyCode)))
+        return chips
     }
 }

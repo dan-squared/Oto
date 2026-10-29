@@ -66,7 +66,7 @@ struct SnippetsPane: View {
         Section {
             HStack {
                 Button("Add snippet") { addingSnippet = true }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                 Spacer(minLength: 0)
             }
@@ -135,11 +135,7 @@ private struct SnippetEditor: View {
                 TextField("Name", text: $name)
                 TextEditor(text: $expansion)
                     .frame(minHeight: 90)
-                Picker("Applies", selection: $scopeGlobal) {
-                    Text("Everywhere").tag(true)
-                    Text("One app").tag(false)
-                }
-                .pickerStyle(.segmented)
+                OtoSegmented(options: [(true, "Everywhere"), (false, "One app")], selection: $scopeGlobal)
                 if !scopeGlobal {
                     // Manual bundle ID only (see DictionaryPane: a Fill
                     // button would capture Oto itself).
@@ -155,7 +151,7 @@ private struct SnippetEditor: View {
                 Spacer()
                 Button("Copy expansion") { copyDraft() }
                 Button("Save") { save() }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
             }
         }
         .formStyle(.grouped)

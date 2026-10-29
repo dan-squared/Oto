@@ -17,8 +17,7 @@ struct OtoMenuBarView: View {
     let inserter: RealTextInsertion
     let dispatch: ShortcutDispatch
     let onboarding: OnboardingWindowController
-
-    @Environment(\.openWindow) private var openWindow
+    let settings: OtoSettingsWindowController
 
     @State private var status = "idle — no session yet"
     @State private var recoveryAvailable = false
@@ -131,8 +130,7 @@ struct OtoMenuBarView: View {
             onboarding.show()
         }
         Button("Settings…") {
-            NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: SettingsWindowID.id)
+            settings.show()
         }
         Divider()
         Button("Quit Oto") {

@@ -38,7 +38,7 @@ struct DictationPane: View {
                     Button(uiState.isPreparing ? "Preparing…" : "Prepare offline speech") {
                         Task { await uiState.runPrepare() }
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(uiState.isPreparing)
                 }
@@ -62,28 +62,19 @@ struct DictationPane: View {
                 shortcutRow("Push-to-talk", slot: .hold)
                 shortcutRow("Hands-free", slot: .handsFree)
 
-                if requiresAccessibility {
-                    Text("Requires Accessibility")
+                if requiresAccessibility && !uiState.axTrusted {
+                    Label("Requires Accessibility", systemImage: "hand.raised")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if let shortcutMessage {
-                    Text(shortcutMessage)
+                    Label(shortcutMessage, systemImage: "exclamationmark.circle")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                Button("Restore to default") {
-                    dispatch.resetToDefaults()
-                    shortcutMessage = nil
-                    syncFromDispatch()
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .padding(.top, 2)
             }
             .padding(.vertical, 4)
             .id(shortcutRefreshID)
@@ -153,51 +144,25 @@ struct DictationPane: View {
             Text(title)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 4) {
-                Button {
+            OtoShortcutField(
+                chips: chips,
+                recordLabel: "Record \(title) shortcut",
+                canClear: dispatch.slotEnabled(slot),
+                onRecord: {
                     shortcutMessage = nil
                     capturePopoverSlot = slot
-                } label: {
-                    HStack(spacing: 5) {
-                        if chips.isEmpty {
-                            OtoKey(text: "Not set", compact: true)
-                        } else {
-                            ForEach(chips, id: \.self) { chip in
-                                OtoKey(text: chip, compact: true)
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Record \(title) shortcut")
-                .help("Click to record a shortcut")
-                .popover(isPresented: capturePopoverBinding(for: slot), arrowEdge: .trailing) {
-                    ShortcutCapturePopover(dispatch: dispatch, slot: slot) {
-                        capturePopoverSlot = nil
-                        syncFromDispatch()
-                    }
-                }
-
-                Button {
+                },
+                onClear: {
                     dispatch.setSlotEnabled(false, for: slot)
                     shortcutMessage = nil
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18, height: 18)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .disabled(chips.isEmpty || !dispatch.slotEnabled(slot))
-                .help("Turn off this shortcut")
-            }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.12), lineWidth: 0.7)
+            )
+            .help("Click to record a shortcut")
+            .popover(isPresented: capturePopoverBinding(for: slot), arrowEdge: .top) {
+                ShortcutCapturePopover(dispatch: dispatch, slot: slot) {
+                    capturePopoverSlot = nil
+                    syncFromDispatch()
+                }
             }
         }
     }
@@ -232,18 +197,30 @@ private struct ShortcutCapturePopover: View {
     @State private var message: String?
     @State private var modifierFlags: NSEvent.ModifierFlags = []
     @State private var modifierMonitor: Any?
+    @State private var attemptedChips: [String] = []
+    @State private var refusal: String?
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                ForEach(heldModifierChips, id: \.self) { chip in
+                ForEach(shownChips, id: \.self) { chip in
                     OtoKey(text: chip)
                 }
-                Text("…and a key")
+                Text(attemptedChips.isEmpty ? "…and a key" : "not available")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(refusal == nil ? Color.secondary : Color.red)
             }
             .frame(maxWidth: .infinity, minHeight: 94)
+            .overlay {
+                if refusal != nil {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(.red.opacity(0.72), lineWidth: 1.5)
+                        .shadow(color: .red.opacity(0.38), radius: 9)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 22)
+                        .allowsHitTesting(false)
+                }
+            }
             .modifier(ShortcutRecorderModifier(
                 isListening: $isListening,
                 onCapture: { modifiers, keyCode, conflicts in
@@ -266,6 +243,10 @@ private struct ShortcutCapturePopover: View {
                 onInvalid: { reason in
                     NSSound.beep()
                     message = reason.message
+                    refusal = reason.message
+                },
+                onInvalidInput: { _, keyCode, flags in
+                    attemptedChips = Self.chips(for: keyCode, flags: flags)
                 }
             ))
 
@@ -305,6 +286,8 @@ private struct ShortcutCapturePopover: View {
             isListening = true
             modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
                 modifierFlags = event.modifierFlags
+                attemptedChips = []
+                refusal = nil
                 return event
             }
         }
@@ -333,9 +316,21 @@ private struct ShortcutCapturePopover: View {
         return chips
     }
 
+    private var shownChips: [String] {
+        attemptedChips.isEmpty ? heldModifierChips : attemptedChips
+    }
+
+    private static func chips(for keyCode: UInt16, flags: NSEvent.ModifierFlags) -> [String] {
+        var chips: [String] = []
+        if flags.contains(.control) { chips.append("⌃") }
+        if flags.contains(.option) { chips.append("⌥") }
+        if flags.contains(.shift) { chips.append("⇧") }
+        if flags.contains(.command) { chips.append("⌘") }
+        chips.append(KeyNames.keyName(for: UInt32(keyCode)))
+        return chips
+    }
+
     private func finishCapture(kind: ShortcutTrigger.Kind, conflicts: [RecorderConflict]) {
-        dispatch.setSuspended(false)
-        isListening = false
         guard !ShortcutRecorderConflicts.blocksSaving(conflicts) else {
             message = ShortcutRecorderConflicts.describe(conflicts)
             return
@@ -347,6 +342,8 @@ private struct ShortcutCapturePopover: View {
         if result == .blocked {
             message = "That shortcut is already in use by the other mode."
         } else {
+            dispatch.setSuspended(false)
+            isListening = false
             onClose()
         }
     }

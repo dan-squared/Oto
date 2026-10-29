@@ -26,7 +26,7 @@ struct MicStatusRow: View {
                         uiState.refreshPermissions()
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             } else {
                 OtoStatus(text: uiState.micText, tone: uiState.micTone)
@@ -51,7 +51,7 @@ struct AccessibilityRow: View {
                             uiState.refreshPermissions()
                         }
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 }
             }
@@ -76,7 +76,7 @@ struct SpeechStatusRow: View {
                         uiState.refreshPermissions()
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             } else {
                 OtoStatus(text: uiState.speechText, tone: uiState.speechTone)

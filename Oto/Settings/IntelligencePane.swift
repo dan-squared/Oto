@@ -59,13 +59,10 @@ struct IntelligencePane: View {
         }
 
         Section {
-            Picker("Level", selection: level) {
-                Text("None").tag(CleanupLevel.none)
-                Text("Light").tag(CleanupLevel.light)
-                Text("Medium").tag(CleanupLevel.medium)
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.regular)
+            OtoSegmented(
+                options: [(.none, "None"), (.light, "Light"), (.medium, "Medium")],
+                selection: level
+            )
             Text(cleanupDescription)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -83,18 +80,6 @@ struct IntelligencePane: View {
             ForEach(TransformPreset.allCases, id: \.rawValue) { preset in
                 transformRow(for: preset)
             }
-            HStack {
-                Spacer()
-                Button("Reset to defaults") {
-                    transforms.resetToDefaults()
-                    refreshTransforms()
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .disabled(recording != nil)
-            }
-            // Reset restores the four shortcuts; the custom name +
-            // instruction are yours and stay untouched.
         } header: {
             Text("My Transforms")
         } footer: {
@@ -147,67 +132,59 @@ struct IntelligencePane: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                Button {
-                    if isRecording {
-                        transforms.start()
-                        recording = nil
-                    } else {
+                OtoShortcutField(
+                    chips: KeyNames.chips(for: kind),
+                    isRecording: false,
+                    recordLabel: "\(preset.displayName) shortcut, \(transformShortcutLabel(kind: kind)). Activate to record a new shortcut.",
+                    canClear: kind != .unassigned,
+                    onRecord: {
                         transforms.stop()
                         recording = preset
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        if isRecording {
-                            Text("…and a key")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(KeyNames.chips(for: kind), id: \.self) { chip in
-                                OtoKey(text: chip, compact: true)
-                            }
-                            if KeyNames.chips(for: kind).isEmpty {
-                                Text("Set shortcut…")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .disabled(othersRecording)
-                .accessibilityLabel("\(preset.displayName) shortcut, \(transformShortcutLabel(kind: kind)). Activate to record a new shortcut.")
-                .shortcutRecorder(
-                    isListening: Binding(
-                        get: { recording == preset },
-                        set: { if !$0 { recording = nil } }
-                    ),
-                    onCapture: { modifiers, keyCode, conflicts in
-                        captureTransform(
-                            preset: preset,
-                            kind: .combo(modifiers: modifiers, keyCode: keyCode),
-                            conflicts: conflicts
-                        )
-                    },
-                    onCaptureModifier: { _ in
-                        messages[preset] = "Transforms need a combination like ⌘1 — bare keys would fire while you type."
                     },
                     onClear: {
                         transforms.clearShortcut(for: preset)
                         messages[preset] = nil
-                        transforms.start()
-                        recording = nil
                         refreshTransforms()
-                    },
-                    onCancel: {
-                        transforms.start()
-                        recording = nil
-                    },
-                    onInvalid: { reason in
-                        NSSound.beep()
-                        messages[preset] = reason.message
                     }
                 )
+                .disabled(othersRecording)
+                .popover(isPresented: Binding(
+                    get: { recording == preset },
+                    set: { if !$0, recording == preset { transforms.start(); recording = nil } }
+                ), arrowEdge: .top) {
+                    TransformShortcutCapturePopover(
+                        isListening: Binding(
+                            get: { recording == preset },
+                            set: { if !$0, recording == preset { transforms.start(); recording = nil } }
+                        ),
+                        onCapture: { modifiers, keyCode, conflicts in
+                            captureTransform(
+                                preset: preset,
+                                kind: .combo(modifiers: modifiers, keyCode: keyCode),
+                                conflicts: conflicts
+                            )
+                        },
+                        onCaptureModifier: { _ in
+                            let message = "Transforms need a combination like ⌘1 — bare keys would fire while you type."
+                            messages[preset] = message
+                            return message
+                        },
+                        onClear: {
+                            transforms.clearShortcut(for: preset)
+                            transforms.start()
+                            recording = nil
+                            refreshTransforms()
+                        },
+                        onCancel: {
+                            transforms.start()
+                            recording = nil
+                        },
+                        onInvalid: { reason in
+                            NSSound.beep()
+                            messages[preset] = reason.message
+                        }
+                    )
+                }
             }
             if let message = messages[preset] ?? auditMessage(for: preset) {
                 HStack(spacing: 6) {
@@ -253,13 +230,12 @@ struct IntelligencePane: View {
         preset: TransformPreset,
         kind: ShortcutTrigger.Kind,
         conflicts: [RecorderConflict]
-    ) {
-        transforms.start()
-        recording = nil
+    ) -> String? {
         if ShortcutRecorderConflicts.blocksSaving(conflicts) {
-            messages[preset] = ShortcutRecorderConflicts.describe(conflicts)
+            let message = ShortcutRecorderConflicts.describe(conflicts)
+            messages[preset] = message
             refreshTransforms()
-            return
+            return message
         }
         let kinds = transforms.currentDictationKinds()
         if let advisory = TransformShortcutGate.advisory(
@@ -268,10 +244,13 @@ struct IntelligencePane: View {
         ) {
             messages[preset] = advisory
             refreshTransforms()
-            return
+            return advisory
         }
         if transforms.updateShortcut(kind, for: preset) == .blocked {
-            messages[preset] = "Already in use — pick a different one."
+            let message = "Already in use — pick a different one."
+            messages[preset] = message
+            refreshTransforms()
+            return message
         } else {
             messages[preset] = nil
         }
@@ -279,6 +258,9 @@ struct IntelligencePane: View {
             messages[preset] = ShortcutRecorderConflicts.describe(conflicts)
         }
         refreshTransforms()
+        transforms.start()
+        recording = nil
+        return nil
     }
 
     private func refreshTransforms() {
