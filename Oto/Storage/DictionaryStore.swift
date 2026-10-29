@@ -11,8 +11,8 @@
 import Foundation
 import os
 
-/// One replacement rule. `bundleID == nil` means global; otherwise the rule
-/// fires only for that exact app (case-sensitive — bundle IDs are
+/// One replacement rule. Empty `bundleIDs` means global; otherwise the rule
+/// fires only in those exact apps (case-sensitive — bundle IDs are
 /// case-sensitive reverse-DNS; lowercasing would silently never fire).
 struct DictionaryRule: Sendable, Hashable, Codable, Identifiable {
     nonisolated static let maxSpokenLength = 80
@@ -23,27 +23,99 @@ struct DictionaryRule: Sendable, Hashable, Codable, Identifiable {
     let id: UUID
     var spoken: String
     var replacement: String
-    var bundleID: String?
+    /// Apps this rule is limited to; empty means everywhere.
+    var bundleIDs: [String]
     var isEnabled: Bool
 
     nonisolated init(
         id: UUID = UUID(),
         spoken: String,
         replacement: String,
-        bundleID: String? = nil,
+        bundleIDs: [String] = [],
         isEnabled: Bool = true
     ) {
         self.id = id
         self.spoken = spoken
         self.replacement = replacement
-        self.bundleID = bundleID
+        self.bundleIDs = bundleIDs
         self.isEnabled = isEnabled
     }
 
     /// Scope key for duplicate detection. Spoken folds case (matching is
-    /// case-insensitive); bundle IDs never fold.
+    /// case-insensitive); bundle IDs never fold, and the set is order-free.
     nonisolated func duplicateKey() -> String {
-        "\(Self.normalizeSpoken(spoken).lowercased())\u{1F}\(bundleID ?? "*global*")"
+        let scope = bundleIDs.isEmpty
+            ? "*global*"
+            : bundleIDs.sorted().joined(separator: ",")
+        return "\(Self.normalizeSpoken(spoken).lowercased())\u{1F}\(scope)"
+    }
+
+    // MARK: - Codable
+
+    /// v1 stored one `bundleID`; multi-select rules store `bundleIDs`. Reading
+    /// the old key keeps existing dictionaries working without a migration
+    /// step or a schema bump.
+    private enum CodingKeys: String, CodingKey {
+        case id, spoken, replacement, bundleIDs, bundleID, isEnabled
+    }
+
+    nonisolated init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        spoken = try container.decode(String.self, forKey: .spoken)
+        replacement = try container.decode(String.self, forKey: .replacement)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        if let list = try container.decodeIfPresent([String].self, forKey: .bundleIDs) {
+            bundleIDs = list
+        } else if let legacy = try container.decodeIfPresent(String.self, forKey: .bundleID) {
+            bundleIDs = legacy.isEmpty ? [] : [legacy]
+        } else {
+            bundleIDs = []
+        }
+    }
+
+    nonisolated func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(spoken, forKey: .spoken)
+        try container.encode(replacement, forKey: .replacement)
+        if !bundleIDs.isEmpty {
+            try container.encode(bundleIDs, forKey: .bundleIDs)
+        }
+        try container.encode(isEnabled, forKey: .isEnabled)
+    }
+
+    /// A scope covers the app itself and its own helpers and extensions, so
+    /// choosing Journal also covers Journal's widgets and agents. A rule
+    /// stored against a helper (v1 data) still fires in the app it belongs to.
+    /// The dot boundary keeps neighbours apart: `com.a.Journal` never claims
+    /// `com.a.Journalist`.
+    nonisolated static func scopeMatches(_ scopes: [String], target: String) -> Bool {
+        scopes.contains { scope in
+            target == scope
+                || target.hasPrefix(scope + ".")
+                || scope.hasPrefix(target + ".")
+        }
+    }
+
+    /// Trim, drop blanks, dedupe. Nil means the input held a blank scope,
+    /// which is a validation failure rather than "everywhere".
+    nonisolated static func normalizeScopes(_ raw: [String]) -> [String]? {
+        var seen = Set<String>()
+        var scopes: [String] = []
+        for id in raw {
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if seen.insert(trimmed).inserted { scopes.append(trimmed) }
+        }
+        return scopes
+    }
+
+    /// Product copy for errors: names, not reverse-DNS.
+    @MainActor
+    static func scopeDescription(_ bundleIDs: [String]) -> String {
+        guard !bundleIDs.isEmpty else { return "globally" }
+        return "for \(InstalledApps.names(for: bundleIDs))"
     }
 
     /// Trim, collapse interior whitespace, NFC. The transcript is used as-is
@@ -64,7 +136,7 @@ enum DictionaryValidationError: Error, Equatable, Sendable {
     case emptyReplacement
     case spokenTooLong
     case replacementTooLong
-    case emptyBundleID
+    case emptyAppScope
     case duplicate(spoken: String, scope: String)
     case storeFull
     case notFound
@@ -79,8 +151,8 @@ enum DictionaryValidationError: Error, Equatable, Sendable {
             return "Spoken form is too long (max \(DictionaryRule.maxSpokenLength) characters)."
         case .replacementTooLong:
             return "Replacement is too long (max \(DictionaryRule.maxReplacementLength) characters)."
-        case .emptyBundleID:
-            return "App scope is empty — pick Global or enter the app's bundle ID."
+        case .emptyAppScope:
+            return "Choose at least one app, or switch the scope to Everywhere."
         case .duplicate(let spoken, let scope):
             return "‘\(spoken)’ already exists (\(scope)). Edit the existing rule instead of adding a copy."
         case .storeFull:
@@ -122,9 +194,9 @@ nonisolated func applyDictionaryRules(
     for target: TargetApplication
 ) -> String {
     let active = rules.filter(\.isEnabled).filter { rule in
-        guard let scope = rule.bundleID else { return true }
+        guard !rule.bundleIDs.isEmpty else { return true }
         guard let targetID = target.bundleIdentifier else { return false }
-        return scope == targetID
+        return DictionaryRule.scopeMatches(rule.bundleIDs, target: targetID)
     }
     guard !active.isEmpty, !text.isEmpty else { return text }
 
@@ -168,7 +240,7 @@ nonisolated func applyDictionaryRules(
             candidates.append(Candidate(
                 range: match.range,
                 replacement: rule.replacement,
-                appScoped: rule.bundleID != nil,
+                appScoped: !rule.bundleIDs.isEmpty,
                 length: match.range.length,
                 order: rule.id.uuidString
             ))
@@ -231,7 +303,7 @@ final class DictionaryStore {
     /// Cross-scope same-spoken is legal (app wins at apply time); the caller
     /// surfaces the precedence warning from `precedenceWarning(for:)`.
     @discardableResult
-    func add(spoken: String, replacement: String, bundleID: String?, isEnabled: Bool = true) async -> Result<DictionaryRule, DictionaryValidationError> {
+    func add(spoken: String, replacement: String, bundleIDs: [String] = [], isEnabled: Bool = true) async -> Result<DictionaryRule, DictionaryValidationError> {
         let cleanSpoken = DictionaryRule.normalizeSpoken(spoken)
         guard !cleanSpoken.isEmpty else { return .failure(.emptySpoken) }
         guard cleanSpoken.count <= DictionaryRule.maxSpokenLength else { return .failure(.spokenTooLong) }
@@ -242,24 +314,19 @@ final class DictionaryStore {
         guard cleanReplacement.count <= DictionaryRule.maxReplacementLength else {
             return .failure(.replacementTooLong)
         }
-        let cleanScope: String?
-        if let bundleID {
-            let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return .failure(.emptyBundleID) }
-            cleanScope = trimmed
-        } else {
-            cleanScope = nil
+        guard let cleanScopes = DictionaryRule.normalizeScopes(bundleIDs) else {
+            return .failure(.emptyAppScope)
         }
         guard rules.count < DictionaryRule.maxRules else { return .failure(.storeFull) }
         let candidate = DictionaryRule(
             spoken: cleanSpoken, replacement: cleanReplacement,
-            bundleID: cleanScope, isEnabled: isEnabled
+            bundleIDs: cleanScopes, isEnabled: isEnabled
         )
         let key = candidate.duplicateKey()
         if rules.contains(where: { $0.duplicateKey() == key }) {
             return .failure(.duplicate(
                 spoken: cleanSpoken,
-                scope: cleanScope.map { "for \($0)" } ?? "globally"
+                scope: DictionaryRule.scopeDescription(cleanScopes)
             ))
         }
         rules.append(candidate)
@@ -281,14 +348,15 @@ final class DictionaryStore {
         guard fixed.replacement.count <= DictionaryRule.maxReplacementLength else {
             return .failure(.replacementTooLong)
         }
-        if let scope = fixed.bundleID, scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return .failure(.emptyBundleID)
+        guard let cleanScopes = DictionaryRule.normalizeScopes(fixed.bundleIDs) else {
+            return .failure(.emptyAppScope)
         }
+        fixed.bundleIDs = cleanScopes
         let key = fixed.duplicateKey()
         if rules.contains(where: { $0.id != fixed.id && $0.duplicateKey() == key }) {
             return .failure(.duplicate(
                 spoken: fixed.spoken,
-                scope: fixed.bundleID.map { "for \($0)" } ?? "globally"
+                scope: DictionaryRule.scopeDescription(fixed.bundleIDs)
             ))
         }
         rules[index] = fixed
@@ -313,13 +381,13 @@ final class DictionaryStore {
         let clash = rules.contains {
             $0.id != rule.id
                 && DictionaryRule.normalizeSpoken($0.spoken).lowercased() == spokenKey
-                && $0.bundleID != rule.bundleID
+                && Set($0.bundleIDs) != Set(rule.bundleIDs)
         }
         guard clash else { return nil }
-        if let scope = rule.bundleID {
-            return "‘\(rule.spoken)’ also has a global rule. The \(scope) rule wins there; the global rule still applies everywhere else."
+        if !rule.bundleIDs.isEmpty {
+            return "‘\(rule.spoken)’ also has a rule for other apps or everywhere. This rule wins in its apps; the wider rule still applies elsewhere."
         } else {
-            return "‘\(rule.spoken)’ also has an app-scoped rule. That rule wins in its app; this global rule applies everywhere else."
+            return "‘\(rule.spoken)’ also has an app-specific rule. That rule wins in its apps; this global rule applies everywhere else."
         }
     }
 
@@ -354,8 +422,10 @@ final class DictionaryStore {
                     || rule.spoken.count > DictionaryRule.maxSpokenLength { return "Bad spoken form." }
                 if rule.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || rule.replacement.count > DictionaryRule.maxReplacementLength { return "Bad replacement." }
-                if let scope = rule.bundleID,
-                   scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Bad app scope." }
+                guard let scopes = DictionaryRule.normalizeScopes(rule.bundleIDs) else {
+                    return "Bad app scope."
+                }
+                rule.bundleIDs = scopes
                 return nil
             }()
             if let problems {

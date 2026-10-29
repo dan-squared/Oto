@@ -52,9 +52,8 @@ struct IntelligencePane: View {
                 OtoStatus(text: statusText, tone: statusTone)
             }
             Toggle("Use Apple Intelligence", isOn: $enabled)
-        } footer: {
             if let statusDetail {
-                Text(statusDetail)
+                OtoPanelNote(statusDetail)
             }
         }
 
@@ -64,26 +63,22 @@ struct IntelligencePane: View {
                 selection: level
             )
             Text(cleanupDescription)
-                .font(.subheadline)
+                .font(.callout)
                 .foregroundStyle(.secondary)
+            OtoPanelNote(cleanupFooting(historyEnabled: historyEnabled))
         } header: {
             Text("Auto Cleanup")
-        } footer: {
-            Text(cleanupFooting(historyEnabled: historyEnabled))
         }
         .disabled(!enabled)
 
         Section {
-            Text("Select text in any app, press the shortcut — the pill shows the rewrite while it runs.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
+            OtoPanelNote("Select text in any app, press the shortcut — the pill shows the rewrite while it runs.")
             ForEach(TransformPreset.allCases, id: \.rawValue) { preset in
                 transformRow(for: preset)
             }
+            OtoPanelNote("On-device only — transcripts and prompts never leave this Mac.")
         } header: {
             Text("My Transforms")
-        } footer: {
-            Text("On-device only — transcripts and prompts never leave this Mac.")
         }
         .disabled(!enabled)
         .onAppear {
@@ -259,7 +254,8 @@ struct IntelligencePane: View {
         }
         refreshTransforms()
         transforms.start()
-        recording = nil
+        // The recorder flashes green and dismisses itself; clearing `recording`
+        // here would close the popover before the confirmation is visible.
         return nil
     }
 

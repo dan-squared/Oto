@@ -38,8 +38,8 @@ struct SnippetsPane: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
-                        if let scope = snippet.bundleID {
-                            Text(scope)
+                        if !snippet.bundleIDs.isEmpty {
+                            Text(InstalledApps.names(for: snippet.bundleIDs))
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(.tertiary)
                         }
@@ -70,8 +70,7 @@ struct SnippetsPane: View {
                     .controlSize(.small)
                 Spacer(minLength: 0)
             }
-        } footer: {
-            Text("Snippets only insert when you choose — saying the name never expands it.")
+            OtoPanelNote("Snippets only insert when you choose — saying the name never expands it.")
         }
         .sheet(isPresented: $addingSnippet) {
             SnippetEditor(snippet: nil, snippets: snippets) {
@@ -125,7 +124,7 @@ private struct SnippetEditor: View {
     @State private var name = ""
     @State private var expansion = ""
     @State private var scopeGlobal = true
-    @State private var bundleID = ""
+    @State private var bundleIDs: [String] = []
     @State private var error: String?
     @State private var confirmCopyOverwrite = false
 
@@ -135,13 +134,8 @@ private struct SnippetEditor: View {
                 TextField("Name", text: $name)
                 TextEditor(text: $expansion)
                     .frame(minHeight: 90)
-                OtoSegmented(options: [(true, "Everywhere"), (false, "One app")], selection: $scopeGlobal)
-                if !scopeGlobal {
-                    // Manual bundle ID only (see DictionaryPane: a Fill
-                    // button would capture Oto itself).
-                    TextField("App bundle ID", text: $bundleID)
-                        .font(.caption)
-                }
+                // Scope is picked, never typed (see DictionaryPane).
+                OtoAppScopePicker(isGlobal: $scopeGlobal, bundleIDs: $bundleIDs)
             }
             if let error {
                 Text(error).font(.caption).foregroundStyle(.red)
@@ -173,8 +167,8 @@ private struct SnippetEditor: View {
         if let snippet {
             name = snippet.name
             expansion = snippet.expansion
-            scopeGlobal = snippet.bundleID == nil
-            bundleID = snippet.bundleID ?? ""
+            scopeGlobal = snippet.bundleIDs.isEmpty
+            bundleIDs = snippet.bundleIDs
         }
     }
 
@@ -200,15 +194,15 @@ private struct SnippetEditor: View {
 
     private func save() {
         Task {
-            let scope = scopeGlobal ? nil : bundleID
+            let scopes = scopeGlobal ? [] : bundleIDs
             let result: Result<Snippet, SnippetValidationError>
             if var snippet {
                 snippet.name = name
                 snippet.expansion = expansion
-                snippet.bundleID = scope
+                snippet.bundleIDs = scopes
                 result = await snippets.update(snippet)
             } else {
-                result = await snippets.add(name: name, expansion: expansion, bundleID: scope)
+                result = await snippets.add(name: name, expansion: expansion, bundleIDs: scopes)
             }
             switch result {
             case .success: onDone()

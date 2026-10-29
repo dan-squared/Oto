@@ -18,8 +18,7 @@ struct PrivacyPane: View {
             MicStatusRow(uiState: uiState, title: "Microphone")
             AccessibilityRow(uiState: uiState)
             SpeechStatusRow(uiState: uiState)
-        } footer: {
-            Text("Oto stores what you choose: rules, snippets, and transcripts only if you enable history. Never audio or other apps' content.")
+            OtoPanelNote("Oto stores what you choose: rules, snippets, and transcripts only if you enable history. Never audio or other apps' content.")
         }
         .task {
             // Slow state is hoisted (loaded once per window open) — keep

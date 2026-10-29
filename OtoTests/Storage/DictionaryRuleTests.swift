@@ -22,7 +22,12 @@ struct DictionaryRuleTests {
         scope: String? = nil,
         enabled: Bool = true
     ) -> DictionaryRule {
-        DictionaryRule(spoken: spoken, replacement: replacement, bundleID: scope, isEnabled: enabled)
+        DictionaryRule(
+            spoken: spoken,
+            replacement: replacement,
+            bundleIDs: scope.map { [$0] } ?? [],
+            isEnabled: enabled
+        )
     }
 
     // MARK: - Matching and boundaries
@@ -149,6 +154,39 @@ struct DictionaryRuleTests {
         #expect(applyDictionaryRules(rules, to: "hi", for: target("com.b.App")) == "GLOBAL")
     }
 
+    @Test func multiAppScopeFiresInEachListedApp() {
+        let multi = DictionaryRule(
+            spoken: "hi", replacement: "HI",
+            bundleIDs: ["com.a.App", "com.b.App"]
+        )
+        #expect(applyDictionaryRules([multi], to: "hi", for: target("com.a.App")) == "HI")
+        #expect(applyDictionaryRules([multi], to: "hi", for: target("com.b.App")) == "HI")
+        #expect(applyDictionaryRules([multi], to: "hi", for: target("com.c.App")) == "hi")
+    }
+
+    @Test func scopeCoversTheAppFamily() {
+        // Choosing an app also covers that app's own extensions and agents,
+        // which is why the picker never lists them separately.
+        let journal = rule("hi", "HI", scope: "com.apple.journal")
+        #expect(applyDictionaryRules([journal], to: "hi", for: target("com.apple.journal.JournalWidget")) == "HI")
+        // A rule stored against a helper still fires in the parent app.
+        let helper = rule("hi", "HI", scope: "com.apple.journal.JournalWidget")
+        #expect(applyDictionaryRules([helper], to: "hi", for: target("com.apple.journal")) == "HI")
+        // The dot boundary keeps neighbours apart.
+        #expect(applyDictionaryRules([journal], to: "hi", for: target("com.apple.journalist")) == "hi")
+    }
+
+    @Test func legacySingleScopeDecodesIntoScopeList() throws {
+        let id = UUID().uuidString
+        let legacy = #"{"id":"\#(id)","spoken":"hi","replacement":"HI","bundleID":"com.a.App","isEnabled":true}"#
+        let decoded = try JSONDecoder().decode(DictionaryRule.self, from: Data(legacy.utf8))
+        #expect(decoded.bundleIDs == ["com.a.App"])
+
+        let global = #"{"id":"\#(id)","spoken":"hi","replacement":"HI","isEnabled":true}"#
+        let globalRule = try JSONDecoder().decode(DictionaryRule.self, from: Data(global.utf8))
+        #expect(globalRule.bundleIDs.isEmpty)
+    }
+
     // MARK: - Store validation
 
     private func makeStore() -> (DictionaryStore, LocalPersistence) {
@@ -160,30 +198,52 @@ struct DictionaryRuleTests {
 
     @Test func rejectsEmptyAndOversize() async {
         let (store, _) = makeStore()
-        if case .failure(let error) = await store.add(spoken: "  ", replacement: "x", bundleID: nil) {
+        if case .failure(let error) = await store.add(spoken: "  ", replacement: "x", bundleIDs: []) {
             #expect(error == .emptySpoken)
         } else { Issue.record("expected emptySpoken") }
-        if case .failure(let error) = await store.add(spoken: "x", replacement: "  ", bundleID: nil) {
+        if case .failure(let error) = await store.add(spoken: "x", replacement: "  ", bundleIDs: []) {
             #expect(error == .emptyReplacement)
         } else { Issue.record("expected emptyReplacement") }
-        if case .failure(let error) = await store.add(spoken: String(repeating: "a", count: 81), replacement: "x", bundleID: nil) {
+        if case .failure(let error) = await store.add(spoken: String(repeating: "a", count: 81), replacement: "x", bundleIDs: []) {
             #expect(error == .spokenTooLong)
         } else { Issue.record("expected spokenTooLong") }
-        if case .failure(let error) = await store.add(spoken: "x", replacement: "y", bundleID: "  ") {
-            #expect(error == .emptyBundleID)
-        } else { Issue.record("expected emptyBundleID") }
+        if case .failure(let error) = await store.add(spoken: "x", replacement: "y", bundleIDs: ["  "]) {
+            #expect(error == .emptyAppScope)
+        } else { Issue.record("expected emptyAppScope") }
     }
 
     @Test func rejectsDuplicateSameScope() async {
         let (store, _) = makeStore()
-        _ = await store.add(spoken: "hi", replacement: "HI", bundleID: nil)
-        let second = await store.add(spoken: "HI", replacement: "Hey", bundleID: nil)
+        _ = await store.add(spoken: "hi", replacement: "HI", bundleIDs: [])
+        let second = await store.add(spoken: "HI", replacement: "Hey", bundleIDs: [])
         if case .failure(let error) = second {
             #expect(error == .duplicate(spoken: "HI", scope: "globally"))
         } else { Issue.record("expected duplicate") }
         // Same spoken, different scope: legal.
-        let scoped = await store.add(spoken: "hi", replacement: "HI!", bundleID: "com.a.App")
+        let scoped = await store.add(spoken: "hi", replacement: "HI!", bundleIDs: ["com.a.App"])
         if case .failure = scoped { Issue.record("cross-scope must be legal") }
+    }
+
+    @Test func multiScopeDedupesAndIgnoresOrder() async {
+        let (store, _) = makeStore()
+        let added = await store.add(
+            spoken: "hi", replacement: "HI",
+            bundleIDs: ["com.a.App", "com.a.App", "com.b.App"]
+        )
+        guard case .success(let saved) = added else {
+            Issue.record("add must succeed"); return
+        }
+        #expect(saved.bundleIDs == ["com.a.App", "com.b.App"])
+        // The same app set in another order is the same rule.
+        let reordered = await store.add(
+            spoken: "hi", replacement: "HEY",
+            bundleIDs: ["com.b.App", "com.a.App"]
+        )
+        if case .failure(.duplicate) = reordered {
+            // expected
+        } else {
+            Issue.record("expected duplicate for the same app set")
+        }
     }
 
     @Test func updateMissingIsNotFound() async {
@@ -208,7 +268,7 @@ struct DictionaryRuleTests {
 
     @Test func importRoundTripWithReport() async {
         let (store, _) = makeStore()
-        _ = await store.add(spoken: "one", replacement: "1", bundleID: nil)
+        _ = await store.add(spoken: "one", replacement: "1", bundleIDs: [])
         let payload = try! store.exportData(snapshot: store.rules)
         let (store2, _) = makeStore()
         let report = await store2.importData(payload)

@@ -23,7 +23,7 @@ struct SnippetStoreTests {
         let store = makeStore()
         await store.load()
         #expect(store.snippets.isEmpty)
-        let added = await store.add(name: "Addr", expansion: "1 Main St", bundleID: nil)
+        let added = await store.add(name: "Addr", expansion: "1 Main St", bundleIDs: [])
         guard case .success(let snippet) = added else {
             Issue.record("add must succeed"); return
         }
@@ -41,19 +41,19 @@ struct SnippetStoreTests {
 
     @Test func validation() async {
         let store = makeStore()
-        if case .failure(let error) = await store.add(name: "  ", expansion: "x", bundleID: nil) {
+        if case .failure(let error) = await store.add(name: "  ", expansion: "x", bundleIDs: []) {
             #expect(error == .emptyName)
         } else { Issue.record("expected emptyName") }
-        if case .failure(let error) = await store.add(name: "n", expansion: "  ", bundleID: nil) {
+        if case .failure(let error) = await store.add(name: "n", expansion: "  ", bundleIDs: []) {
             #expect(error == .emptyExpansion)
         } else { Issue.record("expected emptyExpansion") }
-        _ = await store.add(name: "Addr", expansion: "x", bundleID: nil)
-        if case .failure(let error) = await store.add(name: "addr", expansion: "y", bundleID: nil) {
+        _ = await store.add(name: "Addr", expansion: "x", bundleIDs: [])
+        if case .failure(let error) = await store.add(name: "addr", expansion: "y", bundleIDs: []) {
             #expect(error == .duplicateName)
         } else { Issue.record("expected duplicateName (case-insensitive)") }
-        if case .failure(let error) = await store.add(name: "n2", expansion: "x", bundleID: "  ") {
-            #expect(error == .emptyBundleID)
-        } else { Issue.record("expected emptyBundleID") }
+        if case .failure(let error) = await store.add(name: "n2", expansion: "x", bundleIDs: ["  "]) {
+            #expect(error == .emptyAppScope)
+        } else { Issue.record("expected emptyAppScope") }
     }
 
     @Test func previewTruncates() {
@@ -70,8 +70,8 @@ struct SnippetStoreTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let persistence = LocalPersistence(directory: dir)
         let store = SnippetStore(persistence: persistence)
-        guard case .success(let first) = await store.add(name: "One", expansion: "1", bundleID: nil),
-              case .success = await store.add(name: "Two", expansion: "2", bundleID: nil)
+        guard case .success(let first) = await store.add(name: "One", expansion: "1", bundleIDs: []),
+              case .success = await store.add(name: "Two", expansion: "2", bundleIDs: [])
         else {
             Issue.record("setup adds must succeed"); return
         }
@@ -94,16 +94,26 @@ struct SnippetStoreTests {
     }
     @Test func v1SchemaHasNoTriggerKey() async throws {
         let store = makeStore()
-        // Scoped snippet: all four v1 keys present, trigger absent by bytes.
-        _ = await store.add(name: "Addr", expansion: "1 Main St", bundleID: "com.a.App")
+        // Scoped snippet: every v1 key present, trigger absent by bytes.
+        _ = await store.add(name: "Addr", expansion: "1 Main St", bundleIDs: ["com.a.App"])
         let encoded = try JSONEncoder().encode(store.snippets[0])
         let keys = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
-        #expect(Set(keys.keys) == ["id", "name", "expansion", "bundleID"])
-        // Unscoped snippet: nil optionals use encodeIfPresent (key omitted,
-        // still decodes to nil) — still no trigger key.
-        _ = await store.add(name: "Sig", expansion: "bye", bundleID: nil)
+        #expect(Set(keys.keys) == ["id", "name", "expansion", "bundleIDs"])
+        // Unscoped snippet: the scope key is omitted, still decodes to empty
+        // — still no trigger key.
+        _ = await store.add(name: "Sig", expansion: "bye", bundleIDs: [])
         let encoded2 = try JSONEncoder().encode(store.snippets[1])
         let keys2 = try JSONSerialization.jsonObject(with: encoded2) as! [String: Any]
         #expect(Set(keys2.keys) == ["id", "name", "expansion"])
+    }
+
+    @Test func legacySingleScopeDecodesIntoScopeList() throws {
+        let id = UUID().uuidString
+        let legacy = #"{"id":"\#(id)","name":"Addr","expansion":"1 Main St","bundleID":"com.a.App"}"#
+        let decoded = try JSONDecoder().decode(Snippet.self, from: Data(legacy.utf8))
+        #expect(decoded.bundleIDs == ["com.a.App"])
+
+        let global = #"{"id":"\#(id)","name":"Addr","expansion":"1 Main St"}"#
+        #expect(try JSONDecoder().decode(Snippet.self, from: Data(global.utf8)).bundleIDs.isEmpty)
     }
 }

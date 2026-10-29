@@ -12,7 +12,7 @@
 import Foundation
 import os
 
-/// Named reusable text. Scope mirrors the dictionary (nil = global).
+/// Named reusable text. Scope mirrors the dictionary (empty = global).
 /// Deliberately no trigger/activation: manual-only v1.
 struct Snippet: Sendable, Hashable, Codable, Identifiable {
     nonisolated static let maxNameLength = 60
@@ -23,18 +23,62 @@ struct Snippet: Sendable, Hashable, Codable, Identifiable {
     let id: UUID
     var name: String
     var expansion: String
-    var bundleID: String?
+    /// Apps this snippet is offered in; empty means everywhere.
+    var bundleIDs: [String]
 
     nonisolated init(
         id: UUID = UUID(),
         name: String,
         expansion: String,
-        bundleID: String? = nil
+        bundleIDs: [String] = []
     ) {
         self.id = id
         self.name = name
         self.expansion = expansion
-        self.bundleID = bundleID
+        self.bundleIDs = bundleIDs
+    }
+
+    // MARK: - Codable
+
+    /// v1 stored one `bundleID`; multi-select scopes store `bundleIDs`.
+    private enum CodingKeys: String, CodingKey {
+        case id, name, expansion, bundleIDs, bundleID
+    }
+
+    nonisolated init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        expansion = try container.decode(String.self, forKey: .expansion)
+        if let list = try container.decodeIfPresent([String].self, forKey: .bundleIDs) {
+            bundleIDs = list
+        } else if let legacy = try container.decodeIfPresent(String.self, forKey: .bundleID) {
+            bundleIDs = legacy.isEmpty ? [] : [legacy]
+        } else {
+            bundleIDs = []
+        }
+    }
+
+    nonisolated func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(expansion, forKey: .expansion)
+        if !bundleIDs.isEmpty {
+            try container.encode(bundleIDs, forKey: .bundleIDs)
+        }
+    }
+
+    /// Trim, drop blanks, dedupe. Nil means a blank scope was supplied.
+    nonisolated static func normalizeScopes(_ raw: [String]) -> [String]? {
+        var seen = Set<String>()
+        var scopes: [String] = []
+        for id in raw {
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if seen.insert(trimmed).inserted { scopes.append(trimmed) }
+        }
+        return scopes
     }
 
     /// List-row preview: first 120 chars, newlines flattened, "+N more".
@@ -54,7 +98,7 @@ enum SnippetValidationError: Error, Equatable, Sendable {
     case duplicateName
     case emptyExpansion
     case expansionTooLong
-    case emptyBundleID
+    case emptyAppScope
     case storeFull
     case notFound
 
@@ -70,8 +114,8 @@ enum SnippetValidationError: Error, Equatable, Sendable {
             return "Enter the text to insert."
         case .expansionTooLong:
             return "Expansion is too long (max \(Snippet.maxExpansionLength) characters)."
-        case .emptyBundleID:
-            return "App scope is empty — pick Global or enter the app's bundle ID."
+        case .emptyAppScope:
+            return "Choose at least one app, or switch the scope to Everywhere."
         case .storeFull:
             return "Snippets hold \(Snippet.maxSnippets) entries. Delete one before adding another."
         case .notFound:
@@ -105,7 +149,7 @@ final class SnippetStore {
     }
 
     @discardableResult
-    func add(name: String, expansion: String, bundleID: String?) async -> Result<Snippet, SnippetValidationError> {
+    func add(name: String, expansion: String, bundleIDs: [String] = []) async -> Result<Snippet, SnippetValidationError> {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return .failure(.emptyName) }
         guard cleanName.count <= Snippet.maxNameLength else { return .failure(.nameTooLong) }
@@ -113,19 +157,14 @@ final class SnippetStore {
             return .failure(.emptyExpansion)
         }
         guard expansion.count <= Snippet.maxExpansionLength else { return .failure(.expansionTooLong) }
-        let cleanScope: String?
-        if let bundleID {
-            let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return .failure(.emptyBundleID) }
-            cleanScope = trimmed
-        } else {
-            cleanScope = nil
+        guard let cleanScopes = Snippet.normalizeScopes(bundleIDs) else {
+            return .failure(.emptyAppScope)
         }
         guard snippets.count < Snippet.maxSnippets else { return .failure(.storeFull) }
         if snippets.contains(where: { $0.name.lowercased() == cleanName.lowercased() }) {
             return .failure(.duplicateName)
         }
-        let snippet = Snippet(name: cleanName, expansion: expansion, bundleID: cleanScope)
+        let snippet = Snippet(name: cleanName, expansion: expansion, bundleIDs: cleanScopes)
         snippets.append(snippet)
         await persist()
         return .success(snippet)
@@ -143,10 +182,10 @@ final class SnippetStore {
             return .failure(.emptyExpansion)
         }
         guard fixed.expansion.count <= Snippet.maxExpansionLength else { return .failure(.expansionTooLong) }
-        if let scope = fixed.bundleID,
-           scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return .failure(.emptyBundleID)
+        guard let cleanScopes = Snippet.normalizeScopes(fixed.bundleIDs) else {
+            return .failure(.emptyAppScope)
         }
+        fixed.bundleIDs = cleanScopes
         if snippets.contains(where: { $0.id != fixed.id && $0.name.lowercased() == fixed.name.lowercased() }) {
             return .failure(.duplicateName)
         }

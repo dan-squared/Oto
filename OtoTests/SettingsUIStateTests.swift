@@ -99,7 +99,7 @@ struct SettingsUIStateTests {
     }
 
     @Test func sidebarUsesCompactResizableWidth() {
-        #expect(SettingsRoot.minimumSidebarWidth == 194)
-        #expect(SettingsRoot.sidebarWidth == 218)
+        #expect(SettingsRoot.minimumSidebarWidth == 170)
+        #expect(SettingsRoot.sidebarWidth == 180)
     }
 }

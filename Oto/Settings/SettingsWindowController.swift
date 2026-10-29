@@ -40,25 +40,34 @@ final class OtoSettingsWindowController: NSObject, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         window.toolbarStyle = .unified
-        let toolbar = NSToolbar(identifier: "OtoSettings")
-        toolbar.displayMode = .iconOnly
-        toolbar.sizeMode = .regular
-        toolbar.allowsUserCustomization = false
-        window.toolbar = toolbar
+        // Settings is a fixed-shape utility window: full screen would stretch
+        // a two-column form across the display, and the green button would
+        // promise a mode this window can't honour. Refuse the capability and
+        // grey the button — ⌃⌘F and the View menu follow the same flag.
+        window.collectionBehavior.remove(.fullScreenPrimary)
+        window.collectionBehavior.insert(.fullScreenNone)
+        window.standardWindowButton(.zoomButton)?.isEnabled = false
         window.backgroundColor = .windowBackgroundColor
         window.contentMinSize = NSSize(width: SettingsRoot.minimumWidth, height: SettingsRoot.minimumHeight)
         window.contentMaxSize = NSSize(width: SettingsRoot.maximumWidth, height: .greatestFiniteMagnitude)
         window.maxSize = NSSize(width: SettingsRoot.maximumWidth, height: .greatestFiniteMagnitude)
         window.isReleasedWhenClosed = false
         window.delegate = self
-        // Assigning the host and then the unified toolbar lets AppKit replace
-        // the content view. Reapply the measured content size last, as the
-        // Firstlight controller does, or AppKit can retain a transient zero
-        // width from the outer SwiftUI host during the first layout pass.
+        // The host installs SwiftUI's own toolbar (back/forward). Assigning a
+        // replacement NSToolbar here would drop those items. Reapply the
+        // measured content size last, as the Firstlight controller does, or
+        // AppKit can retain a transient zero width from the outer SwiftUI
+        // host during the first layout pass.
         window.setContentSize(NSSize(width: SettingsRoot.width, height: SettingsRoot.height))
         window.contentView?.layoutSubtreeIfNeeded()
         window.center()
         self.window = window
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        // AppKit revalidates the titlebar buttons on focus changes; the zoom
+        // button must stay refused for the window's whole life.
+        window?.standardWindowButton(.zoomButton)?.isEnabled = false
     }
 
     func windowWillClose(_ notification: Notification) {

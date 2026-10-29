@@ -43,10 +43,9 @@ struct DictationPane: View {
                     .disabled(uiState.isPreparing)
                 }
             }
+            OtoPanelNote(uiState.speechReady ? uiState.languageText : (uiState.prepareFeedback ?? uiState.readinessText))
         } header: {
             Text("Speech")
-        } footer: {
-            Text(uiState.speechReady ? uiState.languageText : (uiState.prepareFeedback ?? uiState.readinessText))
         }
         .onAppear {
             // Fast only: shortcut summary (the config can change in the
@@ -89,10 +88,9 @@ struct DictationPane: View {
             .disabled(uiState.inputDevices.isEmpty)
             .help("Choose the Mac's default input device")
             MicStatusRow(uiState: uiState, title: "Status")
+            OtoPanelNote("Sets the Mac's input — every app follows it.")
         } header: {
             Text("Microphone")
-        } footer: {
-            Text("Sets the Mac's input — every app follows it.")
         }
 
         Section("Permissions") {
@@ -104,20 +102,18 @@ struct DictationPane: View {
             Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
                 .accessibilityIdentifier("CatcherToggle")
             Toggle("Mute media while dictating", isOn: $muteMedia)
+            OtoPanelNote("Catcher: no text field? Oto opens a small window. Off: auto-copies instead.\nMute: silences speakers, restores volume automatically.")
         } header: {
             Text("Behavior")
-        } footer: {
-            Text("Catcher: no text field? Oto opens a small window. Off: auto-copies instead.\nMute: silences speakers, restores volume automatically.")
         }
 
         Section {
             TextEditor(text: $trialText)
                 .font(.body)
                 .frame(minHeight: 70)
+            OtoPanelNote("Dictate anywhere, or here — Oto captures the frontmost app.")
         } header: {
             Text("Try it")
-        } footer: {
-            Text("Dictate anywhere, or here — Oto captures the frontmost app.")
         }
     }
 
@@ -199,6 +195,8 @@ private struct ShortcutCapturePopover: View {
     @State private var modifierMonitor: Any?
     @State private var attemptedChips: [String] = []
     @State private var refusal: String?
+    @State private var glow: OtoRecorderGlow.Tone?
+    @State private var closeTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -211,16 +209,7 @@ private struct ShortcutCapturePopover: View {
                     .foregroundStyle(refusal == nil ? Color.secondary : Color.red)
             }
             .frame(maxWidth: .infinity, minHeight: 94)
-            .overlay {
-                if refusal != nil {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(.red.opacity(0.72), lineWidth: 1.5)
-                        .shadow(color: .red.opacity(0.38), radius: 9)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 22)
-                        .allowsHitTesting(false)
-                }
-            }
+            .background { OtoRecorderGlow(tone: glow) }
             .modifier(ShortcutRecorderModifier(
                 isListening: $isListening,
                 onCapture: { modifiers, keyCode, conflicts in
@@ -242,8 +231,7 @@ private struct ShortcutCapturePopover: View {
                 },
                 onInvalid: { reason in
                     NSSound.beep()
-                    message = reason.message
-                    refusal = reason.message
+                    refuse(reason.message)
                 },
                 onInvalidInput: { _, keyCode, flags in
                     attemptedChips = Self.chips(for: keyCode, flags: flags)
@@ -288,18 +276,22 @@ private struct ShortcutCapturePopover: View {
                 modifierFlags = event.modifierFlags
                 attemptedChips = []
                 refusal = nil
+                glow = nil
                 return event
             }
         }
         .onChange(of: isListening) { _, listening in
             if listening {
                 modifierFlags = NSEvent.modifierFlags
+                glow = nil
             } else {
                 modifierFlags = []
             }
         }
         .onDisappear {
             dispatch.setSuspended(false)
+            closeTask?.cancel()
+            closeTask = nil
             if let modifierMonitor {
                 NSEvent.removeMonitor(modifierMonitor)
                 self.modifierMonitor = nil
@@ -332,7 +324,7 @@ private struct ShortcutCapturePopover: View {
 
     private func finishCapture(kind: ShortcutTrigger.Kind, conflicts: [RecorderConflict]) {
         guard !ShortcutRecorderConflicts.blocksSaving(conflicts) else {
-            message = ShortcutRecorderConflicts.describe(conflicts)
+            refuse(ShortcutRecorderConflicts.describe(conflicts))
             return
         }
         let trigger = ShortcutTrigger(kind: kind, interaction: slot == .hold ? .holdToTalk : .handsFree)
@@ -340,10 +332,30 @@ private struct ShortcutCapturePopover: View {
             ? dispatch.updateHoldTrigger(trigger)
             : dispatch.updateHandsFreeTrigger(trigger)
         if result == .blocked {
-            message = "That shortcut is already in use by the other mode."
+            refuse("That shortcut is already in use by the other mode.")
         } else {
-            dispatch.setSuspended(false)
-            isListening = false
+            accept()
+        }
+    }
+
+    private func refuse(_ text: String) {
+        message = text
+        refusal = text
+        glow = .refused
+    }
+
+    /// A saved combination answers on the glass, then the popover goes: the
+    /// row behind it already shows the new keys. Dispatch resumes at once so
+    /// the shortcut is live during the flash.
+    private func accept() {
+        dispatch.setSuspended(false)
+        isListening = false
+        refusal = nil
+        glow = .accepted
+        closeTask?.cancel()
+        closeTask = Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
             onClose()
         }
     }

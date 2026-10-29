@@ -34,8 +34,8 @@ struct DictionaryPane: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("\"\(rule.spoken)\" → \"\(rule.replacement)\"")
                                 .font(.system(size: 13))
-                            if let scope = rule.bundleID {
-                                Text(scope)
+                            if !rule.bundleIDs.isEmpty {
+                                Text(InstalledApps.names(for: rule.bundleIDs))
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(.secondary)
                             }
@@ -71,8 +71,7 @@ struct DictionaryPane: View {
                     .tint(.red)
                     .disabled(dictionary.rules.isEmpty)
             }
-        } footer: {
-            Text("Whole words only — never inside links or paths. App rules win in their app.")
+            OtoPanelNote("Whole words only — never inside links or paths. App rules win in their app.")
         }
         .sheet(isPresented: $addingRule) {
             DictionaryRuleEditor(rule: nil, dictionary: dictionary) { saved in
@@ -119,7 +118,7 @@ private struct DictionaryRuleEditor: View {
     @State private var spoken = ""
     @State private var replacement = ""
     @State private var scopeGlobal = true
-    @State private var bundleID = ""
+    @State private var bundleIDs: [String] = []
     @State private var isEnabled = true
     @State private var sample = ""
     @State private var error: String?
@@ -130,15 +129,8 @@ private struct DictionaryRuleEditor: View {
             Section("Rule") {
                 TextField("What you say", text: $spoken)
                 TextField("Replacement", text: $replacement)
-                OtoSegmented(options: [(true, "Everywhere"), (false, "One app")], selection: $scopeGlobal)
-                if !scopeGlobal {
-                    // Scope is typed by hand: a "use frontmost" button
-                    // cannot work from Settings (clicking it makes Oto
-                    // frontmost, so it would capture app.Oto). Removed
-                    // until capture happens while the target app is front.
-                    TextField("App bundle ID (e.g. com.apple.Mail)", text: $bundleID)
-                        .font(.caption)
-                }
+                // Scope is picked, never typed: names are what people know.
+                OtoAppScopePicker(isGlobal: $scopeGlobal, bundleIDs: $bundleIDs)
                 Toggle("Enabled", isOn: $isEnabled)
             }
             Section("Try it") {
@@ -147,7 +139,7 @@ private struct DictionaryRuleEditor: View {
                 // about app-scoped rules.
                 let probe = dictionary.test(
                     sample: sample.isEmpty ? "Type a sentence containing \"\(spoken)\"" : sample,
-                    scope: scopeGlobal ? nil : bundleID.trimmingCharacters(in: .whitespacesAndNewlines),
+                    scope: scopeGlobal ? nil : bundleIDs.first,
                     rules: previewRules()
                 )
                 Text(probe)
@@ -176,8 +168,8 @@ private struct DictionaryRuleEditor: View {
         if let rule {
             spoken = rule.spoken
             replacement = rule.replacement
-            scopeGlobal = rule.bundleID == nil
-            bundleID = rule.bundleID ?? ""
+            scopeGlobal = rule.bundleIDs.isEmpty
+            bundleIDs = rule.bundleIDs
             isEnabled = rule.isEnabled
             warning = dictionary.precedenceWarning(for: rule)
         }
@@ -187,19 +179,19 @@ private struct DictionaryRuleEditor: View {
         var draft = rule ?? DictionaryRule(spoken: " ", replacement: " ")
         draft.spoken = spoken
         draft.replacement = replacement
-        draft.bundleID = scopeGlobal ? nil : bundleID
+        draft.bundleIDs = scopeGlobal ? [] : bundleIDs
         draft.isEnabled = true
         return dictionary.rules.filter { $0.id != draft.id } + [draft]
     }
 
     private func save() {
         Task {
-            let scope = scopeGlobal ? nil : bundleID
+            let scopes = scopeGlobal ? [] : bundleIDs
             if let rule {
                 var edited = rule
                 edited.spoken = spoken
                 edited.replacement = replacement
-                edited.bundleID = scope
+                edited.bundleIDs = scopes
                 edited.isEnabled = isEnabled
                 switch await dictionary.update(edited) {
                 case .success(let saved): onDone(saved)
@@ -208,7 +200,7 @@ private struct DictionaryRuleEditor: View {
             } else {
                 switch await dictionary.add(
                     spoken: spoken, replacement: replacement,
-                    bundleID: scope, isEnabled: isEnabled
+                    bundleIDs: scopes, isEnabled: isEnabled
                 ) {
                 case .success(let saved): onDone(saved)
                 case .failure(let failure): error = failure.errorDescription

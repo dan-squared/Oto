@@ -17,6 +17,7 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
     case history
     case privacy
     case intelligence
+    case about
 
     var id: Self { self }
 
@@ -29,6 +30,7 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
         case .history: "History"
         case .privacy: "Privacy"
         case .intelligence: "Intelligence"
+        case .about: "About"
         }
     }
 
@@ -41,6 +43,7 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
         case .history: "clock"
         case .privacy: "hand.raised"
         case .intelligence: "sparkles"
+        case .about: "info.circle"
         }
     }
 
@@ -50,19 +53,21 @@ enum SettingsPane: Hashable, CaseIterable, Identifiable {
         let terms: String
         switch self {
         case .general:
-            terms = "launch login dock flow bar position about version"
+            terms = "launch login dock flow bar position"
         case .dictation:
             terms = "speech shortcut microphone permissions catcher media offline"
         case .dictionary:
-            terms = "spoken words replacements rules"
+            terms = "spoken words replacements rules apps"
         case .snippets:
-            terms = "saved text expansion clipboard"
+            terms = "saved text expansion clipboard apps"
         case .history:
             terms = "transcripts retention remember delete"
         case .privacy:
             terms = "microphone accessibility speech local data"
         case .intelligence:
             terms = "apple intelligence writing cleanup transforms"
+        case .about:
+            terms = "about version build bundle identifier copyright"
         }
         return "\(title) \(terms)"
     }
@@ -296,6 +301,11 @@ struct SettingsRoot: View {
 
     var body: some View {
         SettingsSplitView(sidebar: sidebarContent, detail: detailContent)
+        .ignoresSafeArea()
+        // The split must own the window's full height, not the safe area:
+        // AppKit supplies a full-height sidebar glass behind the traffic
+        // lights, and the hosting controller would otherwise lay the split
+        // out 52 pt low, leaving a titlebar band above the sidebar.
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button(action: moveBack) {
@@ -451,6 +461,8 @@ struct SettingsRoot: View {
             PrivacyPane(uiState: uiState)
         case .intelligence:
             IntelligencePane(polish: polish, transforms: transforms)
+        case .about:
+            AboutPane()
         }
     }
 

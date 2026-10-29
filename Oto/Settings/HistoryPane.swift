@@ -36,8 +36,7 @@ struct HistoryPane: View {
                     get: { historyEnabled },
                     set: { setHistoryEnabled($0) }
                 ))
-            } footer: {
-                Text("On this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Off stops new saves; existing entries stay until cleared; nothing is ever uploaded.")
+                OtoPanelNote("On this Mac only. Newest \(HistoryStore.maxEntries) entries, \(HistoryStore.maxAgeDays) days. Off stops new saves; existing entries stay until cleared; nothing is ever uploaded.")
             }
 
             if !historyEnabled {

@@ -69,11 +69,11 @@ struct GeneralPane: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-        } footer: {
             if let loginCaption {
-                Text(loginCaption)
+                OtoPanelNote("\(loginCaption)\n\nOff: menu bar only — no Dock, no ⌘Tab.")
+            } else {
+                OtoPanelNote("Off: menu bar only — no Dock, no ⌘Tab.")
             }
-            Text("Off: menu bar only — no Dock, no ⌘Tab.")
         }
         .task { refreshLogin() }
 
@@ -82,15 +82,9 @@ struct GeneralPane: View {
                 options: [(.top, "Top"), (.bottom, "Bottom")],
                 selection: $flowPosition
             )
+            OtoPanelNote("Top sits below the notch. Drag the pill anytime — it snaps.")
         } header: {
             Text("Flow Bar")
-        } footer: {
-            Text("Top sits below the notch. Drag the pill anytime — it snaps.")
-        }
-
-        Section("About") {
-            LabeledContent("Version", value: appVersion)
-            LabeledContent("Bundle identifier", value: Bundle.main.bundleIdentifier ?? "—")
         }
     }
 
@@ -104,13 +98,6 @@ struct GeneralPane: View {
             return "Login item status is unavailable right now."
         }
         return nil
-    }
-
-    private var appVersion: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
-        let build = info?["CFBundleVersion"] as? String ?? "—"
-        return "\(version) (\(build))"
     }
 
     private func refreshLogin() {

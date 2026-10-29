@@ -360,6 +360,12 @@ struct TransformShortcutCapturePopover: View {
 
     @State private var attemptedChips: [String] = []
     @State private var refusal: String?
+    @State private var glow: OtoRecorderGlow.Tone?
+    /// Capture and presentation are separate: a saved combination stops the
+    /// monitor at once but keeps the popover up for the green flash, and only
+    /// then clears `isListening` so the parent dismisses it.
+    @State private var capturing = true
+    @State private var closeTask: Task<Void, Never>?
 
     @State private var modifierFlags: NSEvent.ModifierFlags = []
     @State private var monitor: Any?
@@ -375,35 +381,30 @@ struct TransformShortcutCapturePopover: View {
                     .foregroundStyle(refusal == nil ? Color.secondary : Color.red)
             }
             .frame(maxWidth: .infinity, minHeight: 94)
-            .overlay {
-                if refusal != nil {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(.red.opacity(0.72), lineWidth: 1.5)
-                        .shadow(color: .red.opacity(0.38), radius: 9)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 22)
-                        .allowsHitTesting(false)
-                }
-            }
+            .background { OtoRecorderGlow(tone: glow) }
             .modifier(ShortcutRecorderModifier(
-                isListening: $isListening,
+                isListening: $capturing,
                 onCapture: { modifiers, keyCode, conflicts in
                     if let message = onCapture(modifiers, keyCode, conflicts) {
-                        refusal = message
+                        refuse(message)
                         attemptedChips = Self.chips(for: UInt16(keyCode), flags: NSEvent.modifierFlags)
+                    } else {
+                        accept()
                     }
                 },
                 onCaptureModifier: { code in
                     if let message = onCaptureModifier(code) {
-                        refusal = message
+                        refuse(message)
                         attemptedChips = [KeyNames.holdChip(for: code)]
+                    } else {
+                        accept()
                     }
                 },
                 onClear: onClear,
                 onCancel: onCancel,
                 onInvalid: onInvalid,
                 onInvalidInput: { reason, keyCode, flags in
-                    refusal = reason.message
+                    refuse(reason.message)
                     attemptedChips = Self.chips(for: keyCode, flags: flags)
                 }
             ))
@@ -430,19 +431,42 @@ struct TransformShortcutCapturePopover: View {
         .presentationBackground(.ultraThinMaterial)
         .presentationCornerRadius(20)
         .onAppear {
+            capturing = true
             modifierFlags = NSEvent.modifierFlags
             monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
                 modifierFlags = event.modifierFlags
                 attemptedChips = []
                 refusal = nil
+                glow = nil
                 return event
             }
         }
         .onDisappear {
+            closeTask?.cancel()
+            closeTask = nil
             if let monitor {
                 NSEvent.removeMonitor(monitor)
                 self.monitor = nil
             }
+        }
+    }
+
+    private func refuse(_ message: String) {
+        refusal = message
+        glow = .refused
+    }
+
+    /// The combination landed: stop hearing keys, answer on the glass, then
+    /// let the parent dismiss the popover once the green has been seen.
+    private func accept() {
+        capturing = false
+        refusal = nil
+        glow = .accepted
+        closeTask?.cancel()
+        closeTask = Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            isListening = false
         }
     }
 

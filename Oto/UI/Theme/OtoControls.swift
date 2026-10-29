@@ -193,6 +193,54 @@ struct OtoKey: View {
     }
 }
 
+/// The recorder's answer painted on the popover glass: a wash from the top
+/// edge that fades to clear. Red while a combination is refused, green in the
+/// moment one lands. Never a border box — the tint is the surface, as in the
+/// Firstlight recorder.
+struct OtoRecorderGlow: View {
+    enum Tone {
+        case refused
+        case accepted
+
+        var color: Color {
+            switch self {
+            case .refused: .red
+            case .accepted: .green
+            }
+        }
+
+        /// Strength at the top edge. The refusal can sit heavier than the
+        /// green, which only has the moment before the popover closes.
+        var strength: Double {
+            switch self {
+            case .refused: 0.32
+            case .accepted: 0.30
+            }
+        }
+    }
+
+    var tone: Tone?
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let color = tone?.color ?? .red
+        let strength = tone?.strength ?? 0
+        LinearGradient(
+            colors: [color.opacity(strength), color.opacity(0)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .opacity(tone == nil ? 0 : 1)
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: tone == nil ? 0.38 : (tone == .accepted ? 0.1 : 0.12)),
+            value: tone
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 /// The compact shortcut face shared by Dictation and Intelligence rows.
 /// Its quiet well and keycaps match Firstlight; the glass belongs to the
 /// anchored recorder popover, never to the key faces themselves.
