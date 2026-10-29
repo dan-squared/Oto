@@ -153,43 +153,52 @@ struct DictationPane: View {
             Text(title)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button {
-                shortcutMessage = nil
-                capturePopoverSlot = slot
-            } label: {
-                HStack(spacing: 5) {
-                    if chips.isEmpty {
-                        OtoKey(text: "Not set", compact: true)
-                    } else {
-                        ForEach(chips, id: \.self) { chip in
-                            OtoKey(text: chip, compact: true)
+            HStack(spacing: 4) {
+                Button {
+                    shortcutMessage = nil
+                    capturePopoverSlot = slot
+                } label: {
+                    HStack(spacing: 5) {
+                        if chips.isEmpty {
+                            OtoKey(text: "Not set", compact: true)
+                        } else {
+                            ForEach(chips, id: \.self) { chip in
+                                OtoKey(text: chip, compact: true)
+                            }
                         }
                     }
                 }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Record \(title) shortcut")
-            .help("Click to record a shortcut")
-            .popover(isPresented: capturePopoverBinding(for: slot), arrowEdge: .trailing) {
-                ShortcutCapturePopover(dispatch: dispatch, slot: slot) {
-                    capturePopoverSlot = nil
-                    syncFromDispatch()
+                .buttonStyle(.plain)
+                .accessibilityLabel("Record \(title) shortcut")
+                .help("Click to record a shortcut")
+                .popover(isPresented: capturePopoverBinding(for: slot), arrowEdge: .trailing) {
+                    ShortcutCapturePopover(dispatch: dispatch, slot: slot) {
+                        capturePopoverSlot = nil
+                        syncFromDispatch()
+                    }
                 }
-            }
 
-            Button {
-                dispatch.setSlotEnabled(false, for: slot)
-                shortcutMessage = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
+                Button {
+                    dispatch.setSlotEnabled(false, for: slot)
+                    shortcutMessage = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(chips.isEmpty || !dispatch.slotEnabled(slot))
+                .help("Turn off this shortcut")
             }
-            .buttonStyle(.glass)
-            .controlSize(.mini)
-            .disabled(chips.isEmpty || !dispatch.slotEnabled(slot))
-            .help("Turn off this shortcut")
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.12), lineWidth: 0.7)
+            }
         }
     }
 
@@ -288,8 +297,9 @@ private struct ShortcutCapturePopover: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
         }
-        .frame(width: 310)
+        .frame(width: 252)
         .presentationBackground(.ultraThinMaterial)
+        .presentationCornerRadius(20)
         .onAppear {
             dispatch.setSuspended(true)
             isListening = true

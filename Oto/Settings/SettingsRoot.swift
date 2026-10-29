@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 enum SettingsPane: Hashable, CaseIterable, Identifiable {
     case general
@@ -92,8 +93,8 @@ struct SettingsRoot: View {
     nonisolated static let height: CGFloat = 480
     nonisolated static let minimumWidth: CGFloat = 660
     nonisolated static let minimumHeight: CGFloat = 420
-    nonisolated static let minimumSidebarWidth: CGFloat = 194
-    nonisolated static let sidebarWidth: CGFloat = 218
+    nonisolated static let minimumSidebarWidth: CGFloat = 170
+    nonisolated static let sidebarWidth: CGFloat = 194
 
     @State private var selection: SettingsPane = .dictation
     @State private var searchText = ""
@@ -112,31 +113,7 @@ struct SettingsRoot: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: .constant(.all)) {
-            List(selection: selectionBinding) {
-                if filteredPanes.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                } else {
-                    ForEach(filteredPanes) { pane in
-                        sidebarItem(pane)
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            // NavigationSplitView contributes its own hide-sidebar item
-            // unless the removal is scoped to the sidebar column itself.
-            .toolbar(removing: .sidebarToggle)
-            .navigationSplitViewColumnWidth(
-                min: Self.minimumSidebarWidth,
-                ideal: Self.sidebarWidth,
-                max: 270
-            )
-        } detail: {
-            detailContent
-        }
+        SettingsSplitView(sidebar: sidebarContent, detail: detailContent)
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button(action: moveBack) {
@@ -152,7 +129,6 @@ struct SettingsRoot: View {
                 .disabled(historyIndex >= visitedPanes.count - 1)
             }
         }
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
         .toolbar(removing: .title)
         .frame(
             minWidth: Self.minimumWidth,
@@ -162,23 +138,109 @@ struct SettingsRoot: View {
             idealHeight: Self.height,
             maxHeight: .infinity
         )
-        .navigationSplitViewStyle(.balanced)
         .task {
             uiState.ensureLoaded()
         }
     }
 
-    @ViewBuilder
-    private func sidebarItem(_ pane: SettingsPane) -> some View {
-        Label {
-            Text(pane.title)
-        } icon: {
-            Image(systemName: pane.symbol)
-                .foregroundStyle(.secondary)
+    private var sidebarContent: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search settings")
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(.quaternary, in: Capsule())
+            .overlay(Capsule().strokeBorder(.primary.opacity(0.08), lineWidth: 0.7))
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+
+            List(selection: selectionBinding) {
+                if filteredPanes.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                } else {
+                    ForEach(filteredPanes) { pane in
+                        Label {
+                            Text(pane.title)
+                        } icon: {
+                            Image(systemName: pane.symbol)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .tag(pane)
+                        .accessibilityHint("\(pane.title) settings")
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .tint(.primary)
         }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .tag(pane)
-            .accessibilityHint("\(pane.title) settings")
+        .frame(minWidth: Self.minimumSidebarWidth, maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
+        .font(.system(size: 13))
+        .fontDesign(.rounded)
+    }
+
+    private struct SettingsSplitView: NSViewControllerRepresentable {
+        let sidebar: AnyView
+        let detail: AnyView
+
+        init<Sidebar: View, Detail: View>(sidebar: Sidebar, detail: Detail) {
+            self.sidebar = AnyView(sidebar)
+            self.detail = AnyView(detail)
+        }
+
+        func makeNSViewController(context: Context) -> SettingsSplitViewController {
+            let sidebarHost = NSHostingController(rootView: sidebar)
+            let detailHost = NSHostingController(rootView: detail)
+            sidebarHost.sizingOptions = []
+            detailHost.sizingOptions = []
+
+            let controller = SettingsSplitViewController()
+            controller.view.frame = NSRect(x: 0, y: 0, width: SettingsRoot.width, height: SettingsRoot.height)
+
+            let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
+            sidebarItem.minimumThickness = 170
+            sidebarItem.maximumThickness = 210
+            sidebarItem.canCollapse = false
+            controller.addSplitViewItem(sidebarItem)
+
+            let detailItem = NSSplitViewItem(viewController: detailHost)
+            detailItem.minimumThickness = SettingsRoot.minimumWidth - 170
+            controller.addSplitViewItem(detailItem)
+            controller.splitView.setPosition(SettingsRoot.sidebarWidth, ofDividerAt: 0)
+            return controller
+        }
+
+        func updateNSViewController(_ controller: SettingsSplitViewController, context: Context) {
+            (controller.splitViewItems.first?.viewController as? NSHostingController<AnyView>)?.rootView = sidebar
+            (controller.splitViewItems.dropFirst().first?.viewController as? NSHostingController<AnyView>)?.rootView = detail
+        }
+    }
+
+    private final class SettingsSplitViewController: NSSplitViewController {
+        override func viewDidAppear() {
+            super.viewDidAppear()
+            view.window?.minSize = NSSize(width: SettingsRoot.minimumWidth, height: SettingsRoot.minimumHeight)
+        }
     }
 
     private var detailContent: some View {
@@ -186,6 +248,10 @@ struct SettingsRoot: View {
             paneContent
         }
         .formStyle(.grouped)
+        .font(.system(size: 13))
+        .fontDesign(.rounded)
+        .controlSize(.regular)
+        .textFieldStyle(.roundedBorder)
     }
 
     @ViewBuilder
