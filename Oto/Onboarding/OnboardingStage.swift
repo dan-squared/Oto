@@ -11,6 +11,7 @@
 //
 
 import Combine
+import Foundation
 import SwiftUI
 
 @MainActor
@@ -18,15 +19,17 @@ final class OnboardingStage: ObservableObject {
     enum Step: Int, Equatable, Comparable, CaseIterable {
         /// The intro and the one button: the state the window opens in.
         case welcome
-        /// Shown, not asked: what Oto does, one row at a time.
+        /// Shown, not asked: what Oto does — one visualisation, its words
+        /// centred like every other chapter's.
         case how
         /// Shown: the catcher, given the room to be understood.
         case catcher
         /// Asked: the hold key. The recorder applies immediately.
         case shortcut
-        /// Asked: the three permissions dictation needs. The on-device model
-        /// downloads in the background from here — readiness is a Settings
-        /// row, not a chapter.
+        /// Asked: the two permissions dictation needs (microphone and
+        /// Accessibility — SpeechAnalyzer adds no third grant). The on-device
+        /// model downloads in the background from here — readiness is a
+        /// Settings row, not a chapter.
         case permissions
         /// Shown: a field to try it in.
         case tryIt
@@ -38,18 +41,19 @@ final class OnboardingStage: ObservableObject {
 
         var isChapter: Bool { Self.chapters.contains(self) }
 
-        /// A chapter that shows has rows to step through; one that asks has none.
-        var rows: Int {
-            switch self {
-            case .how: 2
-            default: 0
-            }
-        }
-
         static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
     static let shared = OnboardingStage()
+
+    /// Where the resume point is written. Injectable so tests never touch the
+    /// app's real `standard` defaults (which would make a test run resume a
+    /// developer's walkthrough mid-chapter).
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     /// Content replaced inside a frame that stays — the title on Welcome, the
     /// recorder and the permission rows: the current content fades where it
@@ -91,12 +95,6 @@ final class OnboardingStage: ObservableObject {
     static let stepAnimation: Animation = .spring(duration: stepDuration, bounce: 0)
 
     @Published var step: Step = .welcome
-    /// Which row of a showing chapter is open. Continue walks the rows before
-    /// it leaves the chapter, so nobody has to find them to see them.
-    @Published private(set) var row = 0
-    /// How far the open row's dwell has run, 0 to 1. The rows keep the clock;
-    /// the progress dashes draw it.
-    @Published var dwell: CGFloat = 0
     /// Which way the last move went, for the transition of what it brought in.
     @Published private(set) var movingForward = true
     /// The header mark has left for the menu bar: the window draws neither it
@@ -130,34 +128,49 @@ final class OnboardingStage: ObservableObject {
         return self.movingForward ? Self.turningForward : Self.turningBackward
     }
 
-    func advance(to step: Step, row: Int = 0) {
+    func advance(to step: Step) {
         guard self.step != step else { return }
         // Set apart from the step, and first: a transition is read when the
         // view is inserted, so the direction has to be there already.
         self.movingForward = step > self.step
-        // The dwell goes back to nought in the same move as the row, so the
-        // dash keeps its length through the change and fills on from there.
         withAnimation(Self.stepAnimation) {
             self.step = step
-            self.row = min(max(row, 0), max(step.rows - 1, 0))
-            self.dwell = 0
         }
-    }
-
-    func open(row: Int) {
-        guard row != self.row, row >= 0, row < self.step.rows else { return }
-        withAnimation(Self.stepAnimation) {
-            self.row = row
-            self.dwell = 0
-        }
+        self.persist()
     }
 
     func reset() {
         self.step = .welcome
-        self.row = 0
-        self.dwell = 0
         self.movingForward = true
         self.markInFlight = false
+        OnboardingStore.clearProgress(defaults: self.defaults)
+    }
+
+    // MARK: - Resume
+
+    /// Picks the walk back up where it stopped. A chapter that no longer
+    /// exists (older build, retired step, corrupt value) lands on Welcome;
+    /// a stored `.handoff` means the process died mid-finish, so the last
+    /// chapter is the honest place to be. Applied without animation — this
+    /// is a restoration, not a move.
+    func restore() {
+        let stored = OnboardingStore.progress(defaults: self.defaults)
+            .flatMap { Step(rawValue: $0) } ?? .welcome
+        let step: Step = stored == .handoff ? .tryIt : stored
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            self.step = step
+            self.movingForward = true
+            self.markInFlight = false
+        }
+    }
+
+    /// The resume point follows every move that a re-show could land on.
+    /// Welcome is written too: closing on the intro and reopening there is
+    /// the same fact as never having started.
+    private func persist() {
+        OnboardingStore.saveProgress(step: self.step.rawValue, defaults: self.defaults)
     }
 }
 

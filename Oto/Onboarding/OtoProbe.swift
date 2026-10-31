@@ -143,16 +143,13 @@ enum OtoProbe {
             try? await Task.sleep(for: .seconds(1.0))
             onboarding.finishAnimation()
             try? await Task.sleep(for: .seconds(1.2))
-            let steps: [(OnboardingStage.Step, Int)] = [
-                (.how, 0), (.how, 1), (.catcher, 0), (.shortcut, 0),
-                (.permissions, 0), (.tryIt, 0),
-            ]
-            for (step, row) in steps {
-                OnboardingStage.shared.advance(to: step, row: row)
+            let steps: [OnboardingStage.Step] = [.how, .catcher, .shortcut, .permissions, .tryIt]
+            for step in steps {
+                OnboardingStage.shared.advance(to: step)
                 try? await Task.sleep(for: .seconds(0.9))
                 if let window = NSApp.windows.first(where: { $0.title == "Welcome to Oto" }),
                    let view = window.contentView {
-                    capture(view, name: "\(step)-\(row)", dir: dir)
+                    capture(view, name: "\(step)", dir: dir)
                 }
             }
             exit(0)

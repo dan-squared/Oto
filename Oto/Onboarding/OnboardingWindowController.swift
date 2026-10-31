@@ -83,7 +83,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
             do { try MetalRenderer.prewarm(device: device) }
             catch { self.playback.fail(error.localizedDescription) }
         }
-        OnboardingStage.shared.reset()
+        OnboardingStage.shared.restore()
         let flow = OnboardingFlow(dispatch: self.dispatch, uiState: self.uiState) { [weak self] in
             self?.finish()
         }

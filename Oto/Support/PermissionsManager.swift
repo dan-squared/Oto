@@ -8,10 +8,16 @@
 import ApplicationServices
 import AVFoundation
 import Foundation
-import Speech
 
-/// Microphone + speech authorization with exact states (07 §4.4).
-/// Both APIs verified current in the macOS 27 SDK (neither deprecated).
+/// Microphone authorization with exact states (07 §4.4).
+///
+/// Speech Recognition is deliberately absent: Oto transcribes with
+/// `SpeechAnalyzer`/`SpeechTranscriber`, which are authorized by the
+/// microphone, not by `SFSpeechRecognizer.requestAuthorization`. The app never
+/// introduces `SFSpeechRecognizer`, so it declares no speech-usage string — a
+/// TCC request for that grant aborts the process when the launcher (Xcode,
+/// Conductor) carries no `NSSpeechRecognitionUsageDescription` (three crash
+/// reports, 2026-10-29…31).
 /// Privacy copy stays to the framework guarantee: on-device modules do not
 /// send captured audio to Apple servers (07 §3.1) — never claim more.
 struct PermissionsManager: Sendable {
@@ -58,42 +64,6 @@ struct PermissionsManager: Sendable {
             return false
         case .notDetermined:
             return await requestMicrophone()
-        }
-    }
-
-    // MARK: - Speech recognition auth (exposed for Phase 5 UI; the Phase 2
-    // dictation path does not gate on it — 07's permission table has no
-    // speech-auth row, and prompting speculatively is banned.)
-
-    func speechStatus() -> SFSpeechRecognizerAuthorizationStatus {
-        SFSpeechRecognizer.authorizationStatus()
-    }
-
-    /// Asks only on user gesture — never speculatively (same rule as the
-    /// mic). Denied/restricted short-circuit (no prompt exists); only
-    /// notDetermined presents the system dialog. Nonisolated for the
-    /// same background-callback reason as requestMicrophone (crashed
-    /// 2026-10-09: TCC reply queue vs inherited MainActor isolation).
-    nonisolated func requestSpeech() async -> Bool {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
-            }
-        }
-    }
-
-    /// Returns true when speech recognition may proceed: already
-    /// authorized, or authorized through a just-in-time prompt.
-    func ensureSpeech() async -> Bool {
-        switch speechStatus() {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            return await requestSpeech()
-        @unknown default:
-            return false
         }
     }
 }

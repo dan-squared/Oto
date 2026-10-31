@@ -11,39 +11,21 @@
 
 import SwiftUI
 
-/// What a chapter says on its left: a tag, a title, a line, and — where the
-/// chapter shows rather than asks — the rows its right side walks through.
+/// What a chapter says on its left: a tag, a title and a line. Every chapter
+/// says it the same way, centred in the column — the frame carries the thing
+/// itself on the right.
 struct OnboardingChapterCopy {
-    struct Row: Identifiable {
-        let symbol: String
-        let title: String
-        let detail: String
-
-        var id: String { self.title }
-    }
-
     let tag: String
     let symbol: String
     let title: String
     let subtitle: String
-    var rows: [Row] = []
 
     static func copy(for step: OnboardingStage.Step) -> OnboardingChapterCopy? {
         switch step {
         case .how:
             .init(
                 tag: "What Oto does", symbol: "waveform", title: "Speak. It lands.",
-                subtitle: "Oto turns your voice into text in whatever app you're in.",
-                rows: [
-                    .init(
-                        symbol: "keyboard", title: "Push to talk",
-                        detail: "Hold your key for quick bursts. Release, and the words land where you type."
-                    ),
-                    .init(
-                        symbol: "hand.tap", title: "Hands-free",
-                        detail: "Double-tap the same key for long talks. Press again to stop."
-                    ),
-                ]
+                subtitle: "Oto turns your voice into text in whatever app you're in."
             )
         case .catcher:
             .init(
@@ -57,8 +39,8 @@ struct OnboardingChapterCopy {
             )
         case .permissions:
             .init(
-                tag: "Permissions", symbol: "lock.shield", title: "Three grants",
-                subtitle: "Oto asks only when needed — here and now."
+                tag: "Permissions", symbol: "lock.shield", title: "Two grants",
+                subtitle: "Oto asks only when it needs to, right here."
             )
         case .tryIt:
             .init(
@@ -88,13 +70,13 @@ struct OnboardingChaptersView: View {
                 HStack(alignment: .center, spacing: gap) {
                     ZStack(alignment: .topLeading) {
                         if let copy = OnboardingChapterCopy.copy(for: step) {
-                            self.words(copy, step: step, compact: compact)
+                            self.words(copy, compact: compact)
                                 .id(step)
                                 .transition(self.stage.turn(reduceMotion: self.reduceMotion))
                         }
                     }
                     .frame(width: left, alignment: .leading)
-                    .frame(maxHeight: .infinity, alignment: step.rows > 0 ? .top : .center)
+                    .frame(maxHeight: .infinity, alignment: .center)
 
                     ZStack {
                         // Replaced where it stands, not turned with the words:
@@ -133,7 +115,7 @@ struct OnboardingChaptersView: View {
                 .keyboardShortcut("[", modifiers: .command)
                 .accessibilityLabel("Back")
 
-            OnboardingProgressDashes(step: self.stage.step, row: self.stage.row, dwell: self.stage.dwell) {
+            OnboardingProgressDashes(step: self.stage.step) {
                 self.flow.jump(to: $0)
             }
 
@@ -143,18 +125,15 @@ struct OnboardingChaptersView: View {
         }
     }
 
-    private func words(_ copy: OnboardingChapterCopy, step: OnboardingStage.Step, compact: Bool) -> some View {
+    private func words(_ copy: OnboardingChapterCopy, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 5) {
                 OnboardingGlyph(name: copy.symbol, size: 13)
                 Text(copy.tag).font(.system(size: 12, weight: .medium))
             }
             .padding(.horizontal, 10).frame(height: 24)
-            .foregroundStyle(copy.rows.isEmpty ? OnboardingTheme.tagIdleText : OnboardingTheme.ink)
-            .background(
-                copy.rows.isEmpty ? OnboardingTheme.tagIdle : OnboardingTheme.tagActive,
-                in: Capsule()
-            )
+            .foregroundStyle(OnboardingTheme.tagIdleText)
+            .background(OnboardingTheme.tagIdle, in: Capsule())
             Text(copy.title)
                 .font(.system(size: compact ? 30 : 40, weight: .medium))
                 .tracking(-1.0)
@@ -167,24 +146,6 @@ struct OnboardingChaptersView: View {
                 .foregroundStyle(OnboardingTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 8)
-            if !copy.rows.isEmpty {
-                OnboardingChapterRows(
-                    rows: copy.rows, open: self.stage.row,
-                    // A list is read at a glance; a form takes a moment.
-                    dwell: 5,
-                    onOpen: { self.stage.open(row: $0) },
-                    onElapsed: {
-                        // The outgoing chapter stays mounted while it fades.
-                        // Its last dwell must not advance a row in the new one.
-                        guard self.stage.step == step else { return }
-                        // The clock opens the next row and stops at the last:
-                        // leaving a chapter is the reader's decision.
-                        if self.stage.row < copy.rows.count - 1 { self.stage.open(row: self.stage.row + 1) }
-                    }
-                )
-                .padding(.top, 18)
-                .padding(.leading, -12)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -193,7 +154,7 @@ struct OnboardingChaptersView: View {
     private func thing(for step: OnboardingStage.Step) -> some View {
         switch step {
         case .how:
-            OnboardingFlowBarPreview(row: self.stage.row, chips: KeyNames.chips(for: self.flow.holdKind))
+            OnboardingFlowBarPreview()
         case .catcher:
             OnboardingCatcherPlate()
         case .shortcut:
@@ -241,23 +202,18 @@ struct OnboardingGlyph: View {
     }
 }
 
-/// One dash per chapter. The current one is longer, and a chapter with rows
-/// fills its dash as its rows are read: each row's share fills over the time
-/// the row stays open, so the dash is the clock.
+/// One dash per chapter. The current one is longer; the ones before it are
+/// filled, the ones after it are not — the walk reads as a place, not a clock.
 struct OnboardingProgressDashes: View {
     let step: OnboardingStage.Step
-    let row: Int
-    /// How far the open row's dwell has run, 0 to 1.
-    var dwell: CGFloat = 1
     var onSelect: (OnboardingStage.Step) -> Void
 
     var body: some View {
         HStack(spacing: 5) {
             ForEach(OnboardingStage.Step.chapters, id: \.self) { chapter in
                 let current = chapter == self.step
-                let width: CGFloat = current ? (chapter.rows > 0 ? 42 : 28) : 12
-                let share: CGFloat = chapter < self.step ? 1 : !current ? 0 :
-                    chapter.rows > 0 ? (CGFloat(self.row) + self.dwell) / CGFloat(chapter.rows) : 1
+                let width: CGFloat = current ? 28 : 12
+                let share: CGFloat = chapter <= self.step ? 1 : 0
                 Capsule().fill(OnboardingTheme.dashTrack)
                     .frame(width: width, height: 4)
                     .overlay(alignment: .leading) {
@@ -269,105 +225,10 @@ struct OnboardingProgressDashes: View {
             }
         }
         .animation(OnboardingStage.stepAnimation, value: self.step)
-        .animation(OnboardingStage.stepAnimation, value: self.row)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "Step \((OnboardingStage.Step.chapters.firstIndex(of: self.step) ?? 0) + 1) of \(OnboardingStage.Step.chapters.count)"
         )
-    }
-}
-
-/// The rows of a showing chapter. One is open; its surface is a single shape
-/// that travels between the rows rather than one drawn per row. A clock opens
-/// the next row; the pointer over the rows holds it.
-struct OnboardingChapterRows: View {
-    let rows: [OnboardingChapterCopy.Row]
-    let open: Int
-    /// How long a row stays open before the clock opens the next.
-    var dwell: Double = 5
-    var onOpen: (Int) -> Void
-    var onElapsed: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(self.rows.enumerated()), id: \.element.id) { index, row in
-                let isOpen = index == self.open
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 10) {
-                        OnboardingGlyph(name: row.symbol, size: 18)
-                            .foregroundStyle(OnboardingTheme.muted)
-                            .frame(width: 20)
-                        Text(row.title).font(.system(size: 14, weight: .medium))
-                    }
-                    if isOpen {
-                        Text(row.detail)
-                            .font(.system(size: 13))
-                            .foregroundStyle(OnboardingTheme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.leading, 30)
-                            .transition(.opacity.combined(with: .offset(y: -4)))
-                    }
-                }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background {
-                    if isOpen {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(OnboardingTheme.card)
-                            .matchedGeometryEffect(id: "open", in: self.surface)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { self.onOpen(index) }
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
-            }
-        }
-        .onHover { self.hovering = $0 }
-        .onChange(of: self.open, initial: true) { self.restart() }
-        .onChange(of: self.hovering) { _, held in held ? self.hold() : self.resume() }
-        .onDisappear { self.clock?.cancel() }
-    }
-
-    @Namespace private var surface
-    @ObservedObject private var stage = OnboardingStage.shared
-    @State private var hovering = false
-    /// How much of the dwell had passed when the clock last started.
-    @State private var banked: Double = 0
-    @State private var startedAt = Date()
-    @State private var clock: Task<Void, Never>?
-
-    private func restart() {
-        self.banked = 0
-        self.set(progress: 0)
-        if !self.hovering { self.resume() }
-    }
-
-    private func hold() {
-        self.clock?.cancel()
-        self.banked = min(self.dwell, self.banked + Date().timeIntervalSince(self.startedAt))
-        self.set(progress: self.banked / self.dwell)
-    }
-
-    /// The last row runs its clock too, so the dash fills to the end as it is
-    /// read; whether anything opens after it is the caller's to say.
-    private func resume() {
-        self.clock?.cancel()
-        let left = max(self.dwell - self.banked, 0)
-        self.startedAt = Date()
-        withAnimation(.linear(duration: left)) { self.stage.dwell = 1 }
-        self.clock = Task {
-            try? await Task.sleep(for: .seconds(left))
-            guard !Task.isCancelled else { return }
-            self.onElapsed()
-        }
-    }
-
-    /// Without an animation, which also stops the one in flight where it is.
-    private func set(progress: Double) {
-        var still = Transaction()
-        still.disablesAnimations = true
-        withTransaction(still) { self.stage.dwell = progress }
     }
 }
 

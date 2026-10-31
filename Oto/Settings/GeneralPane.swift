@@ -105,15 +105,45 @@ struct GeneralPane: View {
             }
 
             // Behavior lives here, not in Dictation: it is how the app acts
-            // when dictation lands, not what makes dictation work.
+            // when dictation lands, not what makes dictation work. Each switch
+            // carries its own one-line explanation in the same row: as a row
+            // of its own the note sat under a divider, which read as a second,
+            // unrelated setting instead of the switch's own words.
             Section {
-                Toggle("Show catcher when there's nowhere to paste", isOn: $catcherEnabled)
-                    .accessibilityIdentifier("CatcherToggle")
-                Toggle("Mute media while dictating", isOn: $muteMedia)
-                OtoPanelNote("Catcher: no text field? Oto opens a small window. Off: auto-copies instead.\nMute: silences speakers, restores volume automatically.")
+                self.toggle(
+                    "Show catcher when there's nowhere to paste", isOn: $catcherEnabled,
+                    note: "No text field? Oto opens a small window. Off: the text is copied instead.",
+                    identifier: "CatcherToggle"
+                )
+                self.toggle(
+                    "Mute media while dictating", isOn: $muteMedia,
+                    note: "Silences speakers while you dictate, then restores the volume.",
+                    identifier: "MuteToggle"
+                )
             } header: {
                 Text("Behavior")
             }
+        }
+    }
+
+    // MARK: Private
+
+    /// A switch and the one line that says what it does, in one row, so no
+    /// divider falls between a setting and its own explanation. The toggle
+    /// fills the row to keep its switch at the trailing edge. The identifier
+    /// goes on the switch itself: on the row it would also land on the note
+    /// and make the element ambiguous.
+    private func toggle(
+        _ title: String, isOn: Binding<Bool>, note: String, identifier: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(title, isOn: isOn)
+                .accessibilityIdentifier(identifier)
+                .frame(maxWidth: .infinity)
+            Text(note)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

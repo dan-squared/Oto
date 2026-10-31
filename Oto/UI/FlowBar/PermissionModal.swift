@@ -66,18 +66,6 @@ enum MicSettingsLink {
     }
 }
 
-/// The same three-step ladder for speech recognition: the pane anchor first,
-/// then the Privacy list, then System Settings itself.
-enum SpeechSettingsLink {
-    nonisolated static func candidates() -> [URL] {
-        [
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy",
-            "x-apple.systempreferences:",
-        ].compactMap(URL.init(string:))
-    }
-}
-
 /// Opens the first candidate System Settings URL that the system accepts.
 /// One call, no retries: a pane anchor that opens is the right pane.
 enum SettingsLinkOpener {

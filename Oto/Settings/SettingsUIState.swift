@@ -13,7 +13,6 @@
 
 import ApplicationServices
 import Foundation
-import Speech
 import SwiftUI
 
 /// The one remedy a permission status has. Kept as a type so the row's single
@@ -40,7 +39,6 @@ final class SettingsUIState {
     // again — typo'd states are unrepresentable, not silent.
     var micPermission: PermissionsManager.MicrophoneStatus?
     var axTrusted = false
-    var speechPermission: SFSpeechRecognizerAuthorizationStatus?
     var speechReadiness: SpeechReadiness?
     // Mic devices (moved verbatim from DictationPane).
     var inputDevices: [AudioInputDevice] = []
@@ -68,7 +66,6 @@ final class SettingsUIState {
     func refreshPermissions() {
         micPermission = permissions.microphoneStatus()
         axTrusted = AXIsProcessTrusted()
-        speechPermission = permissions.speechStatus()
     }
 
     func refreshMicrophones() {
@@ -107,13 +104,6 @@ final class SettingsUIState {
         await permissions.ensureMicrophone()
     }
 
-    /// Just-in-time speech grant for the Allow buttons. Same gesture-only
-    /// rule as the mic: denied stays a Settings errand (no prompt exists),
-    /// notDetermined gets the system dialog in-product.
-    func ensureSpeechGrant() async -> Bool {
-        await permissions.ensureSpeech()
-    }
-
     /// Apple's blessed prompt: opens System Settings at the Accessibility
     /// page itself when untrusted, no-ops when trusted. Verified in the
     /// macOS 27 headers (10.9+); no raw Settings URLs.
@@ -137,15 +127,20 @@ final class SettingsUIState {
         }
     }
 
-    var speechText: String {
-        switch speechPermission {
-        case .authorized: "Allowed"
-        case .denied, .restricted: "Not allowed"
-        case .notDetermined: "Not asked yet"
-        case nil: "Checking…"
-        @unknown default: "Unknown"
+    /// The pill's label where an action exists: the state where there is
+    /// nothing to do, one word that invites the press where there is. A pill
+    /// that says "Denied" does not look like a way out; "Allow" does, and the
+    /// press still does the right thing per state (prompt or System Settings).
+    var micActionText: String {
+        switch micAction {
+        case .none: micText
+        case .allow, .openSettings: "Allow"
         }
     }
+
+    /// Accessibility has no in-product prompt path from this row: pressing
+    /// routes to the Privacy pane. One word, same as the mic.
+    var axActionText: String { "Allow" }
 
     var readinessText: String {
         guard let readiness = speechReadiness else { return "Checking…" }
@@ -166,19 +161,8 @@ final class SettingsUIState {
         }
     }
 
-    /// The same mapping for speech recognition: authorized has nothing left
-    /// to do, not-asked can prompt in-product, denied/restricted is a trip to
-    /// System Settings (no prompt exists once denied).
-    var speechAction: PermissionAction {
-        switch speechPermission {
-        case .authorized: .none
-        case .notDetermined: .allow
-        case .denied, .restricted: .openSettings
-        case nil: .none
-        @unknown default: .openSettings
-        }
-    }
-
+    /// The colour behind `micActionText`: green allowed, amber needs acting,
+    /// grey before the first read.
     var micTone: OtoStatus.Tone {
         micAllowed ? .ok : (micPermission == .notDetermined ? .idle : .warn)
     }
@@ -187,26 +171,6 @@ final class SettingsUIState {
         micAllowed || micPermission == .notDetermined
             ? nil
             : "Allow it in System Settings → Privacy & Security → Microphone."
-    }
-
-    /// Denied/restricted speech has no in-product remedy (no prompt
-    /// exists) — point at Settings instead of showing a dead button.
-    var speechDeniedGuidance: String? {
-        switch speechPermission {
-        case .denied, .restricted:
-            "Turn it back on in System Settings → Privacy & Security."
-        default:
-            nil
-        }
-    }
-
-    var speechTone: OtoStatus.Tone {
-        switch speechPermission {
-        case .authorized: .ok
-        case .notDetermined, nil: .idle
-        case .denied, .restricted: .warn
-        @unknown default: .idle
-        }
     }
 
     /// Typed end-to-end: no dependency on Apple wording (the old compare

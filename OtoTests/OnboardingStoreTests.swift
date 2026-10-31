@@ -54,4 +54,30 @@ struct OnboardingStoreTests {
         defaults.set(OnboardingStore.current + 1, forKey: OnboardingStore.key)
         #expect(OnboardingStore.shouldShow(defaults: defaults) == false)
     }
+
+    // MARK: - Resume point
+
+    @Test func progressRoundTrips() {
+        let defaults = isolatedDefaults()
+        #expect(OnboardingStore.progress(defaults: defaults) == nil)
+        OnboardingStore.saveProgress(step: 3, defaults: defaults)
+        #expect(OnboardingStore.progress(defaults: defaults) == 3)
+    }
+
+    @Test func clearingLeavesNothingBehind() {
+        let defaults = isolatedDefaults()
+        OnboardingStore.saveProgress(step: 3, defaults: defaults)
+        OnboardingStore.clearProgress(defaults: defaults)
+        #expect(OnboardingStore.progress(defaults: defaults) == nil)
+        #expect(defaults.object(forKey: OnboardingStore.stepKey) == nil)
+    }
+
+    @Test func resumeIsIndependentOfTheVersionGate() {
+        // Finishing marks the version seen *and* clears the walk; the two
+        // keys answer different questions and must not alias.
+        let defaults = isolatedDefaults()
+        OnboardingStore.saveProgress(step: 2, defaults: defaults)
+        OnboardingStore.markSeen(defaults: defaults)
+        #expect(OnboardingStore.progress(defaults: defaults) == 2)
+    }
 }

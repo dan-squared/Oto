@@ -14,26 +14,19 @@ import Carbon.HIToolbox
 import Speech
 import SwiftUI
 
-/// What the first chapter shows while its rows are read: the Flow Bar pill,
-/// or the hands-free hint — one at a time, where the words are pointing.
+/// What the first chapter shows: the Flow Bar pill over the field the words
+/// land in — the product's whole promise in one plate. Hands-free is taught
+/// one chapter later, on the hold-key card, where the key is recorded.
 struct OnboardingFlowBarPreview: View {
-    let row: Int
-    /// The live hold key, so the preview teaches the real gesture.
-    var chips: [String] = []
-
     var body: some View {
         OnboardingPreviewPlate(width: 390, height: 300) {
             VStack(spacing: 18) {
                 Spacer(minLength: 0)
-                switch self.row {
-                case 0: self.listening
-                default: self.handsFree
-                }
+                self.listening
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 28)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.spring(duration: 0.34, bounce: 0), value: self.row)
         }
         .accessibilityHidden(true)
     }
@@ -42,20 +35,6 @@ struct OnboardingFlowBarPreview: View {
         VStack(spacing: 18) {
             self.pill(title: "Listening…")
             self.field(text: "Your words land here.")
-        }
-    }
-
-    private var handsFree: some View {
-        VStack(spacing: 18) {
-            self.pill(title: "Hands-free")
-            HStack(spacing: 8) {
-                // The key twice, as one capsule: the gesture is the repetition.
-                let chips = self.chips.isEmpty ? ["⌥"] : self.chips
-                OtoShortcutPill(chips: chips + chips, compact: true)
-                Text("tap twice, talk, press again")
-                    .font(.system(size: 12))
-                    .foregroundStyle(OnboardingTheme.muted)
-            }
         }
     }
 
@@ -218,10 +197,11 @@ struct OnboardingShortcutPlate: View {
     }
 }
 
-/// The three grants, live. One control per row, exactly as in Settings: the
+/// The two grants, live. One control per row, exactly as in Settings: the
 /// pill is the button wherever a grant or a Settings trip exists. A denial is
 /// a route to System Settings, never a dead end — and never a second button
-/// stacked under the status.
+/// stacked under the status. Speech Recognition is deliberately absent: Oto
+/// transcribes with Apple's SpeechAnalyzer, which the microphone authorizes.
 struct OnboardingPermissionsPlate: View {
     @ObservedObject var flow: OnboardingFlow
 
@@ -231,7 +211,7 @@ struct OnboardingPermissionsPlate: View {
                 self.row(
                     icon: "mic",
                     title: "Microphone",
-                    status: self.flow.uiState.micText,
+                    status: self.flow.uiState.micActionText,
                     tone: self.flow.uiState.micTone,
                     action: self.flow.uiState.micAction,
                     guidance: self.flow.uiState.micDeniedGuidance,
@@ -240,22 +220,13 @@ struct OnboardingPermissionsPlate: View {
                 self.row(
                     icon: "accessibility",
                     title: "Accessibility",
-                    status: self.flow.uiState.axTrusted ? "Allowed" : "Not allowed",
+                    status: self.flow.uiState.axTrusted ? "Allowed" : self.flow.uiState.axActionText,
                     tone: self.flow.uiState.axTrusted ? .ok : .warn,
                     action: self.flow.uiState.axTrusted ? .none : .openSettings,
                     guidance: self.flow.uiState.axTrusted
                         ? nil
                         : "Needed to type into other apps. Turn Oto on in the list.",
                     run: { self.flow.openAccessibility() }
-                )
-                self.row(
-                    icon: "checkmark.bubble",
-                    title: "Speech recognition",
-                    status: self.flow.uiState.speechText,
-                    tone: self.flow.uiState.speechTone,
-                    action: self.flow.uiState.speechAction,
-                    guidance: self.flow.uiState.speechDeniedGuidance,
-                    run: { self.speechAction() }
                 )
             }
         }
@@ -268,14 +239,6 @@ struct OnboardingPermissionsPlate: View {
         switch self.flow.uiState.micAction {
         case .openSettings: self.flow.openMicrophoneSettings()
         case .allow: self.flow.grantMicrophone()
-        case .none: break
-        }
-    }
-
-    private func speechAction() {
-        switch self.flow.uiState.speechAction {
-        case .openSettings: self.flow.openSpeechSettings()
-        case .allow: self.flow.grantSpeech()
         case .none: break
         }
     }

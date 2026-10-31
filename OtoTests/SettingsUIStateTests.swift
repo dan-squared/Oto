@@ -9,7 +9,6 @@
 //
 
 import Foundation
-import Speech
 import SwiftUI
 import Testing
 @testable import Oto
@@ -23,10 +22,9 @@ struct SettingsUIStateTests {
     @Test func initialValuesAreHonestPendings() {
         let state = makeState()
         #expect(state.micPermission == nil)
-        #expect(state.speechPermission == nil)
         #expect(state.speechReadiness == nil)
         #expect(state.micText == "Checking…")
-        #expect(state.speechText == "Checking…")
+        #expect(state.micActionText == "Checking…")
         #expect(state.readinessText == "Checking…")
         #expect(state.axTrusted == false)
         #expect(state.inputDevices.isEmpty)
@@ -53,23 +51,24 @@ struct SettingsUIStateTests {
         #expect(state.micDeniedGuidance != nil)
     }
 
-    @Test func speechToneMapping() {
+    /// The pill never ends at a dead state: where a remedy exists the label
+    /// is the invitation ("Allow"), and the state stays on the dot and in the
+    /// readout-only branch.
+    @Test func actionablePillsInviteThePress() {
         let state = makeState()
-        state.speechPermission = .authorized
-        #expect(state.speechText == "Allowed")
-        #expect(state.speechTone == .ok)
-        state.speechPermission = .notDetermined
-        #expect(state.speechText == "Not asked yet")
-        #expect(state.speechTone == .idle)
-        state.speechPermission = .denied
-        #expect(state.speechText == "Not allowed")
-        #expect(state.speechTone == .warn)
-        #expect(state.speechDeniedGuidance != nil)
-        state.speechPermission = .notDetermined
-        #expect(state.speechDeniedGuidance == nil)
-        state.speechPermission = .restricted
-        #expect(state.speechText == "Not allowed")
-        #expect(state.speechTone == .warn)
+        state.micPermission = .notDetermined
+        #expect(state.micAction == .allow)
+        #expect(state.micActionText == "Allow")
+        state.micPermission = .denied
+        #expect(state.micAction == .openSettings)
+        #expect(state.micActionText == "Allow")
+        // Nothing to do: the honest state stays, and there is no button.
+        state.micPermission = .granted
+        #expect(state.micAction == .none)
+        #expect(state.micActionText == "Allowed")
+        state.micPermission = nil
+        #expect(state.micActionText == "Checking…")
+        #expect(state.axActionText == "Allow")
     }
 
     @Test func readinessMappingIsTypedEndToEnd() {

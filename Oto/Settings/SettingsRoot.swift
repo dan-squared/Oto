@@ -9,14 +9,17 @@
 import SwiftUI
 import AppKit
 
+/// The sidebar's order is deliberate: most-used first, the personal library
+/// in the middle, the rarely-visited tail last. `allCases` is declaration
+/// order, so the rail, search results and the probe walk all follow it.
 enum SettingsPane: String, Hashable, CaseIterable, Identifiable {
     case general
     case dictation
+    case intelligence
     case dictionary
     case snippets
     case history
     case privacy
-    case intelligence
     case about
 
     var id: Self { self }

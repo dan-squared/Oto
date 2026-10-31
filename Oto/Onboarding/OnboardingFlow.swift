@@ -44,26 +44,18 @@ final class OnboardingFlow: ObservableObject {
     /// continues.
     var buttonTitle: String {
         switch self.stage.step {
-        case .welcome: "Continue"
-        case .how: self.stage.row < OnboardingStage.Step.how.rows - 1 ? "Next" : "Continue"
-        case .catcher, .shortcut, .permissions: "Continue"
+        case .welcome, .how, .catcher, .shortcut, .permissions: "Continue"
         case .tryIt, .handoff: "Finish"
         }
     }
 
-    /// A chapter that shows walks its rows before it leaves: Continue opens
-    /// the next one, so nobody has to find the rows to see them.
+    /// One chapter, one move: Continue goes to the next.
     func next() {
-        let step = self.stage.step
-        switch step {
+        switch self.stage.step {
         case .welcome:
             self.stage.advance(to: .how)
         case .how:
-            if self.stage.row < step.rows - 1 {
-                self.stage.open(row: self.stage.row + 1)
-            } else {
-                self.stage.advance(to: .catcher)
-            }
+            self.stage.advance(to: .catcher)
         case .catcher:
             self.stage.advance(to: .shortcut)
         case .shortcut:
@@ -84,7 +76,7 @@ final class OnboardingFlow: ObservableObject {
         case .how:
             self.stage.advance(to: .welcome)
         case .catcher:
-            self.stage.advance(to: .how, row: OnboardingStage.Step.how.rows - 1)
+            self.stage.advance(to: .how)
         case .shortcut:
             self.stage.advance(to: .catcher)
         case .permissions:
@@ -145,21 +137,10 @@ final class OnboardingFlow: ObservableObject {
         SettingsLinkOpener.open(MicSettingsLink.candidates())
     }
 
-    func openSpeechSettings() {
-        SettingsLinkOpener.open(SpeechSettingsLink.candidates())
-    }
-
     func openAccessibility() {
         self.uiState.requestAccessibilityPrompt()
         Task {
             try? await Task.sleep(for: .seconds(2))
-            self.uiState.refreshPermissions()
-        }
-    }
-
-    func grantSpeech() {
-        Task {
-            _ = await self.uiState.ensureSpeechGrant()
             self.uiState.refreshPermissions()
         }
     }

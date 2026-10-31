@@ -280,7 +280,7 @@ struct OtoShortcutPill: View {
                         .foregroundStyle(.tertiary)
                 }
             } else {
-                ForEach(chips, id: \.self) { chip in
+                ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
                     Text(chip)
                         .font(.system(size: compact ? 11 : 12, weight: .medium))
                         .foregroundStyle(.secondary)

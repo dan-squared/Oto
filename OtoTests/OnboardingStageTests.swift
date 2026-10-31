@@ -2,18 +2,27 @@
 //  OnboardingStageTests.swift
 //  OtoTests
 //
-//  The onboarding path is a step machine with a fixed order, one clock and
-//  one set of layout numbers. These tests pin the parts that would fail
-//  silently: the chapters the footer counts, the rows Continue walks, and
-//  the welcome choreography finishing before the clock stops.
+//  The onboarding path is a step machine with a fixed order and one set of
+//  layout numbers. These tests pin the parts that would fail silently: the
+//  chapters the footer counts, the order Continue walks them in, and the
+//  welcome choreography finishing before the clock stops.
 //
 
 import CoreGraphics
+import Foundation
 import Testing
 @testable import Oto
 
 @MainActor
 struct OnboardingStepTests {
+    /// Isolated defaults: a unit test must never write the developer's real
+    /// resume point (the stage persists on every move).
+    private func makeStage() -> OnboardingStage {
+        OnboardingStage(
+            defaults: UserDefaults(suiteName: "app.Oto.tests.stage-\(UUID().uuidString)")!
+        )
+    }
+
     @Test func chaptersAreTheStepsBetweenWelcomeAndHandoff() {
         #expect(OnboardingStage.Step.chapters == [.how, .catcher, .shortcut, .permissions, .tryIt])
         #expect(OnboardingStage.Step.allCases.first == .welcome)
@@ -25,61 +34,72 @@ struct OnboardingStepTests {
         #expect(OnboardingStage.Step.handoff.isChapter == false)
     }
 
-    @Test func onlyTheShowingChapterWalksRows() {
-        #expect(OnboardingStage.Step.how.rows == 2)
-        for step in OnboardingStage.Step.allCases where step != .how {
-            #expect(step.rows == 0)
+    @Test func advanceMovesThroughTheChaptersInOrder() {
+        let stage = self.makeStage()
+        let order: [OnboardingStage.Step] = OnboardingStage.Step.chapters
+        for step in order {
+            stage.advance(to: step)
+            #expect(stage.step == step)
+            #expect(stage.movingForward)
         }
-    }
-
-    @Test func advanceResetsTheRowAndTheDwell() {
-        let stage = OnboardingStage()
-        stage.advance(to: .how, row: 2)
-        stage.dwell = 0.7
-        stage.advance(to: .shortcut)
-        #expect(stage.step == .shortcut)
-        #expect(stage.row == 0)
-        #expect(stage.dwell == 0)
-        #expect(stage.movingForward)
-    }
-
-    @Test func advanceClampsTheRowToTheStep() {
-        let stage = OnboardingStage()
-        stage.advance(to: .how, row: 99)
-        #expect(stage.row == OnboardingStage.Step.how.rows - 1)
-        stage.advance(to: .permissions, row: 2)
-        #expect(stage.row == 0)
-    }
-
-    @Test func goingBackIsNotForward() {
-        let stage = OnboardingStage()
-        stage.advance(to: .permissions)
-        stage.advance(to: .shortcut)
+        stage.advance(to: .welcome)
         #expect(stage.movingForward == false)
     }
 
-    @Test func openOnlyOpensRowsThatExist() {
-        let stage = OnboardingStage()
-        stage.advance(to: .how)
-        stage.open(row: 1)
-        #expect(stage.row == 1)
-        stage.open(row: 9)
-        #expect(stage.row == 1)
-        stage.advance(to: .permissions)
-        stage.open(row: 1)
-        #expect(stage.row == 0)
-    }
-
     @Test func resetReturnsToWelcome() {
-        let stage = OnboardingStage()
+        let stage = self.makeStage()
         stage.advance(to: .tryIt)
         stage.markInFlight = true
         stage.reset()
         #expect(stage.step == .welcome)
-        #expect(stage.row == 0)
-        #expect(stage.dwell == 0)
         #expect(stage.movingForward)
         #expect(stage.markInFlight == false)
+    }
+
+    // MARK: - Resume
+
+    @Test func aNewStageResumesWhereTheLastOneStopped() {
+        let defaults = UserDefaults(suiteName: "app.Oto.tests.resume-\(UUID().uuidString)")!
+        let first = OnboardingStage(defaults: defaults)
+        first.advance(to: .permissions)
+
+        // A relaunch: fresh object, same storage.
+        let second = OnboardingStage(defaults: defaults)
+        #expect(second.step == .welcome)
+        second.restore()
+        #expect(second.step == .permissions)
+    }
+
+    @Test func resumeRestoresTheChapter() {
+        let defaults = UserDefaults(suiteName: "app.Oto.tests.resume-how-\(UUID().uuidString)")!
+        OnboardingStore.saveProgress(step: OnboardingStage.Step.how.rawValue, defaults: defaults)
+        let stage = OnboardingStage(defaults: defaults)
+        stage.restore()
+        #expect(stage.step == .how)
+    }
+
+    @Test func resetClearsTheResumePoint() {
+        let defaults = UserDefaults(suiteName: "app.Oto.tests.resume-clear-\(UUID().uuidString)")!
+        let stage = OnboardingStage(defaults: defaults)
+        stage.advance(to: .tryIt)
+        stage.reset()
+        #expect(OnboardingStore.progress(defaults: defaults) == nil)
+        let relaunched = OnboardingStage(defaults: defaults)
+        relaunched.restore()
+        #expect(relaunched.step == .welcome)
+    }
+
+    @Test func handoffAndUnknownStepsClampOnRestore() {
+        let defaults = UserDefaults(suiteName: "app.Oto.tests.resume-clamp-\(UUID().uuidString)")!
+        OnboardingStore.saveProgress(step: OnboardingStage.Step.handoff.rawValue, defaults: defaults)
+        let handoff = OnboardingStage(defaults: defaults)
+        handoff.restore()
+        #expect(handoff.step == .tryIt)
+
+        OnboardingStore.saveProgress(step: 99, defaults: defaults)
+        let unknown = OnboardingStage(defaults: defaults)
+        unknown.restore()
+        #expect(unknown.step == .welcome)
     }
 }
 

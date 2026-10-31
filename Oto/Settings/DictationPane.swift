@@ -3,8 +3,9 @@
 //  Oto
 //
 //  Everything that makes dictation work: speech assets, shortcut, microphone,
-//  permissions, and a safe field to try it in. Every row binds a real
-//  backend; rows without backends do not exist here.
+//  and a safe field to try it in. Permissions are not repeated here — Privacy
+//  is their one home (round 2, 2026-10-31). Every row binds a real backend;
+//  rows without backends do not exist here.
 //
 
 import SwiftUI
@@ -81,6 +82,20 @@ struct DictationPane: View {
                 shortcutRow("Push-to-talk", slot: .hold)
                 shortcutRow("Hands-free", slot: .handsFree)
 
+                // Teaching, not a control: double-tapping the hold key is the
+                // only route into hands-free without a second shortcut, and
+                // Settings was silent about it (only onboarding said so). One
+                // short line, same weight as the conditional warning below,
+                // naming the key as recorded — never a hard-coded glyph.
+                Label(
+                    "Double-tap \(KeyNames.shortLabel(for: holdKind)) to record without holding.",
+                    systemImage: "hand.tap"
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("DoubleTapHint")
+
                 if requiresAccessibility && !uiState.axTrusted {
                     Label("Requires Accessibility", systemImage: "hand.raised")
                         .font(.footnote)
@@ -108,11 +123,6 @@ struct DictationPane: View {
                 OtoPanelNote("Sets the Mac's input — every app follows it.")
             } header: {
                 Text("Microphone")
-            }
-
-            Section("Permissions") {
-                AccessibilityRow(uiState: uiState)
-                SpeechStatusRow(uiState: uiState)
             }
 
             Section {

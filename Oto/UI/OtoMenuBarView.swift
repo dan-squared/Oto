@@ -20,8 +20,9 @@ struct OtoMenuBarView: View {
         // Slice B undo: REMOVED (2026-10-06) — the OS owns undo; History's
         // Undo AI edit + Copy is the single raw-recovery path.
         // Onboarding stays while the first-run flow is being refined: it is
-        // the only way to reach the walkthrough on demand.
-        Button("Show onboarding…") {
+        // the only way to reach the walkthrough on demand. Until the walk is
+        // finished the entry says what it does — continue, not start over.
+        Button(OnboardingStore.shouldShow() ? "Continue setup…" : "Show onboarding…") {
             onboarding.show()
         }
         Button("Settings…") {
