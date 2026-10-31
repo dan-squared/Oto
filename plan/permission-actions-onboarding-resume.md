@@ -354,6 +354,14 @@ bar and be felt on landing. Both are possible; neither was built this round.
   can land on the icon itself and scale to its size, at any window size. The
   usual caveat: match the window whose button's identifier/bundle belongs to
   Oto, never "the last status window". Verify with a probe before shipping.
+
+  **Probed on this Mac (2026-10-31, `DerivedData` Debug build):**
+  `NSApp.windows` contains
+  `NSStatusBarWindow title=Item-0 frame=(1366, 1074, 32, 38) level=25
+  content=NSStatusBarContentView` — i.e. the item's centre is at x≈1382,
+  while `menuBarTarget` aims at x≈1669 (1710-wide display). The current
+  flight misses by ~287 pt, which is exactly the "not accurate" the user
+  sees. Reading the window frame fixes it; no private API.
 - **Haptic.** `NSHapticFeedbackManager.defaultPerformer.perform(.alignment,
   performanceTime: .now)` at the end of the flight — the same API
   `OtoHaptics` already uses for the intro. It needs a Force Touch trackpad or
