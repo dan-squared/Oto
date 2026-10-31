@@ -33,4 +33,11 @@ enum OtoHaptics {
     static func introRiseLanded() {
         self.performer.perform(.generic, performanceTime: .now)
     }
+
+    /// The mark reaches the menu-bar item: the one tap that says the app now
+    /// lives there. Silent on a mouse, and the system suppresses it when no
+    /// finger is on the trackpad.
+    static func handoffLanded() {
+        self.performer.perform(.alignment, performanceTime: .now)
+    }
 }

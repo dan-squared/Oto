@@ -220,8 +220,12 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                 return
             }
             OnboardingStage.shared.markInFlight = true
+            let target = OnboardingHandoff.statusItemTarget(
+                on: screen,
+                aspect: image.size.height > 0 ? image.size.width / image.size.height : 1
+            ) ?? OnboardingHandoff.menuBarTarget(on: screen)
             OnboardingHandoff.fly(
-                image: image, from: start, to: OnboardingHandoff.menuBarTarget(on: screen),
+                image: image, from: start, to: target,
                 reduceMotion: reduceMotion
             ) { [weak self] in
                 self?.complete()
