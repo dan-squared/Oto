@@ -3,13 +3,13 @@
 //  Oto
 //
 //  Saved expansions. Every control binds the real store; the sheet carries
-//  validation; copying keeps the clipboard discipline.
+//  validation.
 //
-//  One name, one preview line, one cluster: copy, details, edit, delete. The
-//  full expansion and the apps it applies in live behind the info button.
+//  One name, one preview line, one cluster: edit, delete. The expansion is
+//  copied from the editor (the row stays a readable sentence); the scope it
+//  applies in lives behind the pencil's sheet.
 //
 
-import AppKit
 import SwiftUI
 
 struct SnippetsPane: View {
@@ -19,10 +19,6 @@ struct SnippetsPane: View {
 
     @State private var editingSnippet: Snippet?
     @State private var addingSnippet = false
-    @State private var confirmCopyOverwrite = false
-    @State private var pendingCopySnippet: Snippet?
-    @State private var infoSnippetID: UUID?
-    @State private var copyFlash = OtoCopyFlash()
 
     var body: some View {
         Group {
@@ -58,16 +54,6 @@ struct SnippetsPane: View {
         }
         .onAppear { publishAccessory() }
         .onChange(of: snippets.snippets.count) { _, _ in publishAccessory() }
-        // Probe-only (never posted in normal use): first row's details + copy.
-        .onReceive(NotificationCenter.default.publisher(for: .otoProbeOpenInfo)) { _ in
-            infoSnippetID = snippets.snippets.first?.id
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .otoProbeCloseInfo)) { _ in
-            infoSnippetID = nil
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .otoProbeCopyFirst)) { _ in
-            if let first = snippets.snippets.first { writeSnippet(first) }
-        }
         .sheet(isPresented: $addingSnippet) {
             SnippetEditor(snippet: nil, snippets: snippets) {
                 addingSnippet = false
@@ -77,19 +63,6 @@ struct SnippetsPane: View {
             SnippetEditor(snippet: snippet, snippets: snippets) {
                 editingSnippet = nil
             }
-        }
-        .confirmationDialog(
-            "Replace clipboard contents?",
-            isPresented: $confirmCopyOverwrite,
-            titleVisibility: .visible
-        ) {
-            Button("Replace") {
-                if let snippet = pendingCopySnippet { writeSnippet(snippet) }
-                pendingCopySnippet = nil
-            }
-            Button("Cancel", role: .cancel) { pendingCopySnippet = nil }
-        } message: {
-            Text("The clipboard holds text Oto didn't place.")
         }
     }
 
@@ -112,28 +85,6 @@ struct SnippetsPane: View {
             .onTapGesture { editingSnippet = snippet }
 
             OtoRowActions {
-                OtoRowButton(
-                    symbol: self.copyFlash.isCopied(snippet.id) ? "checkmark" : "doc.on.doc",
-                    help: self.copyFlash.isCopied(snippet.id) ? "Copied" : "Copy snippet",
-                    tint: self.copyFlash.isCopied(snippet.id) ? OtoStatus.Tone.ok.color : OtoPalette.ink
-                ) {
-                    copySnippet(snippet)
-                }
-                OtoRowButton(symbol: "info.circle", help: "Snippet details") {
-                    infoSnippetID = snippet.id
-                }
-                .popover(isPresented: self.infoBinding(for: snippet.id), arrowEdge: .top) {
-                    OtoInfoPopover(
-                        title: snippet.name,
-                        rows: [
-                            .init(label: "Applies in", value: snippet.bundleIDs.isEmpty
-                                ? "Everywhere"
-                                : InstalledApps.names(for: snippet.bundleIDs)),
-                            .init(label: "Length", value: "\(snippet.expansion.count) characters"),
-                        ],
-                        note: snippet.expansion
-                    )
-                }
                 OtoRowButton(symbol: "pencil", help: "Edit snippet") {
                     editingSnippet = snippet
                 }
@@ -144,13 +95,6 @@ struct SnippetsPane: View {
         }
     }
 
-    private func infoBinding(for id: UUID) -> Binding<Bool> {
-        Binding(
-            get: { infoSnippetID == id },
-            set: { if !$0, infoSnippetID == id { infoSnippetID = nil } }
-        )
-    }
-
     // MARK: - Plumbing
 
     /// The add action takes the corner; the empty state's button mirrors it.
@@ -158,28 +102,13 @@ struct SnippetsPane: View {
         chrome.publish(.action(symbol: "plus", help: "Add snippet") { addingSnippet = true })
     }
 
+    /// Copy happens in the editor (the row no longer carries a copy button),
+    /// so the footnote teaches the path that exists.
     private func dictationFootnote() -> OtoEmptyFootnote {
         let keys = KeyNames.chips(for: dispatch.configuration.hold.kind)
         return keys.isEmpty
-            ? OtoEmptyFootnote(lead: "Nothing inserts itself — you choose when to copy.")
-            : OtoEmptyFootnote(lead: "Dictate first, then copy. Your key is", keys: keys, tail: ".")
-    }
-
-    private func copySnippet(_ snippet: Snippet) {
-        // Overwrite guard (clipboard discipline): foreign content confirms.
-        if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
-            pendingCopySnippet = snippet
-            confirmCopyOverwrite = true
-            return
-        }
-        writeSnippet(snippet)
-    }
-
-    private func writeSnippet(_ snippet: Snippet) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(snippet.expansion, forType: .string)
-        ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
-        self.copyFlash.flash(snippet.id)
+            ? OtoEmptyFootnote(lead: "Nothing inserts itself — open a snippet to copy it.")
+            : OtoEmptyFootnote(lead: "Dictate first, then save the words here. Your key is", keys: keys, tail: ".")
     }
 }
 
@@ -195,7 +124,6 @@ private struct SnippetEditor: View {
     @State private var scopeGlobal = true
     @State private var bundleIDs: [String] = []
     @State private var error: String?
-    @State private var confirmCopyOverwrite = false
 
     var body: some View {
         Form {
@@ -220,16 +148,6 @@ private struct SnippetEditor: View {
         .formStyle(.grouped)
         .frame(minWidth: 420, minHeight: 360)
         .onAppear { seed() }
-        .confirmationDialog(
-            "Replace clipboard contents?",
-            isPresented: $confirmCopyOverwrite,
-            titleVisibility: .visible
-        ) {
-            Button("Replace") { writeDraft() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The clipboard holds text Oto didn't place.")
-        }
     }
 
     private func seed() {
@@ -243,22 +161,13 @@ private struct SnippetEditor: View {
 
     private func copyDraft() {
         // Empty drafts refuse with guidance (writing "" would destroy the
-        // clipboard for nothing). Otherwise the overwrite guard decides.
+        // clipboard for nothing). Copy is an explicit command, so a filled
+        // draft writes straight through.
         guard !expansion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             error = "Enter the text to insert before copying."
             return
         }
-        if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
-            confirmCopyOverwrite = true
-            return
-        }
-        writeDraft()
-    }
-
-    private func writeDraft() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(expansion, forType: .string)
-        ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
+        ClipboardWrite.text(expansion)
     }
 
     private func save() {

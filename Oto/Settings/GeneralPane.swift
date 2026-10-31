@@ -82,11 +82,24 @@ struct GeneralPane: View {
             .task { refreshLogin() }
 
             Section {
-                OtoSegmented(
-                    options: [(.top, "Top"), (.bottom, "Bottom")],
-                    selection: $flowPosition
+                // Label left, compact control right — the grouped-settings
+                // segmented row, not a track stretched across the card.
+                // HStack, not LabeledContent: the system label/content pair
+                // pins the label to the row's top edge while the control
+                // centres, so "Position" floated above the pill.
+                HStack(spacing: 12) {
+                    Text("Position")
+                    Spacer(minLength: 8)
+                    OtoSegmented(
+                        options: [(.top, "Top"), (.bottom, "Bottom")],
+                        selection: $flowPosition,
+                        segmentWidth: 84
+                    )
+                }
+                OtoPanelNote(
+                    "Top places the pill under the menu bar. Bottom places it above the Dock. "
+                        + "Drag the pill to move it and it snaps into place."
                 )
-                OtoPanelNote("Top sits below the notch. Drag the pill anytime — it snaps.")
             } header: {
                 Text("Flow Bar")
             }

@@ -551,7 +551,7 @@ struct SettingsRoot: View {
         case .snippets:
             SnippetsPane(snippets: snippets, dispatch: dispatch, chrome: chrome)
         case .history:
-            HistoryPane(history: history, polish: polish, dispatch: dispatch, chrome: chrome)
+            HistoryPane(history: history, dispatch: dispatch, chrome: chrome)
         case .privacy:
             PrivacyPane(uiState: uiState)
         case .intelligence:

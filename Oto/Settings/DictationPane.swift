@@ -151,6 +151,7 @@ struct DictationPane: View {
 
             OtoShortcutField(
                 chips: chips,
+                active: capturePopoverSlot == slot,
                 recordLabel: "Record \(title) shortcut",
                 onRecord: {
                     shortcutMessage = nil

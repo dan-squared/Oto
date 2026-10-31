@@ -30,29 +30,24 @@ struct PasteboardReceipt: Equatable, Sendable {
     }
 }
 
-/// Confirm-before-overwrite for MANUAL clipboard writes (menu recovery
-/// Copy, catcher Copy, history Copy, snippet Copy expansion, polish sheet
-/// Keep/Original): Oto's insertion path already snapshots + receipts, but
-/// these surfaces used to clearContents() blind. Pure over an injected
-/// board, so tests use scratch boards and never touch `.general`.
-enum ClipboardOverwriteGuard {
-    /// True iff the board holds user content Oto didn't place: non-empty
-    /// string with no Oto marker. Empty boards and Oto's own placements
-    /// write with zero friction. Marker presence ⟺ Oto was the last
-    /// writer (any user copy clears all types including the marker).
-    nonisolated static func shouldConfirm(board: NSPasteboard) -> Bool {
-        guard let current = board.string(forType: .string), !current.isEmpty else { return false }
-        return board.string(forType: PasteboardReceipt.markerType) == nil
+/// Manual clipboard writes (catcher Copy, history Copy, snippet Copy
+/// expansion). Copy is an explicit command, so it writes straight through —
+/// the "Replace clipboard contents?" confirm was removed 2026-10-31 by
+/// request. Oto's insertion path never uses this: it snapshots and restores
+/// with receipts (below), so a dictation can still leave the prior clipboard
+/// intact. Pure over an injected board, so tests use scratch boards and
+/// never touch `.general`.
+enum ClipboardWrite {
+    nonisolated static func text(_ text: String, to board: NSPasteboard = .general) {
+        board.clearContents()
+        board.setString(text, forType: .string)
     }
+}
 
-    /// Marks a manual Oto placement so the next manual write skips the
-    /// confirm (Oto-to-Oto overwrites need no friction). The marker is an
-    /// inert extra type: insertion receipts pair marker UUIDs they create
-    /// themselves, so a manual marker can never read as owned there, and
-    /// the next placement overwrites it.
-    nonisolated static func markAsOto(_ board: NSPasteboard) {
-        board.setString(UUID().uuidString, forType: PasteboardReceipt.markerType)
-    }
+/// Legacy name for the polish tests' injectable board (the manual clean-up
+/// sheet that coined it is gone; the primitive is `ClipboardWrite`).
+nonisolated func placePolishedOnClipboard(_ text: String, board: NSPasteboard = .general) {
+    ClipboardWrite.text(text, to: board)
 }
 
 /// Full-fidelity clipboard snapshot: every type of every item, in order.

@@ -377,12 +377,6 @@ nonisolated func racePolishText(
     }
 }
 
-/// Rule for the Clean up affordance: offered only when the user left it on
-/// AND the model is actually available. Pure — unit-tested.
-nonisolated func polishActionVisible(availability: PolishAvailability, enabled: Bool) -> Bool {
-    enabled && availability == .available
-}
-
 /// Intelligence behavior, superseded by Auto Cleanup (E1). Kept (deprecated)
 /// ONLY as the read path for `LegacyIntelligenceSettings` raw strings — new
 /// code must use `CleanupLevel`. Removal no earlier than 2 releases.

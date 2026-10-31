@@ -28,13 +28,6 @@ struct PolishServiceTests {
             .unavailable(copy: "The on-device model is still preparing. Try again shortly."))
     }
 
-    @Test func affordanceNeedsEnabledAndAvailable() {
-        #expect(polishActionVisible(availability: .available, enabled: true))
-        #expect(!polishActionVisible(availability: .available, enabled: false))
-        #expect(!polishActionVisible(availability: .unavailable(copy: "x"), enabled: true))
-        #expect(!polishActionVisible(availability: .unavailable(copy: "x"), enabled: false))
-    }
-
     @Test func fakeStreamsChunksInOrder() async {
         let fake = FakePolishService()
         fake.chunks = ["Clean", "Clean up", "Clean up."]
@@ -78,16 +71,15 @@ struct PolishServiceTests {
         #expect(fake.prewarms == 2)
     }
 
-    @Test func keepWritesOnlyTheClipboard() {
+    @Test func manualClipboardWriteHoldsTheCleanedText() {
         let board = NSPasteboard(name: NSPasteboard.Name("test.oto.polish.\(UUID().uuidString)"))
         placePolishedOnClipboard("cleaned text", board: board)
         #expect(board.string(forType: .string) == "cleaned text")
     }
 
-    @Test func useOriginalWritesRawToClipboard() {
-        // Symmetric clipboard (Matrix A finding): Use original copies the
-        // raw, so paste always reflects the last decision — a previous Keep
-        // must not survive a change of mind.
+    @Test func manualClipboardWriteReplacesPriorContent() {
+        // The clipboard reflects the last copy: a later write never leaves
+        // the earlier text paired with it.
         let board = NSPasteboard(name: NSPasteboard.Name("test.oto.polish.\(UUID().uuidString)"))
         placePolishedOnClipboard("polished", board: board)
         placePolishedOnClipboard("helo wrld", board: board)
@@ -194,7 +186,7 @@ struct PolishServiceTests {
         }
     }
 
-    @Test func manualFlowNeverWritesHistory() async {
+    @Test func cleanupDraftNeverWritesHistory() async {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
@@ -207,8 +199,8 @@ struct PolishServiceTests {
         await store.record(finalText: "helo wrld", bundleID: "com.example.App")
         #expect(store.entries.count == 1)
 
-        // The Manual flow end to end (fake model): stream the draft, Keep
-        // copies it to a scratch board. History must be byte-identical.
+        // Streaming a cleanup draft (the Auto Cleanup path) and copying it
+        // must leave the stored row byte-identical.
         let fake = FakePolishService()
         fake.chunks = ["hello world"]
         var draft = ""

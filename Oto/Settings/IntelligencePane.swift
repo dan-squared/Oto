@@ -198,6 +198,7 @@ struct IntelligencePane: View {
                 OtoShortcutField(
                     chips: KeyNames.chips(for: kind),
                     isRecording: false,
+                    active: recording == preset,
                     recordLabel: "\(preset.displayName) shortcut, \(transformShortcutLabel(kind: kind)). Activate to record a new shortcut.",
                     onRecord: {
                         transforms.stop()
@@ -207,13 +208,26 @@ struct IntelligencePane: View {
                 .disabled(othersRecording)
                 .popover(isPresented: Binding(
                     get: { recording == preset },
-                    set: { if !$0, recording == preset { transforms.start(); recording = nil } }
+                    set: {
+                        guard !$0, recording == preset else { return }
+                        transforms.start()
+                        recording = nil
+                        // Refusals live on the recorder's glass; the row must
+                        // not keep repeating them after it closes.
+                        messages[preset] = nil
+                    }
                 ), arrowEdge: .top) {
                     TransformShortcutCapturePopover(
                         isListening: Binding(
                             get: { recording == preset },
-                            set: { if !$0, recording == preset { transforms.start(); recording = nil } }
+                            set: {
+                                guard !$0, recording == preset else { return }
+                                transforms.start()
+                                recording = nil
+                                messages[preset] = nil
+                            }
                         ),
+                        hasShortcut: !KeyNames.chips(for: kind).isEmpty,
                         onCapture: { modifiers, keyCode, conflicts in
                             captureTransform(
                                 preset: preset,
@@ -230,11 +244,13 @@ struct IntelligencePane: View {
                             transforms.clearShortcut(for: preset)
                             transforms.start()
                             recording = nil
+                            messages[preset] = nil
                             refreshTransforms()
                         },
                         onCancel: {
                             transforms.start()
                             recording = nil
+                            messages[preset] = nil
                         },
                         onInvalid: { reason in
                             NSSound.beep()
@@ -243,7 +259,10 @@ struct IntelligencePane: View {
                     )
                 }
             }
-            if let message = messages[preset] ?? auditMessage(for: preset) {
+            // Only while no recorder is open: during recording the monitors
+            // are stopped on purpose, so every "couldn't register" would be a
+            // false alarm, and the recorder's glass already states refusals.
+            if recording == nil, let message = messages[preset] ?? auditMessage(for: preset) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 12))
@@ -255,7 +274,7 @@ struct IntelligencePane: View {
                     Spacer()
                 }
                 .padding(.vertical, 6)
-            } else if !transforms.isLive(preset), !isRecording {
+            } else if recording == nil, !transforms.isLive(preset) {
                 // Registered combos that the OS refused (another app holds
                 // the hotkey): named, never silently dead — except empty
                 // slots, which claim nothing.

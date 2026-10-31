@@ -5,7 +5,7 @@
 //  Opt-in history, final text only. Recovery is Copy + manual paste (the
 //  person picks target and timing) — no re-post path in this pane.
 //
-//  A row is the words and four quiet actions. The app, the time and the
+//  A row is the words and three quiet actions. The app, the time and the
 //  cleanup state are facts, not headline copy: they live behind the info
 //  button instead of under every transcript.
 //
@@ -15,24 +15,14 @@ import SwiftUI
 
 struct HistoryPane: View {
     let history: HistoryStore
-    let polish: any PolishServing
     let dispatch: ShortcutDispatch
     let chrome: SettingsChrome
 
     @AppStorage("app.Oto.historyEnabled") private var historyEnabled = false
-    /// Mirrors the Intelligence master switch (same key as IntelligencePane):
-    /// off hides every Clean up button — no dead controls.
-    @AppStorage(CleanupSettings.enabledKey) private var intelligenceEnabled = false
     @State private var showClearConfirm = false
     @State private var showDisableConfirm = false
-    @State private var confirmCopyOverwrite = false
-    @State private var pendingCopyEntry: HistoryEntry?
     @State private var feedback: String?
     @State private var historyPage = 1
-    /// Unknown until appear (then read once): unknown ⇒ hidden, so the
-    /// button can never appear without a live model behind it.
-    @State private var polishAvailability: PolishAvailability = .unavailable(copy: "")
-    @State private var polishEntry: HistoryEntry?
     @State private var infoEntryID: UUID?
     @State private var copyFlash = OtoCopyFlash()
 
@@ -66,10 +56,6 @@ struct HistoryPane: View {
         }
         .onAppear {
             publishAccessory()
-            polishAvailability = polish.availability()
-            if polishActionVisible(availability: polishAvailability, enabled: intelligenceEnabled) {
-                polish.prewarm()
-            }
         }
         .onChange(of: historyEnabled) { _, new in
             history.setEnabled(new)
@@ -90,10 +76,7 @@ struct HistoryPane: View {
             infoEntryID = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: .otoProbeCopyFirst)) { _ in
-            if let first = history.entries.first { writeEntry(first) }
-        }
-        .sheet(item: $polishEntry) { entry in
-            PolishSheet(entry: entry, polish: polish)
+            if let first = history.entries.first { copyEntry(first) }
         }
         .confirmationDialog(
             "Delete all history on this Mac?",
@@ -108,19 +91,6 @@ struct HistoryPane: View {
             }
         } message: {
             Text("This removes every remembered transcript on this Mac. Cannot be undone.")
-        }
-        .confirmationDialog(
-            "Replace clipboard contents?",
-            isPresented: $confirmCopyOverwrite,
-            titleVisibility: .visible
-        ) {
-            Button("Replace") {
-                if let entry = pendingCopyEntry { writeEntry(entry) }
-                pendingCopyEntry = nil
-            }
-            Button("Cancel", role: .cancel) { pendingCopyEntry = nil }
-        } message: {
-            Text("The clipboard holds text Oto didn't place.")
         }
         .confirmationDialog(
             "Turn off History?",
@@ -208,11 +178,6 @@ struct HistoryPane: View {
                 ) {
                     copyEntry(entry)
                 }
-                if polishActionVisible(availability: polishAvailability, enabled: intelligenceEnabled) {
-                    OtoRowButton(symbol: "sparkles", help: "Clean up transcript") {
-                        polishEntry = entry
-                    }
-                }
                 OtoRowButton(symbol: "info.circle", help: "Transcript details") {
                     infoEntryID = entry.id
                 }
@@ -299,21 +264,10 @@ struct HistoryPane: View {
     }
 
     private func copyEntry(_ entry: HistoryEntry) {
-        // Overwrite guard (clipboard discipline): foreign content confirms,
-        // empty/Oto boards write direct. Marker set on every Oto write so
-        // Oto-to-Oto copies stay frictionless.
-        if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
-            pendingCopyEntry = entry
-            confirmCopyOverwrite = true
-            return
-        }
-        writeEntry(entry)
-    }
-
-    private func writeEntry(_ entry: HistoryEntry) {
+        // Copy is an explicit command: it writes straight through (no
+        // overwrite confirm — removed 2026-10-31). History keeps the text.
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.finalText, forType: .string)
-        ClipboardOverwriteGuard.markAsOto(NSPasteboard.general)
         // The row's own glyph becomes the tick — no status line underneath.
         self.copyFlash.flash(entry.id)
     }

@@ -22,14 +22,21 @@ final class DockRestoreDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = DockVisibility.apply(shown: DockVisibility.isShown())
         OtoProbe.forceAppearance()
-        Self.onboarding?.showIfNeeded()
+        // A developer capture (`OTO_SETTINGS_SHOT`) owns the screen for the
+        // shot: onboarding would cover the pane being captured, and the
+        // first-run rule below would take the window away mid-walk.
+        let probeCapture = OtoProbe.settingsCaptureRequested
+        if !probeCapture {
+            Self.onboarding?.showIfNeeded()
+        }
         OtoProbe.captureIfRequested(onboarding: Self.onboarding)
         OtoProbe.captureSettingsIfRequested(settings: Self.settings)
         // Product rule: onboarding owns first-run. A restored Settings window
         // (stale Saved Application State, or quit-mid-onboarding) must not
         // stand while onboarding is unfinished — restoration runs before this
         // delegate callback, so any such window already exists to be closed.
-        if OnboardingStore.shouldShow(),
+        if !probeCapture,
+           OnboardingStore.shouldShow(),
            let settings = SettingsWindowLocator.settingsWindow(in: NSApp.windows)
         {
             settings.close()

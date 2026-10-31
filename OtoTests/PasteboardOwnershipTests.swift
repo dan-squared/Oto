@@ -103,32 +103,29 @@ struct InsertionDecisionTests {
     }
 }
 
-struct ClipboardOverwriteGuardTests {
+struct ClipboardWriteTests {
     private func scratchBoard() -> NSPasteboard {
-        NSPasteboard(name: NSPasteboard.Name("oto-guard-\(UUID().uuidString)"))
+        NSPasteboard(name: NSPasteboard.Name("oto-write-\(UUID().uuidString)"))
     }
 
-    @Test func emptyBoardNeverConfirms() {
-        // Fresh boards (and boards Oto just cleared) write direct.
-        #expect(!ClipboardOverwriteGuard.shouldConfirm(board: scratchBoard()))
-    }
-
-    @Test func foreignContentConfirms() {
+    @Test func writesTextToAnEmptyBoard() {
         let board = scratchBoard()
-        board.clearContents()
-        board.setString("hunter2", forType: .string)
-        #expect(ClipboardOverwriteGuard.shouldConfirm(board: board))
-    }
-
-    @Test func otoMarkedSkipsConfirm() {
-        // Oto-to-Oto overwrites stay frictionless: every manual Oto write
-        // marks the board, and a user copy clears all types (marker with
-        // it), re-arming the guard.
-        let board = scratchBoard()
-        board.clearContents()
-        board.setString("oto words", forType: .string)
-        ClipboardOverwriteGuard.markAsOto(board)
-        #expect(!ClipboardOverwriteGuard.shouldConfirm(board: board))
+        ClipboardWrite.text("oto words", to: board)
         #expect(board.string(forType: .string) == "oto words")
+    }
+
+    @Test func replacesForeignContentWithoutAsking() {
+        // Copy is an explicit command: the old "Replace clipboard contents?"
+        // confirm is gone (2026-10-31), so a foreign board is overwritten.
+        let board = scratchBoard()
+        ClipboardWrite.text("hunter2", to: board)
+        ClipboardWrite.text("oto words", to: board)
+        #expect(board.string(forType: .string) == "oto words")
+    }
+
+    @Test func legacyPolishWriterUsesTheSamePrimitive() {
+        let board = scratchBoard()
+        placePolishedOnClipboard("cleaned text", board: board)
+        #expect(board.string(forType: .string) == "cleaned text")
     }
 }

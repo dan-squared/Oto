@@ -87,6 +87,10 @@ struct OtoSwitch: View {
 struct OtoSegmented<Option: Hashable>: View {
     let options: [(Option, String)]
     @Binding var selection: Option
+    /// Per-segment width. Nil keeps the full-width track used by section-wide
+    /// choosers (Auto Cleanup); a value makes the track hug its content so a
+    /// settings row can put its label left and the control right.
+    var segmentWidth: CGFloat? = nil
 
     var body: some View {
         HStack(spacing: 0) {
@@ -105,7 +109,8 @@ struct OtoSegmented<Option: Hashable>: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(selection == item.0 || hoveredOption == item.0 ? Color.primary : Color.secondary)
                 .animation(.easeOut(duration: 0.12), value: hoveredOption)
-                .frame(maxWidth: .infinity)
+                .frame(width: segmentWidth)
+                .frame(maxWidth: segmentWidth == nil ? .infinity : nil)
                 .onHover { hovering in hoveredOption = hovering ? item.0 : nil }
                 .accessibilityAddTraits(selection == item.0 ? [.isSelected] : [])
             }
@@ -130,7 +135,13 @@ struct OtoSegmented<Option: Hashable>: View {
                 Capsule().fill(Color(NSColor.controlBackgroundColor))
             }
         }
-        .frame(maxWidth: .infinity)
+        .overlay {
+            // Hairline track: on a light card the glass capsule and the white
+            // selection pill need an edge to read as one control (reference:
+            // the grouped-settings segmented row).
+            Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.7)
+        }
+        .frame(maxWidth: segmentWidth == nil ? .infinity : nil)
         .opacity(isEnabled ? 1 : 0.48)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Options")
@@ -251,6 +262,9 @@ struct OtoShortcutPill: View {
     var isRecording = false
     /// Hover or active: the capsule brightens instead of growing a border.
     var lit = false
+    /// This row's recorder is open. A hairline stroke says "this is the one
+    /// being edited" while the popover is up.
+    var active = false
     var compact = false
 
     var body: some View {
@@ -278,7 +292,33 @@ struct OtoShortcutPill: View {
         .background {
             Capsule().fill(Color.primary.opacity(lit ? 0.11 : 0.065))
         }
+        .overlay {
+            Capsule().strokeBorder(
+                Color.primary.opacity(active ? 0.34 : 0),
+                lineWidth: 1
+            )
+        }
         .contentShape(Capsule())
+    }
+}
+
+/// Press physics for the shortcut face: the capsule grows the same hairline
+/// stroke while the mouse is down, so a click reads as "this is the control I
+/// am editing" before the recorder appears. Hover still only brightens.
+struct OtoShortcutPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay {
+                Capsule().strokeBorder(
+                    Color.primary.opacity(configuration.isPressed ? 0.34 : 0),
+                    lineWidth: 1
+                )
+            }
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(
+                OtoMotion.reduced ? nil : .easeOut(duration: 0.12),
+                value: configuration.isPressed
+            )
     }
 }
 
@@ -287,6 +327,7 @@ struct OtoShortcutPill: View {
 struct OtoShortcutField: View {
     let chips: [String]
     var isRecording = false
+    var active = false
     var placeholder = "Record Shortcut"
     var recordLabel = "Record shortcut"
     let onRecord: () -> Void
@@ -300,11 +341,13 @@ struct OtoShortcutField: View {
                 chips: chips,
                 placeholder: placeholder,
                 isRecording: isRecording,
-                lit: hovering
+                lit: hovering,
+                active: active
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OtoShortcutPress())
         .accessibilityLabel(isRecording ? "Recording shortcut" : recordLabel)
+        .accessibilityAddTraits(active ? [.isSelected] : [])
         .onHover { hovering = $0 }
         .opacity(isEnabled ? 1 : 0.5)
     }

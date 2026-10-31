@@ -30,6 +30,13 @@ extension Notification.Name {
 
 @MainActor
 enum OtoProbe {
+    /// True when a Settings capture was requested. Launch treats it as a
+    /// developer session: onboarding stays out of the frame and the first-run
+    /// rule that closes Settings does not fire (persisted state untouched).
+    static var settingsCaptureRequested: Bool {
+        ProcessInfo.processInfo.environment["OTO_SETTINGS_SHOT"] != nil
+    }
+
     static func forceAppearance() {
         guard let name = ProcessInfo.processInfo.environment["OTO_APPEARANCE"] else { return }
         NSApp.appearance = NSAppearance(named: name == "light" ? .aqua : .darkAqua)

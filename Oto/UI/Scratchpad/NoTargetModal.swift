@@ -346,22 +346,19 @@ final class NoTargetModalController {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
-    /// Manual Copy primitive (same pasteboard discipline as history Copy).
-    /// Shows Copied briefly, then auto-closes: the user pressed Copy
-    /// because the transcript is going somewhere now. Generation-guarded
-    /// (audit): a second Copy (or a re-show) inside the window restarts
-    /// the close instead of double-hiding or stranding Copied lit.
+    /// Manual Copy primitive (same clipboard rule as history Copy). Shows
+    /// Copied briefly, then auto-closes: the user pressed Copy because the
+    /// transcript is going somewhere now. Generation-guarded (audit): a second
+    /// Copy (or a re-show) inside the window restarts the close instead of
+    /// double-hiding or stranding Copied lit.
     private var copyGeneration = 0
     func copy(pasteboard: NSPasteboard = .general) {
         // Full transcript, never the capped display string (P0: long
         // dictations lost every word past 50 on Copy). Fallback guards a
         // copy-before-show that cannot happen through current callers.
-        // Marks the placement (overwrite guard for the next manual write).
-        // Confirm-vs-write lives with the caller (SwiftUI dialog), so this
-        // stays unit-testable with scratch boards and never blocks.
-        pasteboard.clearContents()
-        pasteboard.setString(fullText.isEmpty ? text : fullText, forType: .string)
-        ClipboardOverwriteGuard.markAsOto(pasteboard)
+        // Copy writes straight through (no overwrite confirm — removed
+        // 2026-10-31); the primitive stays unit-testable with scratch boards.
+        ClipboardWrite.text(fullText.isEmpty ? text : fullText, to: pasteboard)
         copied = true
         // VoiceOver announcement: the panel is never key (focus-steal
         // defense), so VO users get the confirmation announced instead of
@@ -388,9 +385,6 @@ final class NoTargetModalController {
 struct NoTargetModalView: View {
     let controller: NoTargetModalController
     @Environment(\.colorScheme) private var scheme
-    /// Overwrite confirm (clipboard discipline): only armed when the
-    /// general board holds non-Oto content; Oto/empty boards copy direct.
-    @State private var confirmOverwrite = false
 
     var body: some View {
         // v6 surface: two stacked zones — words, then a bottom-pinned
@@ -427,22 +421,9 @@ struct NoTargetModalView: View {
                             controller.hide()
                         }
                         OtoPill(controller.copied ? "Copied" : "Copy", filled: true, large: true) {
-                            if ClipboardOverwriteGuard.shouldConfirm(board: .general) {
-                                confirmOverwrite = true
-                            } else {
-                                controller.copy()
-                            }
+                            controller.copy()
                         }
                         .disabled(controller.copied)
-                        .confirmationDialog(
-                            "Replace clipboard contents?",
-                            isPresented: $confirmOverwrite
-                        ) {
-                            Button("Replace") { controller.copy() }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text("The clipboard holds text Oto didn't place.")
-                        }
                     }
                     .frame(minHeight: 52)
                     .padding(.top, 18)

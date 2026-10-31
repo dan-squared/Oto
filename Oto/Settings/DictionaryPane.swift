@@ -3,7 +3,7 @@
 //  Oto
 //
 //  Spoken-form → replacement rules. Every control binds the real store;
-//  the sheet carries validation + test/preview; deletion confirms.
+//  the sheet carries validation; deletion confirms.
 //
 //  A rule is one line and a cluster of actions. The scope it applies in and
 //  whether it is on live behind the info button — the row itself stays a
@@ -187,7 +187,6 @@ private struct DictionaryRuleEditor: View {
     @State private var scopeGlobal = true
     @State private var bundleIDs: [String] = []
     @State private var isEnabled = true
-    @State private var sample = ""
     @State private var error: String?
     @State private var warning: String?
 
@@ -199,19 +198,6 @@ private struct DictionaryRuleEditor: View {
                 // Scope is picked, never typed: names are what people know.
                 OtoAppScopePicker(isGlobal: $scopeGlobal, bundleIDs: $bundleIDs)
                 Toggle("Enabled", isOn: $isEnabled)
-            }
-            Section("Try it") {
-                TextField("Sample sentence", text: $sample)
-                // Same apply path, explicit scope: the preview never lies
-                // about app-scoped rules.
-                let probe = dictionary.test(
-                    sample: sample.isEmpty ? "Type a sentence containing \"\(spoken)\"" : sample,
-                    scope: scopeGlobal ? nil : bundleIDs.first,
-                    rules: previewRules()
-                )
-                Text(probe)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             if let warning {
                 Text(warning).font(.caption).foregroundStyle(.secondary)
@@ -227,7 +213,7 @@ private struct DictionaryRuleEditor: View {
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 420, minHeight: 380)
+        .frame(minWidth: 420, minHeight: 320)
         .onAppear { seed() }
     }
 
@@ -240,15 +226,6 @@ private struct DictionaryRuleEditor: View {
             isEnabled = rule.isEnabled
             warning = dictionary.precedenceWarning(for: rule)
         }
-    }
-
-    private func previewRules() -> [DictionaryRule] {
-        var draft = rule ?? DictionaryRule(spoken: " ", replacement: " ")
-        draft.spoken = spoken
-        draft.replacement = replacement
-        draft.bundleIDs = scopeGlobal ? [] : bundleIDs
-        draft.isEnabled = true
-        return dictionary.rules.filter { $0.id != draft.id } + [draft]
     }
 
     private func save() {

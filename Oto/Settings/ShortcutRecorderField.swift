@@ -383,6 +383,30 @@ struct ShortcutCapturePopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Delete lives at the top centre, the way the reference recorder
+            // states it — not as a button beside Close. Tapping it does the
+            // same thing as pressing ⌫: empty the slot, stay armed.
+            if !isCleared {
+                Button {
+                    clearShortcut()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Press")
+                        // Bare glyph, no keycap: the hint is a sentence, not a
+                        // key in the row's shortcut.
+                        Text("⌫")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Text("to delete")
+                    }
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove this shortcut")
+                .padding(.top, 12)
+            }
+
             HStack(spacing: 8) {
                 ForEach(Array(shownChips.enumerated()), id: \.offset) { _, chip in
                     OtoKey(text: chip)
@@ -399,8 +423,7 @@ struct ShortcutCapturePopover: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 94)
-            .background { OtoRecorderGlow(tone: glow) }
+            .frame(maxWidth: .infinity, minHeight: isCleared ? 94 : 78)
             .modifier(ShortcutRecorderModifier(
                 isListening: $isListening,
                 onCapture: { modifiers, keyCode, conflicts in
@@ -440,18 +463,6 @@ struct ShortcutCapturePopover: View {
 
             Divider()
             HStack(spacing: 8) {
-                if !isCleared {
-                    Button {
-                        clearShortcut()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text("Remove")
-                            OtoKey(text: "⌫", compact: true)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove this shortcut")
-                }
                 Spacer()
                 Button {
                     dispatch.setSuspended(false)
@@ -468,6 +479,13 @@ struct ShortcutCapturePopover: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
+        }
+        // The wash covers the whole glass, not just the chips row: the answer
+        // must read as the popover's own tint (a band under the Delete hint
+        // looked cut off).
+        .background {
+            OtoRecorderGlow(tone: glow)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .frame(width: 252)
         .presentationBackground(.ultraThinMaterial)
@@ -593,6 +611,9 @@ struct ShortcutCapturePopover: View {
 /// Dictation. Capture policy remains supplied by the owning feature.
 struct TransformShortcutCapturePopover: View {
     @Binding var isListening: Bool
+    /// The slot already holds a combination, so ⌫ (or tapping the hint) can
+    /// empty it.
+    var hasShortcut = false
     /// Returns a refusal copy when the pressed combination cannot be saved.
     /// Keeping the popover open makes a failed record actionable.
     let onCapture: (UInt32, UInt32, [RecorderConflict]) -> String?
@@ -615,6 +636,25 @@ struct TransformShortcutCapturePopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if hasShortcut {
+                Button {
+                    onClear()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Press")
+                        Text("⌫")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Text("to delete")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove this shortcut")
+                .padding(.top, 12)
+            }
+
             HStack(spacing: 5) {
                 ForEach(Array(shownChips.enumerated()), id: \.offset) { _, chip in
                     OtoKey(text: chip)
@@ -623,8 +663,7 @@ struct TransformShortcutCapturePopover: View {
                     .font(.system(size: 11))
                     .foregroundStyle(refusal == nil ? Color.secondary : Color.red)
             }
-            .frame(maxWidth: .infinity, minHeight: 94)
-            .background { OtoRecorderGlow(tone: glow) }
+            .frame(maxWidth: .infinity, minHeight: hasShortcut ? 78 : 94)
             .modifier(ShortcutRecorderModifier(
                 isListening: $capturing,
                 onCapture: { modifiers, keyCode, conflicts in
@@ -669,6 +708,10 @@ struct TransformShortcutCapturePopover: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
+        }
+        .background {
+            OtoRecorderGlow(tone: glow)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .frame(width: 252)
         .presentationBackground(.ultraThinMaterial)
