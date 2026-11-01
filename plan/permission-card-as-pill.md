@@ -37,11 +37,13 @@ to appear where the pill lives.
 - **No icon.** The words and the remedy are the whole message; the red
   glass and the inner pill carry the state. Title is white over the
   crimson ramp — legible at every brightness of the frost.
-- **The action is a pill inside the pill**: 30 pt tall, r 15, filled with
-  the palette's pale tip (`mix(base, white, max(tipDepth, 0.78))`) and
-  labelled in near-black. That pale cap is the pill's own highlight, so
-  the button reads as part of the same material — and it keeps a
-  guaranteed contrast whatever hue is chosen.
+- **The action is concentric, not just inside.** 30 pt tall in a 44 pt
+  capsule, inset 7 pt on every side, so its radius (15) is exactly the
+  outer radius (22) minus the inset — Apple's concentric rule, and the
+  reason it no longer reads as floating in a corner. The width is
+  content-fitted and compact: text inset 18, title↔button gap 12, button
+  inset 7. No reserved icon slot, no fixed width — both were tried on
+  2026-11-01 and each produced a visible hole (left, then middle).
 - **It morphs out of the pill.** On show, the card's layer is scaled to
   the pill's own rect (92.4 × 26.4 at the same slot) and animated to
   1 × 1 on `MorphCurve` (the catcher's 420 ms reference curve), anchored

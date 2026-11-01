@@ -78,6 +78,16 @@ struct PermissionModalTests {
         #expect(PermissionCardView.height <= 48)
     }
 
+    @Test func actionIsConcentricWithTheCapsule() {
+        // Concentric, Apple's own rule for a shape inside a capsule: the
+        // inner radius is the outer minus the inset, and the button is inset
+        // by exactly that much on every side.
+        #expect(PermissionCardView.cardRadius - PermissionCardView.inset
+            == PermissionCardView.buttonRadius)
+        #expect(PermissionCardView.height - PermissionCardView.buttonHeight
+            == PermissionCardView.inset * 2)
+    }
+
     @Test func grantOpensMicrophoneLinkWhenDenied() {
         // Denied (or granted — both route to Settings): the first attempted
         // URL must be the Microphone pane; opener is injected, nothing launches.

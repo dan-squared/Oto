@@ -87,8 +87,13 @@ enum SettingsLinkOpener {
 /// (pill v2 frame-bug class — never again).
 @MainActor
 final class PermissionCardView: NSView {
-    /// Hard ceiling: the card grows to fit its words, never past this.
+    /// Hard ceiling for the text measure (unchanged).
     nonisolated static let maxWidth: CGFloat = 460
+    /// Universal inset: the action's distance from the capsule's edge, and
+    /// the same 7 pt the button has above and below it (44 − 30) / 2. That
+    /// is what makes the pair concentric — inner radius 15 = outer 22 − 7 —
+    /// so the button cannot look like it floats in the corner.
+    nonisolated static let inset: CGFloat = 7
     /// The pill, expanded — not a second, bigger surface. 44 pt is a
     /// capsule the pill's own 26.4 pt can grow into without becoming a
     /// banner (the 60 pt v1 card read as a notification, user 2026-11-01).
@@ -231,10 +236,13 @@ final class PermissionCardView: NSView {
     /// title covers NSTextField cell slop so the tight string measure
     /// never under-sizes the field.
     private func relayout() {
-        // No icon: the words and the remedy are the whole message (user,
-        // 2026-11-01 — the warning glyph on the left is not needed).
-        let pad: CGFloat = 16
-        let gapButton: CGFloat = 10
+        // Content-fitted and compact: every point of width is either a word
+        // or a gap the eye needs. The action sits `inset` from the right
+        // edge (the same 7 pt as its vertical inset, so the two capsules are
+        // concentric); the title starts 11 pt further in than that, because
+        // text at 7 pt runs into the outer curve's shoulder.
+        let textInset: CGFloat = Self.inset + 11
+        let gapButton: CGFloat = 12
         let buttonHPad: CGFloat = 15
         let buttonH = Self.buttonHeight
         let h = Self.height
@@ -244,7 +252,7 @@ final class PermissionCardView: NSView {
         let titleH = ceil(Self.textHeight(self.copy.title, font: typeface))
         let buttonW = ceil(Self.textWidth(self.copy.action, font: typeface)) + buttonHPad * 2
 
-        var width = pad + titleW + gapButton + buttonW + pad
+        var width = textInset + titleW + gapButton + buttonW + Self.inset
         var fittedTitleW = titleW
         didClampTitle = false
         if width > Self.maxWidth {
@@ -270,11 +278,11 @@ final class PermissionCardView: NSView {
 
         let midY = h / 2
         title.frame = CGRect(
-            x: pad, y: midY - titleH / 2,
+            x: textInset, y: midY - titleH / 2,
             width: fittedTitleW, height: titleH
         )
         button.frame = CGRect(
-            x: width - pad - buttonW, y: midY - buttonH / 2,
+            x: width - Self.inset - buttonW, y: midY - buttonH / 2,
             width: buttonW, height: buttonH
         )
         window?.invalidateCursorRects(for: self)
