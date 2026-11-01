@@ -9,6 +9,7 @@
 //  with the future scratchpad if users demand it (v4 §8).
 //
 
+import AppKit
 import SwiftUI
 
 /// Adaptive card palette. Pure value (unit-tested dark≠light); views
@@ -44,6 +45,22 @@ struct CatcherPalette: Equatable, Sendable {
 
     static func current(_ scheme: ColorScheme) -> CatcherPalette {
         scheme == .dark ? .dark : .light
+    }
+
+    /// AppKit bridge for the layer that paints the card fill *under* the
+    /// SwiftUI content (CatcherSurfaceView). SwiftUI's scheme comes from the
+    /// hosting view's environment; the surface has no environment, so it
+    /// reads the effective appearance instead. Same two values, one source.
+    static func current(_ appearance: NSAppearance) -> CatcherPalette {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+    }
+}
+
+extension CatcherPalette {
+    /// Card fill as a layer colour (morph surface). Straight sRGB from the
+    /// same components `card` uses — never a second hex.
+    var cardColor: CGColor {
+        CGColor(srgbRed: cardRed, green: cardGreen, blue: cardBlue, alpha: 1)
     }
 }
 

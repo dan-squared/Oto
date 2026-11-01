@@ -61,11 +61,11 @@ struct OtoApp: App {
     // path — two instances could never diverge in behavior, but one is
     // the honest shape (audit S2).
     private let inserter: RealTextInsertion
-    // Slice 6B/6C1: visualizer feed + pill/modal ownership. The spectrum
-    // box is forked off the SAME bufferHandler closure as the relay
+    // Slice 6B/6C1: visualizer feed + pill/modal ownership. The level box
+    // is forked off the SAME bufferHandler closure as the relay
     // (attaching to the relay would detach speech — single sink).
-    private let spectrumBox: SpectrumFeedBox
-    private let analyzer: AudioSpectrumAnalyzer
+    private let levelBox: LevelFeedBox
+    private let analyzer: AudioLevelAnalyzer
     private let flowController: FlowBarController
     @NSApplicationDelegateAdaptor(DockRestoreDelegate.self) private var dockRestore
     // Phase 6A writing stores. One persistence service; three observable
@@ -114,10 +114,10 @@ struct OtoApp: App {
         MediaDuck.migrateSandboxedFlagIfNeeded()
         MediaDuck.restoreIfCrashed()
         let relay = AudioBufferRelay()
-        let spectrumBox = SpectrumFeedBox()
+        let levelBox = LevelFeedBox()
         let audio = AppleAudioCapture(bufferHandler: { buffer in
             relay.receive(buffer)
-            spectrumBox.offer(buffer)
+            levelBox.offer(buffer)
         })
         let speech = AppleSpeechService(relay: relay)
         // Insertion experiment (8b Slice 3): hidden A/B seam, read once
@@ -162,7 +162,7 @@ struct OtoApp: App {
             polish: polishService,
             behaviorProvider: { CleanupBehavior.current() }
         )
-        let analyzer = AudioSpectrumAnalyzer()
+        let analyzer = AudioLevelAnalyzer()
         let modalController = NoTargetModalController()
         let permissionController = PermissionModalController()
         let transformRunner = TransformRunner(
@@ -174,14 +174,14 @@ struct OtoApp: App {
         let flowController = FlowBarController(
             coordinator: coordinator,
             analyzer: analyzer,
-            box: spectrumBox,
+            box: levelBox,
             modal: modalController,
             permission: permissionController,
             runner: transformRunner
         )
         self.coordinator = coordinator
         self.inserter = inserter
-        self.spectrumBox = spectrumBox
+        self.levelBox = levelBox
         self.analyzer = analyzer
         self.flowController = flowController
         flowController.start()

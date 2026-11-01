@@ -3,9 +3,10 @@
 //  Oto
 //
 //  Slice 6B: the pill's @MainActor observable. Holds the polled projection,
-//  the smoothed display sample, and transient notices. Smoothing lives here
-//  (analyzer publishes raw band levels; the model shapes them with
-//  attack/release) so frozen motion, silence, and notices all funnel
+//  the analyzer's latest loudness target, and transient notices. Smoothing
+//  lives here: the analyzer publishes a raw target at buffer cadence, the
+//  display link moves a private smoothed value per frame so the wave is
+//  frame-rate independent. Frozen motion, silence, and notices all funnel
 //  through one @MainActor owner. Button-free: the model carries no intents
 //  (stop/cancel/finish stay on the shortcut layer + coordinator).
 //
@@ -19,12 +20,18 @@ final class FlowBarModel {
         state: .hidden, sessionID: nil, handsFreeCaption: false,
         recoveryAvailable: false
     )
+    /// Latest analyzer publish (target level + tick). Poll-path reads only.
     private(set) var sample = BarSample.silence
     /// Set by the controller from the Reduce Motion indicator each poll.
     /// Frozen: levels ignored (bars hold statically), animations off.
     var motionFrozen = false
 
-    private var smoothed = [Float](repeating: 0, count: VisualizerMath.barCount)
+    // Per-frame clock state: the display link touches these at 60/120 Hz,
+    // so they are @ObservationIgnored — a notify per vsync would churn
+    // SwiftUI observers for nothing.
+    @ObservationIgnored private var targetLevel: Float = 0
+    @ObservationIgnored private var smoothedLevel: Float = 0
+    @ObservationIgnored private var lastAdvanceTime: Double?
 
     init() {}
 
@@ -34,26 +41,40 @@ final class FlowBarModel {
         self.projection = projection
     }
 
-    /// Raw analyzer band levels → smoothed display sample. Frozen motion
-    /// ignores input (the pill holds its last shape, statically).
-    /// Per-band smoothing first (voice character), then neighbor coupling
-    /// (bars move as one wave), then the floor-lift display mapping.
-    func applyLevels(_ levels: [Float], tick: UInt64) {
+    /// Analyzer target (buffer cadence, ~12 Hz). Frozen motion ignores input
+    /// (the pill holds its last shape, statically).
+    func ingestLevel(_ level: Float, tick: UInt64) {
         guard !motionFrozen else { return }
-        for i in 0..<VisualizerMath.barCount {
-            let target = i < levels.count ? levels[i] : 0
-            smoothed[i] = VisualizerMath.smoothStep(current: smoothed[i], target: target)
+        targetLevel = min(1, max(0, level))
+        sample = BarSample(level: targetLevel, tick: tick)
+    }
+
+    /// One display frame: smooth toward the analyzer target on the FRAME
+    /// clock and return the level the bars should draw. `dt` comes from
+    /// display-link timestamps, clamped to 1/240…0.1 s; the first frame
+    /// assumes 60 fps so it never jumps. Attack/release keepers live in
+    /// VisualizerMath (~98 ms to 90 % rising, ~200 ms falling).
+    func advance(to time: Double) -> Float {
+        defer { lastAdvanceTime = time }
+        guard !motionFrozen else { return smoothedLevel }
+        let dt: Double
+        if let last = lastAdvanceTime {
+            dt = min(0.1, max(1.0 / 240, time - last))
+        } else {
+            dt = 1.0 / 60
         }
-        sample = BarSample(
-            values: VisualizerMath.couple(smoothed).map(VisualizerMath.displayValue),
-            tick: tick
+        smoothedLevel = VisualizerMath.smoothLevel(
+            current: smoothedLevel, target: targetLevel, dt: dt
         )
+        return smoothedLevel
     }
 
     /// Post-stop guarantee: reads are silent. Instant zero (the pill is
     /// already leaving bars for dots/flash — decay would lag the state).
     func publishSilence() {
-        smoothed = [Float](repeating: 0, count: VisualizerMath.barCount)
+        targetLevel = 0
+        smoothedLevel = 0
+        lastAdvanceTime = nil
         sample = .silence
     }
 }

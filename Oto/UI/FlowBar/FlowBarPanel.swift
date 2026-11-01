@@ -59,7 +59,14 @@ final class FlowBarPanel {
     /// Borderless nonactivating floating panel. Never becomes key on click
     /// (focus-steal defense); buttons still click. Shared by the pill and
     /// the catcher modal — one recipe, no drift.
-    static func makePanel(contentView: NSView, size: NSSize) -> NSPanel {
+    ///
+    /// `shadow` is opt-out because the WindowServer's shadow on a small
+    /// borderless capsule reads as a hard dark outline hugging the shape —
+    /// exactly what made the red pill look stroked in black (2026-11-01).
+    /// Dark surfaces hid it; a lit glass capsule does not. The pill turns it
+    /// off and lets its own rim carry the edge; the catcher card keeps it
+    /// (a 464 pt card needs its lift).
+    static func makePanel(contentView: NSView, size: NSSize, shadow: Bool = true) -> NSPanel {
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -73,7 +80,7 @@ final class FlowBarPanel {
         panel.animationBehavior = .none
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.hasShadow = true
+        panel.hasShadow = shadow
         // Layer-backed + clear all the way down: a non-layer hosting view
         // in a transparent panel can render a hairline window-shaped
         // backdrop (seen 2026-09-22). This kills it at the source.
@@ -139,7 +146,11 @@ final class FlowBarPanel {
 
     init(width: CGFloat) {
         content = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: VisualizerMath.pillHeight))
-        panel = Self.makePanel(contentView: content, size: NSSize(width: width, height: VisualizerMath.pillHeight))
+        panel = Self.makePanel(
+            contentView: content,
+            size: NSSize(width: width, height: VisualizerMath.pillHeight),
+            shadow: false
+        )
         currentWidth = width
         content.dragDelegate = self
     }
@@ -190,24 +201,27 @@ final class FlowBarPanel {
     /// value sets with implicit actions disabled. No hierarchy exists to
     /// rebuild — this is why v3 can't lag the v2 way.
     func render(
-        visual: PillVisual, values: [Float],
+        visual: PillVisual, level: Float, time: Double,
         text: String?, centerText: Bool, reduceMotion: Bool, animated: Bool,
         liveValues: Bool = false
     ) {
         content.show(visual: visual, animated: animated)
         content.layout(width: currentWidth)
-        content.update(values: values, text: text, centerText: centerText, reduceMotion: reduceMotion, liveValues: liveValues)
+        content.update(
+            level: level, time: time, text: text, centerText: centerText,
+            reduceMotion: reduceMotion, liveValues: liveValues
+        )
     }
 
     // MARK: - Vsync values loop (fluid waves)
 
-    /// While a source is set, a display-vsync link pushes the latest
-    /// sample to the bars every frame with implicit actions disabled —
-    /// 1:1 motion at the display rate. The 150 ms controller poll keeps
-    /// group switching + geometry and passes liveValues:true to render
-    /// while the link owns transforms, so the two clocks never fight.
-    /// Nil source stops the link. Link: `NSView.displayLink` (macOS
-    /// spelling — `+displayLinkWithTarget:selector:` is iOS-only).
+    /// While a source is set, a display-vsync link pushes one smoothed
+    /// loudness level + ripple phase to the bars every frame with implicit
+    /// actions disabled — 1:1 motion at the display rate. The 150 ms
+    /// controller poll keeps group switching + geometry and passes
+    /// liveValues:true to render while the link owns transforms, so the two
+    /// clocks never fight. Nil source stops the link. Link: `NSView.displayLink`
+    /// (macOS spelling — `+displayLinkWithTarget:selector:` is iOS-only).
     func setLiveValues(_ source: FlowBarModel?) {
         guard source != nil else {
             valuesLink?.invalidate()
@@ -224,7 +238,12 @@ final class FlowBarPanel {
 
     @objc private func pushLiveValues(_ link: CADisplayLink) {
         guard let source = liveSource else { return }
-        content.setLiveLevels(source.sample.values)
+        // Frame clock: the model smooths toward the analyzer's target with
+        // this timestamp's delta, then the bars draw the smoothed level with
+        // the same timestamp's ripple phase (60 and 120 Hz both 1:1).
+        let time = link.timestamp
+        let level = source.advance(to: time)
+        content.setLiveLevels(level: level, time: time)
     }
 
     /// Render-server fade of the whole content (v5 liquid-quick vanish:

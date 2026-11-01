@@ -37,6 +37,9 @@ struct OtoBig: View {
 
 /// A native bordered action button. The system supplies its appearance and
 /// interaction states; destructive actions retain their red tint.
+/// `large` steps the system control size up one notch (`.regular` 24 pt →
+/// `.large` 28 pt tall, measured on macOS 27): the catcher footer asks for
+/// "a little bigger, not too big", and that is the only native step.
 struct OtoPill: View {
     let title: String
     var filled = false

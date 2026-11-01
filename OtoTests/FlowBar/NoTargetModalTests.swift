@@ -159,10 +159,15 @@ struct NoTargetModalTests {
         let huge = String(repeating: "word ", count: 500)
         let clamped = CatcherLayout.height(for: huge, cardWidth: 464, minHeight: minH, maxHeight: 200)
         #expect(clamped == 200)
-        // Chrome math is explicit: top pad, text→actions gap, actions
-        // row (52pt large footer), bottom pad (v6: no dismiss row).
-        let chrome: CGFloat = 20 + 18 + 52 + 20
+        // Chrome math is derived, not copied: top pad, text→actions gap,
+        // the action row's own height, bottom pad. The row is the button
+        // height (28 pt `.large`), so the bottom inset equals the side
+        // inset — the "concentric with the edge" ask of 2026-11-01.
+        let chrome = CatcherLayout.cardPadding * 2
+            + CatcherLayout.textToActionsGap
+            + CatcherLayout.actionRowHeight
         #expect(CatcherLayout.chromeHeight == chrome)
+        #expect(CatcherLayout.actionRowHeight == 28)
         let innerWidth: CGFloat = 464 - 40
         #expect(CatcherLayout.textWidth(cardWidth: 464) == innerWidth)
     }

@@ -512,7 +512,7 @@ struct ModifierHoldState: Equatable, Sendable {
 /// installed from MainActor `sync`, delivered on the main runloop,
 /// torn down from deinit (CF teardown calls are thread-safe; delivery
 /// stays main-only per `handle`'s guard). `@unchecked Sendable` names
-/// that contract — same shape as `SpectrumEngine`'s C-resource split.
+/// that contract — same shape as `LevelEngine`'s C-resource split.
 ///
 /// Lifetime rule (the 22-report crash fix): the tap holds the owner
 /// `passUnretained` (no cycle, no leak), the callback pins the owner

@@ -35,7 +35,7 @@ struct FlowBarControllerTests {
     ) -> (
         controller: FlowBarController,
         coordinator: DictationCoordinator,
-        box: SpectrumFeedBox,
+        box: LevelFeedBox,
         board: NSPasteboard,
         permission: PermissionModalController
     ) {
@@ -51,11 +51,11 @@ struct FlowBarControllerTests {
             history: nil,
             micDeniedOverride: { false }
         )
-        let box = SpectrumFeedBox()
+        let box = LevelFeedBox()
         let permission = PermissionModalController()
         let controller = FlowBarController(
             coordinator: coordinator,
-            analyzer: AudioSpectrumAnalyzer(),
+            analyzer: AudioLevelAnalyzer(),
             box: box,
             modal: NoTargetModalController(),
             permission: permission,
@@ -237,8 +237,8 @@ struct FlowBarControllerTests {
         )
         let controller = FlowBarController(
             coordinator: denied,
-            analyzer: AudioSpectrumAnalyzer(),
-            box: SpectrumFeedBox(),
+            analyzer: AudioLevelAnalyzer(),
+            box: LevelFeedBox(),
             modal: NoTargetModalController(),
             permission: PermissionModalController(),
             pasteboard: scratchBoard(),
@@ -282,8 +282,8 @@ struct FlowBarControllerTests {
         )
         let controller = FlowBarController(
             coordinator: denied,
-            analyzer: AudioSpectrumAnalyzer(),
-            box: SpectrumFeedBox(),
+            analyzer: AudioLevelAnalyzer(),
+            box: LevelFeedBox(),
             modal: NoTargetModalController(),
             permission: PermissionModalController(),
             pasteboard: scratchBoard(),
@@ -439,7 +439,7 @@ struct FlowBarControllerTests {
         _ sut: (
             controller: FlowBarController,
             coordinator: DictationCoordinator,
-            box: SpectrumFeedBox,
+            box: LevelFeedBox,
             board: NSPasteboard,
             permission: PermissionModalController
         ),

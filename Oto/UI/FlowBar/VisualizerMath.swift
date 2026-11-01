@@ -3,55 +3,43 @@
 //  Oto
 //
 //  Slice 6B: every motion number in the pill, pure and headless-tested.
-//  Views own no constants; the analyzer owns no smoothing. Realism comes
-//  from real band data shaped here: fast attack / slow release (consonants
-//  snap, vowels decay), a hard floor (bars never vanish), log-mapped band
-//  levels, and a continuous chase/breathe curve sampled by the render-server
-//  animations (the legacy tick wrappers pin the same curve at integer
-//  phases — deterministic, no wall-clock in tests).
+//  Views own no constants; the analyzer owns no smoothing.
+//
+//  The voice wave is not a spectrum analyzer. One broadband loudness value
+//  (RMS → dB → 0…1) is smoothed per display frame and shaped by a fixed
+//  parabolic envelope plus a permanent, staggered 1 s ripple — the model the
+//  reference pill actually uses. Loudness survives, the row reads as one
+//  shape, and silence keeps micro-motion without a second idle animation.
 //
 
 import AppKit
 import CoreGraphics
 import Foundation
 
-/// One visualizer frame. Raw band levels 0…1 (count == barCount);
-/// `tick` advances once per publish (analyzer → model smoothing clock).
-/// Indeterminate motion (chase, breathe) ignores it — the pill's
-/// render-server animations sample VisualizerMath's continuous curve, so
-/// the loader stays alive with no audio and costs zero MainActor time.
+/// One visualizer frame. `level` is the smoothed broadband loudness 0…1
+/// (0 == silence); `tick` advances once per analyzer publish (poll-path
+/// bookkeeping only — the wave itself is a pure function of level + time).
 struct BarSample: Equatable, Sendable {
     // Explicit nonisolated equality (FlowBarState.swift precedent).
     nonisolated static func == (lhs: BarSample, rhs: BarSample) -> Bool {
-        lhs.values == rhs.values && lhs.tick == rhs.tick
+        lhs.level == rhs.level && lhs.tick == rhs.tick
     }
 
-    let values: [Float]
+    let level: Float
     let tick: UInt64
 
     nonisolated static var silence: BarSample {
-        BarSample(values: [Float](repeating: 0, count: VisualizerMath.barCount), tick: 0)
+        BarSample(level: 0, tick: 0)
     }
 }
 
 enum VisualizerMath {
     // MARK: - Constants (the whole look, in one place)
 
-    /// Reference pill (10 thin capsule bars + small red dot). Ten bars in
-    /// the 92.4 width: pitch 5.61 keeps the record block identical to the
-    /// 8-bar era (67.65), so nothing overflows and nothing resizes.
+    /// Ten thin capsule bars, no record dot (removed 2026-11-01: the pip
+    /// sat in the soft end of the ramp and broke the gradient's symmetry).
+    /// The row is the pill's only content, so the capsule hugs it.
     nonisolated static let barCount = 10
-    /// Consonants snap (per ~16 ms analyzer step — drain runs ~60 Hz;
-    /// ≈10 ms snap time-constant: tracks hard without overshooting —
-    /// single-pole, always < 1.0. If the matrix hears jitter, this is
-    /// the single knob (0.70 → 0.62), never a redesign.
-    nonisolated static let attack: Float = 0.70
-    /// Vowels decay — the asymmetry that reads as "real" (graceful,
-    /// never laggy at the 16 ms step).
-    nonisolated static let release: Float = 0.08
-    /// Silence floor: bars read short when soundless (explicit product
-    /// call — overrides the old "silence reads as waves" rule).
-    nonisolated static let floor: Float = 0.16
     /// Pill geometry (pt). Relaxed compact: 0.825× the v3 mini in every
     /// linear dimension (112×32=3584 → 92.4×26.4=2439). Count stays 10 —
     /// elements shrink, never vanish (v3 precedent).
@@ -59,8 +47,9 @@ enum VisualizerMath {
     /// Thin-bar system (elements shrink, count stays 10).
     nonisolated static let barWidth: CGFloat = 2.5
     nonisolated static let barPitch: CGFloat = 5.61
-    /// Small red dot, no ring.
-    nonisolated static let recordDot: CGFloat = 6.6
+    /// Bar layer height: the tallest the artwork can ever render. Single
+    /// geometry source (the layers build their paths from it).
+    nonisolated static let barFullHeight: CGFloat = 16.5
     /// Chase dots (reference-proportioned).
     nonisolated static let chaseDot: CGFloat = 2.475
     nonisolated static let chasePitch: CGFloat = 6.6
@@ -69,20 +58,34 @@ enum VisualizerMath {
     /// Dots in the working chase.
     nonisolated static let dotCount = 9
 
+    /// Dictation capsule width (pt). The bar row is the whole content now:
+    /// 10 bars at pitch 5.61 = 56.1, inset 12.375 at each end — the side
+    /// margin the old dot block used, so the row keeps its optical air and
+    /// every bar sits inside the flat middle of the capsule (the caps are
+    /// 13.2 wide). 56.1 + 2 × 12.375 = 80.85.
+    nonisolated static var dictationWidth: CGFloat {
+        CGFloat(barCount) * barPitch + 2 * dictationInset
+    }
+
+    /// Side inset of the bar row (pt) — the pill's breathing room.
+    nonisolated static let dictationInset: CGFloat = 12.375
+
     /// Panel widths per pill case (pt). Width motion itself is owned by
     /// the AppKit frame animation; this table is the target.
-    /// v6: preparing == recording (92.4) — starting→recording resizes
-    /// nothing, waves from frame one. v7: no failure arm — errors never
-    /// reach the pill. (The v7 wide-pill auto-copy notice was removed:
-    /// clipboard auto-copy stays silent, menu owns recovery.)
+    /// v6: preparing == recording — starting→recording resizes nothing,
+    /// waves from frame one. v7: no failure arm — errors never reach the
+    /// pill. (The v7 wide-pill auto-copy notice was removed: clipboard
+    /// auto-copy stays silent, menu owns recovery.)
+    /// `.message` shares the dictation width so the Copied notice is a
+    /// re-render, never a resize.
     nonisolated static func panelWidth(for state: FlowBarState) -> CGFloat {
         switch state {
         case .hidden: 0
-        case .preparing: 92.4
-        case .recording: 92.4
+        case .preparing: dictationWidth
+        case .recording: dictationWidth
         case .finalizing: 95.7
         case .inserting: 95.7
-        case .message: 92.4
+        case .message: dictationWidth
         }
     }
 
@@ -148,100 +151,139 @@ enum VisualizerMath {
         Double(shineTravel(forLabelWidth: w) / shineVelocity)
     }
 
-    // MARK: - Idle sway (v6: "waves move a bit")
+    // MARK: - Loudness (one broadband level, dB-mapped)
 
-    /// Voice-silence gate: display levels below this mean no voice, so the
-    /// render-server sway owns the bars. First voice poll removes it.
-    /// (Silence sits at `floor` = 0.16; live voice clears 0.35 in 1–2
-    /// polls via attack.)
-    nonisolated static let swayThreshold: Float = 0.35
-    /// Sway keyframe loop (scaleY), derived from the floor: gentle drift
-    /// just above silence — alive, never shouty. Peaks at floor + 0.18.
-    nonisolated static var swayValues: [Double] {
-        let f = Double(floor)
-        return [f, f + 0.09, f + 0.18, f + 0.09, f]
+    /// RMS below this is silence (0). Re-centred 2026-11-01 (plan
+    /// `pill-wave-sensitivity.md`): the old 45 dB window (-55…-10) put
+    /// ordinary speech at level 0.55, i.e. ~8 of 15 pt of bar — the
+    /// reported "not reactive, limited vertical distance". A 30 dB window
+    /// puts normal speech at ~0.73 (≈11 pt) while the resting floor and a
+    /// noisy room stay where they were. Measured against the reference's
+    /// 21 frames: Oto's peak-to-pill ratio already exceeds the reference,
+    /// so only the input calibration moves — never the geometry.
+    nonisolated static let levelFloorDB: Float = -52
+    nonisolated static let levelCeilingDB: Float = -22
+
+    /// RMS amplitude → display level 0…1. Loudness is preserved: a whisper
+    /// and a shout map to genuinely different levels (the old per-band
+    /// normalization erased exactly this).
+    nonisolated static func level(rms: Float) -> Float {
+        guard rms > 0, rms.isFinite else { return 0 }
+        let db = 20 * log10(rms)
+        let normalized = (db - levelFloorDB) / (levelCeilingDB - levelFloorDB)
+        return min(1, max(0, normalized))
     }
-    nonisolated static let swayCycle: Double = 1.6
-    nonisolated static let swayStagger: Double = 0.2
 
-    // MARK: - Bar shaping
+    /// Smoothing keepers (per 60 fps frame). Asymmetric by design: the wave
+    /// must punch on a syllable and relax after it. 0.68 → 90 % in ~98 ms
+    /// (attack), 0.82 → 90 % in ~200 ms (release). The reference is
+    /// symmetric (0.85) plus a slew clamp; we deliberately trade that for
+    /// perceived reactivity — see the plan's rejected alternatives.
+    nonisolated static let attackKeeper: Float = 0.68
+    nonisolated static let releaseKeeper: Float = 0.82
 
-    /// One smoothing step toward target. Direction picks the coefficient:
-    /// rising uses attack, falling uses release.
-    nonisolated static func smoothStep(current: Float, target: Float) -> Float {
+    /// One display-frame smoothing step toward `target`, frame-rate
+    /// compensated. Rising targets use the attack keeper, falling targets
+    /// the release keeper. `dt` is clamped by the caller
+    /// (FlowBarModel.advance).
+    nonisolated static func smoothLevel(current: Float, target: Float, dt: Double) -> Float {
         let clamped = min(1, max(0, target))
-        let rate = clamped > current ? attack : release
-        return current + (clamped - current) * rate
+        let keeper = clamped > current ? attackKeeper : releaseKeeper
+        let alpha = Float(1 - pow(Double(keeper), max(0, dt) * 60))
+        return current + (clamped - current) * alpha
     }
 
-    /// Neighbor coupling: bars move as one wave, not 8 strangers. Each bar
-    /// keeps 0.7 of itself and borrows 0.15 from each neighbor (edge bars
-    /// take 0.3 from their sole neighbor). Weights sum to 1, so coupling
-    /// never clips and uniform input passes through unchanged. Pure —
-    /// applied in FlowBarModel.applyLevels after per-band smoothing.
-    nonisolated static func couple(_ levels: [Float]) -> [Float] {
-        guard levels.count > 1 else { return levels }
-        let last = levels.count - 1
-        return levels.indices.map { i in
-            if i == 0 { return 0.7 * levels[0] + 0.3 * levels[1] }
-            if i == last { return 0.7 * levels[last] + 0.3 * levels[last - 1] }
-            return 0.7 * levels[i] + 0.15 * (levels[i - 1] + levels[i + 1])
-        }
+    // MARK: - Bars (fixed envelope + permanent staggered ripple)
+
+    /// Loudness gain: `max(1, gain × level)` scales the whole row, exactly
+    /// like the reference. The floor of 1 is the resting size.
+    nonisolated static let audioGain: Float = 5
+    /// Ripple peak (1.5 at 40% of the cycle) — the loudest ripple frame.
+    nonisolated static let ripplePeak: Float = 1.5
+    /// Tallest a bar ever renders (pt). `barFullHeight` keeps the layer
+    /// headroom; this is the visible maximum.
+    nonisolated static let maxBarHeight: CGFloat = 15
+    /// Per-bar ripple delay (s) — the traveling wave.
+    nonisolated static let rippleStagger: Double = 0.1
+    /// One ripple loop (s).
+    nonisolated static let ripplePeriod: Double = 1.0
+
+    /// Scale that puts the loudest, tallest ripple frame exactly on
+    /// `maxBarHeight`: 15 / (16.5 × 5 × 1.5) ≈ 0.1212.
+    nonisolated static var barScaleBase: Float {
+        Float(maxBarHeight / (barFullHeight * CGFloat(audioGain) * CGFloat(ripplePeak)))
     }
 
-    /// Display mapping: floor lift, still 0…1.
-    nonisolated static func displayValue(_ smoothed: Float) -> Float {
-        floor + (1 - floor) * min(1, max(0, smoothed))
+    /// Fixed parabolic envelope: the row reads as ONE shape, not ten
+    /// strangers. 0.995 at the centre, 0.578 at the edges.
+    nonisolated static func envelope(index: Int, count: Int = barCount) -> Float {
+        guard count > 1 else { return 1 }
+        let h = abs(Float(count - 1) / 2 - Float(index))
+        return max(0, 1 - h * h / 48)
     }
 
-    /// Absolute noise gate (total power): below this, the input is room
-    /// noise, not voice — return silence BEFORE normalization (which
-    /// would otherwise spread tiny noise across bands as if it were
-    /// speech). Starting value has an order of margin each way (noise
-    /// ~1e-6–1e-4, quiet voice ~0.1); the device matrix tunes it.
-    nonisolated static let noiseGate: Float = 1e-3
-
-    /// Log-spaced band edges (Hz) over [lowEdge, highEdge], count+1 points.
-    /// Voice-weighted: log spacing spends bands where speech lives.
-    nonisolated static func bandEdges(
-        count: Int, lowEdge: Float = 80, highEdge: Float = 8000
-    ) -> [Float] {
-        precondition(count > 0)
-        let low = log10(lowEdge)
-        let high = log10(highEdge)
-        return (0...count).map { i in
-            pow(10, low + (high - low) * Float(i) / Float(count))
-        }
+    /// Stagger multiplier for a bar: 0,1,2,3,4,-5,-4,-3,-2,-1 for 10 bars.
+    /// The negative tail is why the peak travels instead of pulsing.
+    nonisolated static func centerOffset(index: Int, count: Int = barCount) -> Int {
+        let pivot = (count + 1) / 2
+        return index < pivot ? index : index - count
     }
 
-    /// Bin-power magnitudes → per-band energies (sum of mag²), then
-    /// log-mapped to 0…1 display levels. `binHz` = sampleRate / fftSize.
-    /// Total-zero (digital silence) maps to all-zero, never NaN. Total
-    /// below `noiseFloor` maps to all-zero too — room noise must never
-    /// reach the normalization below, which would spread it as voice.
-    nonisolated static func bandLevels(
-        magnitudes: [Float], edges: [Float], binHz: Float,
-        noiseFloor: Float = noiseGate
-    ) -> [Float] {
-        let bandCount = edges.count - 1
-        guard bandCount > 0, binHz > 0 else {
-            return [Float](repeating: 0, count: max(0, edges.count - 1))
+    /// Ripple keyframes: 1 → 1.2 (20%) → 1.5 (40%) → 1.1 (80%) → 1.3 (90%)
+    /// → 1 (100%), eased per segment. Device-independent and pure.
+    private struct RippleKeyframe: Sendable {
+        let phase: Double
+        let value: Float
+    }
+
+    private nonisolated static let rippleKeyframes: [RippleKeyframe] = [
+        RippleKeyframe(phase: 0.0, value: 1.0),
+        RippleKeyframe(phase: 0.2, value: 1.2),
+        RippleKeyframe(phase: 0.4, value: 1.5),
+        RippleKeyframe(phase: 0.8, value: 1.1),
+        RippleKeyframe(phase: 0.9, value: 1.3),
+        RippleKeyframe(phase: 1.0, value: 1.0),
+    ]
+
+    /// Ripple multiplier at `phase` (any value; wrapped). Smoothstep inside
+    /// each segment approximates the reference's ease-in-out, so the wave
+    /// accelerates and settles instead of ticking between keyframes.
+    nonisolated static func ripple(phase: Double) -> Float {
+        let p = phase - floor(phase)
+        for i in 1..<rippleKeyframes.count {
+            let lo = rippleKeyframes[i - 1]
+            let hi = rippleKeyframes[i]
+            guard p <= hi.phase else { continue }
+            let span = hi.phase - lo.phase
+            guard span > 0 else { return hi.value }
+            let t = (p - lo.phase) / span
+            let eased = t * t * (3 - 2 * t)
+            return lo.value + (hi.value - lo.value) * Float(eased)
         }
-        var energies = [Float](repeating: 0, count: bandCount)
-        for (bin, mag) in magnitudes.enumerated() {
-            let freq = Float(bin) * binHz
-            for b in 0..<bandCount where freq >= edges[b] && freq < edges[b + 1] {
-                energies[b] += mag * mag
-                break
-            }
-        }
-        let total = energies.reduce(0, +)
-        guard total > noiseFloor else { return [Float](repeating: 0, count: bandCount) }
-        // log10(1 + 99e)/2: e=0→0, e=1→1, mid energies spread evenly.
-        return energies.map { e in
-            let normalized = e / total
-            return log10(1 + 99 * normalized) / 2
-        }
+        return 1
+    }
+
+    /// Bar scaleY for one frame: loudness × envelope × traveling ripple.
+    /// Clamped to the layer (never taller than `barFullHeight`).
+    nonisolated static func barScale(index: Int, level: Float, time: Double) -> Float {
+        let offset = centerOffset(index: index)
+        let rawPhase = time / ripplePeriod - rippleStagger * Double(offset)
+        var phase = rawPhase.truncatingRemainder(dividingBy: 1)
+        if phase < 0 { phase += 1 }
+        let audio = max(1, audioGain * min(1, max(0, level)))
+        let raw = barScaleBase * audio * envelope(index: index) * ripple(phase: phase)
+        return min(1, max(0, raw))
+    }
+
+    /// Reduce Motion: one still, shaped row. No ripple, no display-link
+    /// motion — the pill keeps its silhouette instead of going blank.
+    nonisolated static let reducedMotionLevel: Float = 0.3
+
+    /// Static shaped bar scale at `index` (Reduce Motion path).
+    nonisolated static func staticScale(index: Int) -> Float {
+        let audio = max(1, audioGain * reducedMotionLevel)
+        let raw = barScaleBase * audio * envelope(index: index)
+        return min(1, max(0, raw))
     }
 
     // MARK: - Indeterminate motion (display-link phase, no wall-clock)
@@ -261,14 +303,4 @@ enum VisualizerMath {
         return 0.25 + 0.75 * max(0, 1 - distance / 3)
     }
 
-    /// Red-dot breathe opacity: 2 s period on the 60 fps display-link phase.
-    nonisolated static func breatheOpacityContinuous(phase: Double) -> Double {
-        0.55 + 0.45 * (0.5 + 0.5 * cos(phase * Double.pi * 2 / 120))
-    }
-
-    /// Legacy tick-based breathe (analyzer clock). Superseded by the
-    /// display-link phase above; kept for API stability, unused by views.
-    nonisolated static func breatheOpacity(tick: UInt64) -> Double {
-        breatheOpacityContinuous(phase: Double(tick) * 4)
-    }
 }

@@ -52,8 +52,8 @@ final class FlowBarController {
     /// feed alone drives the cleanup beat). Optional so every existing
     /// construction compiles untouched.
     private let runner: TransformRunner?
-    private let analyzer: AudioSpectrumAnalyzer
-    private let box: SpectrumFeedBox
+    private let analyzer: AudioLevelAnalyzer
+    private let box: LevelFeedBox
     /// Internal for headless transition tests (@testable).
     let modal: NoTargetModalController
     /// Mic-denied mini modal (pill-slot card, not the pill).
@@ -88,8 +88,8 @@ final class FlowBarController {
     /// `runner` is optional (E2 transforms): nil in tests and pre-E2 hosts.
     init(
         coordinator: DictationCoordinator,
-        analyzer: AudioSpectrumAnalyzer,
-        box: SpectrumFeedBox,
+        analyzer: AudioLevelAnalyzer,
+        box: LevelFeedBox,
         modal: NoTargetModalController,
         permission: PermissionModalController,
         pasteboard: NSPasteboard = .general,
@@ -314,7 +314,8 @@ final class FlowBarController {
                 )
                 panel?.render(
                     visual: .dotsSpinner,
-                    values: [],
+                    level: 0,
+                    time: CACurrentMediaTime(),
                     text: nil,
                     centerText: false,
                     reduceMotion: model.motionFrozen,
@@ -394,7 +395,8 @@ final class FlowBarController {
             panel?.setLiveValues(live ? model : nil)
             panel?.render(
                 visual: visual,
-                values: model.sample.values,
+                level: model.sample.level,
+                time: CACurrentMediaTime(),
                 text: projection.workText ?? (projection.state == .message ? overLimitText : nil),
                 centerText: projection.workText == nil && projection.state == .message,
                 reduceMotion: model.motionFrozen,

@@ -46,6 +46,11 @@ struct GeneralPane: View {
     // Default is the shared freshDefault (Top) — the same constant
     // current() falls back to, so a fresh profile shows the truth.
     @AppStorage("app.Oto.flowBarPosition") private var flowPosition: FlowBarPosition = .freshDefault
+    // Pill colour (user ask, 2026-11-01): default graphite = black glass,
+    // palette opt-in. Literal pinned equal to PillColor.defaultsKey by
+    // PillColorTests; freshDefault is shared, so Settings and the pill's
+    // current() can never disagree on a fresh profile.
+    @AppStorage("app.Oto.pillColor") private var pillColor: PillColor = .freshDefault
     // Catcher kill-switch (6C1): default ON — the modal teaches the
     // no-textbox flow. Key owned by NoTargetModalSettings; the literal is
     // pinned equal to it by NoTargetModalTests.
@@ -96,6 +101,17 @@ struct GeneralPane: View {
                         segmentWidth: 84
                     )
                 }
+                // Colour: same row grammar as Position — label left, the
+                // control right. Graphite (black glass) is the default; the
+                // palette is opt-in (user ask, 2026-11-01). The picker writes
+                // the same key `PillColor.current()` reads, so the pill
+                // recolours on the next poll with no wiring in between.
+                HStack(spacing: 12) {
+                    Text("Colour")
+                    Spacer(minLength: 8)
+                    PillColorPicker(selection: $pillColor)
+                }
+                .accessibilityIdentifier("PillColorRow")
                 OtoPanelNote(
                     "Top places the pill under the menu bar. Bottom places it above the Dock. "
                         + "Drag the pill to move it and it snaps into place."
