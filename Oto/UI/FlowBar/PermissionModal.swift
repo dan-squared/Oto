@@ -16,9 +16,14 @@
 //  cleanly in a transparent panel — layer-backed clear container, card as
 //  one CAShapeLayer, depth from the window shadow only. Width is
 //  content-fitted (12.5pt type, 18pt icon, string-measured) and clamped
-//  to maxWidth (460). Corners: 16pt card, 8pt button (button measured
-//  from the reference at r/height ≈ 0.22; the strict outer − 12 gap
-//  would sharpen it to 4, far past the reference).
+//  to maxWidth (460).
+//
+//  Since 2026-11-01 it is the PILL EXPANDED, not a banner: a 44pt capsule
+//  wearing the pill's own ramp and scrim (PillPalette, so it follows the
+//  colour chosen in Settings), with the action as a 30pt pill inside it,
+//  and it opens out of the pill's own rect on MorphCurve's 420 ms shape
+//  curve. Corners are half the height on both — capsules, never rounded
+//  rectangles.
 //
 
 import AppKit
@@ -84,53 +89,80 @@ enum SettingsLinkOpener {
 final class PermissionCardView: NSView {
     /// Hard ceiling: the card grows to fit its words, never past this.
     nonisolated static let maxWidth: CGFloat = 460
-    nonisolated static let height: CGFloat = 60
-    /// Outer card radius. Reference-matched (less round than the old 24):
-    /// the button radius derives from it with an 8pt gap so it lands on
-    /// the measured reference ratio (r/height ≈ 0.22 → 8pt on 36pt).
-    nonisolated static let cardRadius: CGFloat = 16
-    nonisolated static let buttonHeight: CGFloat = 36
-    /// Button corner radius = card radius − 8, floored so a future taller
-    /// card can never invert the curve.
-    nonisolated static var buttonRadius: CGFloat {
-        max(4, cardRadius - 8)
-    }
+    /// The pill, expanded — not a second, bigger surface. 44 pt is a
+    /// capsule the pill's own 26.4 pt can grow into without becoming a
+    /// banner (the 60 pt v1 card read as a notification, user 2026-11-01).
+    nonisolated static let height: CGFloat = 44
+    /// Outer radius = half the height: a capsule, exactly like the pill.
+    nonisolated static var cardRadius: CGFloat { height / 2 }
+    /// The action is a pill inside the pill: 30 pt tall, radius 15.
+    nonisolated static let buttonHeight: CGFloat = 30
+    nonisolated static var buttonRadius: CGFloat { buttonHeight / 2 }
 
     var onGrant: (() -> Void)?
 
     private let bg = CAShapeLayer()
-    private let icon = NSImageView()
+    /// The pill's own ramp, painted over the scrim — same stops, same
+    /// horizontal axis, same palette: the card is the pill's finish, not a
+    /// lookalike. Masked by `bg`'s capsule so the two silhouettes cannot
+    /// disagree.
+    private let ramp = CAGradientLayer()
+    private let capsule = CAShapeLayer()
+    /// The real material, exactly as the pill builds it: frost with the
+    /// palette's tint, hosting an ink view that carries the scrim, the ramp
+    /// and every subview (AppKit only guarantees the content view sits
+    /// inside the glass).
+    private let glass = NSGlassEffectView()
+    private let ink = NSView()
     private let title = NSTextField(labelWithString: "")
     private let button = NSButton()
     private(set) var contentSize: NSSize = .zero
     private var didClampTitle = false
     private(set) var copy = PermissionCardCopy.forStatus(.notDetermined)
 
+    /// The card's colour is FIXED red, not the pill's choice: this is a
+    /// permission failure, and a warning that turns sky blue because of a
+    /// cosmetic setting reads as decoration (user, 2026-11-01: "make sure it
+    /// is red … it was a mistake to make it similar with the pill colour").
+    /// It still wears the pill's *finish* — frost, scrim, five-stop ramp —
+    /// in crimson.
+    nonisolated static let paletteColor: PillColor = .crimson
+
     init(onGrant: (() -> Void)?) {
         self.onGrant = onGrant
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
-        layer?.addSublayer(bg)
-        self.title.stringValue = self.copy.title
 
-        icon.image = NSImage(systemSymbolName: "exclamationmark.circle", accessibilityDescription: nil)
-        icon.contentTintColor = .systemRed
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        addSubview(icon)
+        // The pill's hierarchy, verbatim: a real glass capsule whose content
+        // view carries the scrim, the ramp and every subview.
+        ink.wantsLayer = true
+        ink.layer?.backgroundColor = NSColor.clear.cgColor
+        bg.fillColor = PillPalette(color: Self.paletteColor).scrim
+        ink.layer?.addSublayer(bg)
+        capsule.fillColor = NSColor.black.cgColor
+        ramp.startPoint = CGPoint(x: 0.0, y: 0.5)
+        ramp.endPoint = CGPoint(x: 1.0, y: 0.5)
+        ramp.mask = capsule
+        ink.layer?.addSublayer(ramp)
+        glass.style = .regular
+        glass.contentView = ink
+        addSubview(glass)
+
+        self.title.stringValue = self.copy.title
 
         title.font = .systemFont(ofSize: 12.5, weight: .semibold)
         title.textColor = .labelColor
         title.lineBreakMode = .byTruncatingTail
         title.maximumNumberOfLines = 1
-        addSubview(title)
+        ink.addSubview(title)
 
         button.isBordered = false
         button.wantsLayer = true
         button.layer?.cornerRadius = Self.buttonRadius
         button.target = self
         button.action = #selector(didTapGrant)
-        addSubview(button)
+        ink.addSubview(button)
 
         applyAppearance()
         relayout()
@@ -150,33 +182,42 @@ final class PermissionCardView: NSView {
     /// One card instance is prewarmed at launch; the words are the only
     /// thing that varies between "ask" and "go fix it".
     func configure(_ copy: PermissionCardCopy) {
-        guard copy != self.copy else { return }
-        self.copy = copy
-        self.title.stringValue = copy.title
+        // Repaint every show, not only on re-word: the card carries the
+        // pill's colour, and the user can change that between failures.
+        if copy != self.copy {
+            self.copy = copy
+            self.title.stringValue = copy.title
+        }
         applyAppearance()
         relayout()
     }
 
     override func resetCursorRects() {
         super.resetCursorRects()
-        addCursorRect(button.frame, cursor: .pointingHand)
+        addCursorRect(button.convert(button.bounds, to: self), cursor: .pointingHand)
     }
 
     private func applyAppearance() {
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        bg.fillColor = (dark
-            ? NSColor(red: 0.055, green: 0.055, blue: 0.065, alpha: 1)
-            : NSColor.white).cgColor
-        button.layer?.backgroundColor = (dark
-            ? NSColor(red: 0.93, green: 0.90, blue: 0.84, alpha: 1)
-            : NSColor(white: 0.11, alpha: 1)).cgColor
+        let palette = PillPalette(color: Self.paletteColor)
+        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        glass.tintColor = palette.tint
+        glass.cornerRadius = Self.cardRadius
+        bg.fillColor = palette.scrim
+        bg.opacity = reduceTransparency ? 1 : Float(PillChrome.scrimAlpha)
+        ramp.colors = palette.bodyColors(opaque: reduceTransparency)
+        let pale = PillPalette.mix(
+            Self.paletteColor.base, toward: .white,
+            by: max(Self.paletteColor.tipDepth, 0.78)
+        )
+        button.layer?.backgroundColor = pale.cgColor
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         button.attributedTitle = NSAttributedString(string: self.copy.action, attributes: [
             .font: NSFont.systemFont(ofSize: 12.5, weight: .semibold),
-            .foregroundColor: dark ? NSColor.black : NSColor.white,
+            .foregroundColor: NSColor(white: 0.08, alpha: 1),
             .paragraphStyle: paragraph,
         ])
+        self.title.textColor = .white
     }
 
     /// Measure the words, fit the card, clamp to maxWidth. Title truncates
@@ -190,10 +231,10 @@ final class PermissionCardView: NSView {
     /// title covers NSTextField cell slop so the tight string measure
     /// never under-sizes the field.
     private func relayout() {
-        let pad: CGFloat = 11
-        let iconSide: CGFloat = 18
-        let gapIcon: CGFloat = 7
-        let gapButton: CGFloat = 9
+        // No icon: the words and the remedy are the whole message (user,
+        // 2026-11-01 — the warning glyph on the left is not needed).
+        let pad: CGFloat = 16
+        let gapButton: CGFloat = 10
         let buttonHPad: CGFloat = 15
         let buttonH = Self.buttonHeight
         let h = Self.height
@@ -203,7 +244,7 @@ final class PermissionCardView: NSView {
         let titleH = ceil(Self.textHeight(self.copy.title, font: typeface))
         let buttonW = ceil(Self.textWidth(self.copy.action, font: typeface)) + buttonHPad * 2
 
-        var width = pad + iconSide + gapIcon + titleW + gapButton + buttonW + pad
+        var width = pad + titleW + gapButton + buttonW + pad
         var fittedTitleW = titleW
         didClampTitle = false
         if width > Self.maxWidth {
@@ -214,17 +255,22 @@ final class PermissionCardView: NSView {
 
         contentSize = NSSize(width: width, height: h)
         setFrameSize(contentSize)
-        bg.path = CGPath(
-            roundedRect: CGRect(origin: .zero, size: contentSize),
+        glass.frame = bounds
+        glass.cornerRadius = Self.cardRadius
+        ink.frame = glass.bounds
+        let rect = CGRect(origin: .zero, size: glass.bounds.size)
+        let path = CGPath(
+            roundedRect: rect,
             cornerWidth: Self.cardRadius, cornerHeight: Self.cardRadius, transform: nil
         )
+        bg.path = path
+        capsule.path = path
+        capsule.frame = rect
+        ramp.frame = rect
 
         let midY = h / 2
-        icon.frame = CGRect(x: pad, y: midY - iconSide / 2, width: iconSide, height: iconSide)
-        // Centered block, not full-height: a full-height label draws its
-        // text high while the icon sits at midY — the pair must share a center.
         title.frame = CGRect(
-            x: pad + iconSide + gapIcon, y: midY - titleH / 2,
+            x: pad, y: midY - titleH / 2,
             width: fittedTitleW, height: titleH
         )
         button.frame = CGRect(
@@ -238,6 +284,36 @@ final class PermissionCardView: NSView {
         onGrant?()
     }
 
+    /// Expands out of the pill's own rect. The card is a capsule at every
+    /// scale, so a scale transform IS the shape morph — no radius to
+    /// interpolate, no window resize (catcher precedent), and the slot edge
+    /// stays put while the silhouette opens.
+    func morph(from pill: NSRect, card: NSRect, position: FlowBarPosition) {
+        guard let layer, card.width > 0, card.height > 0 else { return }
+        let sx0 = pill.width / card.width
+        let sy0 = pill.height / card.height
+        // Anchor on the edge the pill shares with the card: top slot grows
+        // downward, bottom slot upward (y-up layer space).
+        layer.anchorPoint = CGPoint(x: 0.5, y: position == .top ? 1 : 0)
+        layer.position = CGPoint(
+            x: bounds.midX, y: position == .top ? bounds.maxY : bounds.minY
+        )
+        let values = MorphCurve.stops.map { stop -> NSValue in
+            let t = CGFloat(stop.value)
+            let sx = sx0 + (1 - sx0) * t
+            let sy = sy0 + (1 - sy0) * t
+            return NSValue(caTransform3D: CATransform3DMakeScale(sx, sy, 1))
+        }
+        let anim = CAKeyframeAnimation(keyPath: "transform")
+        anim.values = values
+        anim.keyTimes = MorphCurve.keyTimes
+        anim.duration = 0.42
+        anim.timingFunction = CAMediaTimingFunction(name: .linear)
+        anim.fillMode = .backwards
+        layer.add(anim, forKey: "oto.permission.morph")
+        layer.transform = CATransform3DIdentity
+    }
+
     // MARK: - Test hooks (no window needed)
 
     func titleText() -> String { title.stringValue }
@@ -245,7 +321,6 @@ final class PermissionCardView: NSView {
     /// True when the 460 ceiling clipped the title — must stay false.
     func titleClipped() -> Bool { didClampTitle }
     func titleMidY() -> CGFloat { title.frame.midY }
-    func iconMidY() -> CGFloat { icon.frame.midY }
 
     /// Deterministic string measure at an exact font. Used for layout so
     /// machine-dependent control padding can't change the card width.
@@ -318,6 +393,15 @@ final class PermissionModalController {
         let frame = FlowBarPosition.frame(
             width: contentWidth, height: Self.height, on: screen.visibleFrame, position: position
         )
+        // The card opens out of the pill, not on top of it: same slot,
+        // same capsule, the reference's 420 ms shape curve.
+        let pill = FlowBarPosition.frame(
+            width: VisualizerMath.dictationWidth,
+            height: VisualizerMath.pillHeight,
+            on: screen.visibleFrame,
+            position: position
+        )
+        card?.morph(from: pill, card: frame, position: position)
         // A fresh show supersedes any pending fade: full 10s, never truncated.
         showGeneration += 1
         let generation = showGeneration

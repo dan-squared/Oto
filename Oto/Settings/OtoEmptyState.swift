@@ -18,25 +18,17 @@
 import SwiftUI
 
 /// A tinted example chip. Illustrative only: it names the kinds of thing the
-/// pane holds, the way the reference's chips name its spaces.
+/// pane holds, the way the reference's chips name its spaces. The plate is
+/// neutral; the ICON carries the colour, and the colour is one of the pill
+/// palette's own (`PillColor`) — never a new decorative hue (user ask,
+/// 2026-11-01).
 struct OtoEmptyChip: Identifiable {
-    enum Tint {
-        case violet
-        case blue
-        case green
-
-        var fill: Color {
-            switch self {
-            case .violet: OtoPalette.chipViolet
-            case .blue: OtoPalette.chipBlue
-            case .green: OtoPalette.chipGreen
-            }
-        }
-    }
-
     let symbol: String
     let label: String
-    let tint: Tint
+    /// Which pill colour the icon borrows. Three chips, three hues, as the
+    /// reference does — read from the palette so Settings can never drift
+    /// from the pill.
+    var color: PillColor = .crimson
 
     var id: String { label }
 }
@@ -57,6 +49,15 @@ struct OtoEmptyState: View {
     var actionTitle: String?
     var action: (() -> Void)?
     var footnote: OtoEmptyFootnote?
+
+    /// Empty-state chips borrow the pill palette's hues for their ICONS
+    /// only; the plates stay neutral. Resolved per scheme so a deep waist is
+    /// used on light and the frost tint on dark.
+    @Environment(\.colorScheme) private var colorScheme
+
+    private func accent(_ chip: OtoEmptyChip) -> Color {
+        Color(nsColor: chip.color.accent(forDark: self.colorScheme == .dark))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -84,15 +85,20 @@ struct OtoEmptyState: View {
                         HStack(spacing: 6) {
                             Image(systemName: chip.symbol)
                                 .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(self.accent(chip))
                             Text(chip.label)
                                 .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(OtoPalette.ink)
                         }
-                        .foregroundStyle(OtoPalette.ink)
                         .padding(.horizontal, 11)
                         .frame(height: 28)
                         .background(
-                            chip.tint.fill,
+                            OtoPalette.wash,
                             in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(OtoPalette.hairline, lineWidth: 0.75)
                         )
                     }
                 }

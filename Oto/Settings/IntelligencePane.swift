@@ -88,9 +88,9 @@ struct IntelligencePane: View {
                 message: self.unavailableCopy
                     ?? "Oto can tidy your words on this Mac — fillers, grammar, and a light rewrite. Nothing is uploaded.",
                 chips: [
-                    .init(symbol: "wand.and.stars", label: "Cleanup", tint: .violet),
-                    .init(symbol: "arrow.triangle.2.circlepath", label: "Transforms", tint: .blue),
-                    .init(symbol: "cpu", label: "On-device", tint: .green),
+                    .init(symbol: "wand.and.stars", label: "Cleanup", color: .crimson),
+                    .init(symbol: "arrow.triangle.2.circlepath", label: "Transforms", color: .ocean),
+                    .init(symbol: "cpu", label: "On-device", color: .violet),
                 ],
                 actionTitle: self.unavailableCopy == nil ? "Turn On Apple Intelligence" : nil,
                 action: self.unavailableCopy == nil ? { enabled = true } : nil,

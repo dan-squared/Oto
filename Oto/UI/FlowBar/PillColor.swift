@@ -117,6 +117,18 @@ enum PillColor: String, CaseIterable, Identifiable, Sendable, Hashable {
         }
     }
 
+    /// Accent for UI that borrows the pill's colour (the empty-state chip
+    /// icons, 2026-11-01). On a light ground the waist is the legible, deep
+    /// value; on a dark ground the waist sinks into the card, so the frost
+    /// tint carries the hue instead. Graphite has no hue: it returns a
+    /// neutral grey pair, so a graphite empty state stays monochrome.
+    nonisolated func accent(forDark dark: Bool) -> NSColor {
+        if self == .graphite {
+            return NSColor(white: dark ? 0.70 : 0.11, alpha: 1)
+        }
+        return dark ? (tint ?? base) : base
+    }
+
     /// Swatch for Settings — the waist colour as it reads on the pill, not
     /// the raw base: a graphite chip drawn at 0.10 white would be invisible
     /// on a dark card.

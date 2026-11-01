@@ -62,17 +62,20 @@ struct PermissionModalTests {
         #expect(card.contentWidth() > 300)
     }
 
-    @Test func titleCenteredOnIcon() {
-        // The centered-block fix: title and icon share a midline.
+    @Test func titleIsVerticallyCentered() {
+        // No icon since 2026-11-01: the title alone must sit on the capsule's
+        // midline, and the button must share it.
         let card = PermissionCardView(onGrant: nil)
-        #expect(abs(card.titleMidY() - card.iconMidY()) < 0.5)
+        #expect(abs(card.titleMidY() - PermissionCardView.height / 2) < 0.5)
     }
 
-    @Test func buttonRadiusFollowsAppleConcentricFormula() {
-        // Inner = outer − gap: 16pt card minus 8pt (reference-measured
-        // r/height ≈ 0.22 → 8pt on the 36pt button).
-        #expect(PermissionCardView.cardRadius == 16)
-        #expect(PermissionCardView.buttonRadius == 8)
+    @Test func bothSurfacesAreCapsules() {
+        // The card is the pill expanded: outer radius is half its height,
+        // and the action inside is its own pill (30 → 15). No concentric
+        // offset survives — a capsule inside a capsule is the point.
+        #expect(PermissionCardView.cardRadius == PermissionCardView.height / 2)
+        #expect(PermissionCardView.buttonRadius == PermissionCardView.buttonHeight / 2)
+        #expect(PermissionCardView.height <= 48)
     }
 
     @Test func grantOpensMicrophoneLinkWhenDenied() {

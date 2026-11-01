@@ -32,9 +32,9 @@ struct DictionaryPane: View {
                         title: "Your words, your way",
                         message: "Teach Oto how you say things. A spoken form becomes the replacement every time you dictate.",
                         chips: [
-                            .init(symbol: "person.text.rectangle", label: "Names", tint: .violet),
-                            .init(symbol: "textformat.abc", label: "Jargon", tint: .blue),
-                            .init(symbol: "arrow.right", label: "Shorthand", tint: .green),
+                            .init(symbol: "person.text.rectangle", label: "Names", color: .crimson),
+                            .init(symbol: "textformat.abc", label: "Jargon", color: .ocean),
+                            .init(symbol: "arrow.right", label: "Shorthand", color: .violet),
                         ],
                         actionTitle: "Add your first rule",
                         action: { addingRule = true },

@@ -246,9 +246,9 @@ struct HistoryPane: View {
     }
 
     private static let chips: [OtoEmptyChip] = [
-        .init(symbol: "text.alignleft", label: "Last \(HistoryStore.maxEntries)", tint: .violet),
-        .init(symbol: "calendar", label: "\(HistoryStore.maxAgeDays) days", tint: .blue),
-        .init(symbol: "lock", label: "On this Mac", tint: .green),
+        .init(symbol: "text.alignleft", label: "Last \(HistoryStore.maxEntries)", color: .crimson),
+        .init(symbol: "calendar", label: "\(HistoryStore.maxAgeDays) days", color: .ocean),
+        .init(symbol: "lock", label: "On this Mac", color: .violet),
     ]
 
     /// History toggle with disable disclosure (retention honesty):

@@ -29,9 +29,9 @@ struct SnippetsPane: View {
                         title: "Text you say once, use often",
                         message: "Save the paragraph, the address, the signature. Copy it from here whenever you need it.",
                         chips: [
-                            .init(symbol: "signature", label: "Signature", tint: .violet),
-                            .init(symbol: "mappin.and.ellipse", label: "Address", tint: .blue),
-                            .init(symbol: "link", label: "Meeting link", tint: .green),
+                            .init(symbol: "signature", label: "Signature", color: .crimson),
+                            .init(symbol: "mappin.and.ellipse", label: "Address", color: .ocean),
+                            .init(symbol: "link", label: "Meeting link", color: .violet),
                         ],
                         actionTitle: "Save your first snippet",
                         action: { addingSnippet = true },
