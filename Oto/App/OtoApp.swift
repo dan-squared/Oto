@@ -54,6 +54,10 @@ struct OtoApp: App {
     /// Fakes stay for tests.
     private let coordinator: DictationCoordinator
     private let dispatch: ShortcutDispatch
+    /// Feedback tones (start / landed / failed). One instance, built at launch
+    /// so every voice is prepared before the first press — preparing cold on
+    /// the press path would cost ~105 ms.
+    private let feedbackSounds: FeedbackSoundPlayer
     private let preparer = SpeechAssetPreparer()
     private let permissions = PermissionsManager()
     private let login: any LoginItemManaging = LiveLoginItemManager()
@@ -152,6 +156,10 @@ struct OtoApp: App {
         let dictionaryStore = DictionaryStore(persistence: persistence)
         let snippetStore = SnippetStore(persistence: persistence)
         let historyStore = HistoryStore(persistence: persistence)
+        // Feedback tones first: the press cue is played from inside
+        // `ShortcutDispatch`, and preparing a player on that path would add
+        // ~105 ms cold. Built here, before any trigger is live.
+        let feedbackSounds = FeedbackSoundPlayer()
         let coordinator = DictationCoordinator(
             audio: audio,
             speech: speech,
@@ -160,7 +168,17 @@ struct OtoApp: App {
             history: historyStore,
             mediaDuck: MediaDuck(),
             polish: polishService,
-            behaviorProvider: { CleanupBehavior.current() }
+            behaviorProvider: { CleanupBehavior.current() },
+            feedback: { cue in
+                // Coordinator outcomes hop to the player once, per cue — never
+                // per event stream. `play` is synchronous and allocation-free.
+                Task { @MainActor in feedbackSounds.play(cue) }
+            },
+            // The press tone plays over the speakers while the duck is about to
+            // zero the output; the coordinator holds the duck for exactly the
+            // tone's measured length so the first ~110 ms of it are not all the
+            // user ever hears.
+            startTone: feedbackSounds.startCueLength
         )
         let analyzer = AudioLevelAnalyzer()
         let modalController = NoTargetModalController()
@@ -189,7 +207,8 @@ struct OtoApp: App {
         self.dictionaryStore = dictionaryStore
         self.snippetStore = snippetStore
         self.historyStore = historyStore
-        let dispatch = ShortcutDispatch(coordinator: coordinator)
+        self.feedbackSounds = feedbackSounds
+        let dispatch = ShortcutDispatch(coordinator: coordinator, sounds: feedbackSounds)
         self.dispatch = dispatch
         // Shortcut layer: Carbon combos + HID tap (Right Command hold
         // default). No NSEvent monitors in the trigger path — they wedge

@@ -101,6 +101,17 @@ actor DictationCoordinator {
     /// the next dictation, no restart); `polish` streams cleanup.
     private let polish: (any PolishServing)?
     private let behaviorProvider: (@Sendable () -> CleanupBehavior)?
+    /// Feedback sounds sink. Nil in tests and when unwired. Only outcomes come
+    /// through here — the press cue belongs to the shortcut layer, which owns
+    /// the key event. Every call site is optional, so a session without a sink
+    /// behaves exactly as before.
+    private let feedback: (@Sendable (DictationCue) -> Void)?
+    /// How long the start tone runs (0 = no tone: unwired, or the asset is
+    /// missing). The duck waits it out — ducking zeroes the output volume
+    /// instantly, and a tone cut at press→ready (~110 ms steady state) is a
+    /// click, not a tone. Zero in tests, so no session gains a delay it
+    /// cannot hear.
+    private let startTone: Duration
 
     /// Phase 1 observability: state transitions are the only visible trace
     /// of fake sessions (no Flow Bar yet). Watch in Console.app.
@@ -121,7 +132,9 @@ actor DictationCoordinator {
         micDeniedOverride: (@Sendable () -> Bool)? = nil,
         mediaDuck: (any MediaDucking)? = nil,
         polish: (any PolishServing)? = nil,
-        behaviorProvider: (@Sendable () -> CleanupBehavior)? = nil
+        behaviorProvider: (@Sendable () -> CleanupBehavior)? = nil,
+        feedback: (@Sendable (DictationCue) -> Void)? = nil,
+        startTone: Duration = .zero
     ) {
         self.audio = audio
         self.speech = speech
@@ -133,6 +146,8 @@ actor DictationCoordinator {
         self.mediaDuck = mediaDuck
         self.polish = polish
         self.behaviorProvider = behaviorProvider
+        self.feedback = feedback
+        self.startTone = startTone
     }
 
     /// Live rule refresh from the dictionary store (Writing pane saves).
@@ -357,6 +372,8 @@ actor DictationCoordinator {
             guard currentSessionID == sessionID else { return }
             currentSessionID = nil
             state = .failed(context, .microphoneDenied)
+            // No duck ever ran on this path, so the tone is audible now.
+            announce(.failed)
             return
         }
 
@@ -367,6 +384,7 @@ actor DictationCoordinator {
             guard currentSessionID == sessionID else { return }
             currentSessionID = nil
             state = .failed(context, .audioCapture(error.localizedDescription))
+            announce(.failed)
             return
         }
 
@@ -391,6 +409,7 @@ actor DictationCoordinator {
             } else {
                 state = .failed(context, .speechPreparation(error.localizedDescription))
             }
+            announce(.failed)
             return
         }
 
@@ -412,6 +431,20 @@ actor DictationCoordinator {
         guard case .starting = state else { return }
         state = .recording(context)
         recordingBeganAt = ContinuousClock().now
+        // The start tone must actually be heard. Ducking is instant and
+        // absolute (virtual main volume to 0), and press→ready settles around
+        // 110–140 ms while `begin_record.caf` runs 454 ms — ducking here would
+        // cut the tone to a click. Waiting it out costs nothing worth having:
+        // the person is still waiting for the tone before speaking, so the
+        // media that keeps playing for those milliseconds cannot land in a
+        // transcript. Zero when no tone is wired (tests) or the asset is
+        // missing, and skipped when the toggle is off — nothing to protect.
+        let toneLead = FeedbackSoundSettings.isEnabled() ? startTone : .zero
+        if toneLead > .zero {
+            try? await Task.sleep(for: toneLead)
+            // Finished or cancelled inside the tone: no duck, nothing muted.
+            guard currentSessionID == sessionID else { return }
+        }
         await mediaDuck?.duck(sessionID: sessionID)
         // Suspension crossed: a cancel may have won mid-duck. Re-check
         // identity — a late duck with no owner restores immediately, so
@@ -441,6 +474,13 @@ actor DictationCoordinator {
     /// session can end muted. Nil-duck and already-restored are no-ops.
     private func restoreMedia(sessionID: UUID) async {
         await mediaDuck?.restore(sessionID: sessionID)
+    }
+
+    /// Outcome cue. Never suspends and never touches state — callers place it
+    /// after the terminal state is settled (and after `restoreMedia` wherever
+    /// a duck may have muted the output). Nil sink in tests: a no-op.
+    private func announce(_ cue: DictationCue) {
+        feedback?(cue)
     }
 
     /// P1: close the press→ready span if it is still open and log the
@@ -524,6 +564,7 @@ actor DictationCoordinator {
             }
             await restoreMedia(sessionID: sessionID)
             log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms finalize=\(finalizeMs, privacy: .public)ms outcome=speech-failure")
+            announce(.failed)
             return
         }
 
@@ -590,6 +631,7 @@ actor DictationCoordinator {
             await restoreMedia(sessionID: sessionID)
             log.info("failed target-gone, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
             log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms finalize=\(finalizeMs, privacy: .public)ms cleanup=\(cleanupMs, privacy: .public)ms outcome=target-gone")
+            announce(.failed)
             return
         }
 
@@ -610,6 +652,7 @@ actor DictationCoordinator {
         switch result {
         case .inserted:
             state = .completed(context)
+            announce(.landed)
             log.info("completed, inserted \(final.count, privacy: .public) chars into \(context.target.bundleIdentifier ?? "?", privacy: .public)")
         case .recoverableFailure(let reason):
             // No false success: the transcript stays recoverable.
@@ -618,6 +661,7 @@ actor DictationCoordinator {
                 expectedBundleID: context.target.bundleIdentifier
             )
             state = .failed(context, .insertionFailed(reason))
+            announce(.failed)
             log.info("failed insertion, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public) reason=\(reason, privacy: .public)")
         case .noEditableField:
             // Void-paste divert: focus with nowhere to paste. Same
@@ -628,6 +672,7 @@ actor DictationCoordinator {
                 expectedBundleID: context.target.bundleIdentifier
             )
             state = .failed(context, .noTextField)
+            announce(.failed)
             log.info("failed no-text-field, transcript preserved \(sessionID.uuidString.prefix(8), privacy: .public)")
         }
     }

@@ -59,6 +59,11 @@ struct GeneralPane: View {
     // ruins transcripts, resume is automatic. Key owned by
     // MediaDuckSettings; the literal is pinned equal to it by MediaDuckTests.
     @AppStorage("app.Oto.muteMediaWhileDictating") private var muteMedia = true
+    // Feedback tones (user ask, 2026-11-03): default ON. Lives with the Flow
+    // Bar because the sound is the pill's other half — same three moments.
+    // Key owned by FeedbackSoundSettings; the literal is pinned equal to it
+    // by FeedbackSoundsTests.
+    @AppStorage("app.Oto.feedbackSounds") private var feedbackSounds = true
 
     var body: some View {
         OtoPaneForm {
@@ -112,6 +117,11 @@ struct GeneralPane: View {
                     PillColorPicker(selection: $pillColor)
                 }
                 .accessibilityIdentifier("PillColorRow")
+                self.toggle(
+                    "Play sounds while dictating", isOn: $feedbackSounds,
+                    note: "A short tone when dictation starts, when your words land, and when something needs you.",
+                    identifier: "FeedbackSoundsToggle"
+                )
                 OtoPanelNote(
                     "Top places the pill under the menu bar. Bottom places it above the Dock. "
                         + "Drag the pill to move it and it snaps into place."

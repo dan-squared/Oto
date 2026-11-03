@@ -674,4 +674,53 @@ struct ShortcutDispatchDualTests {
             return
         }
     }
+
+    // MARK: - Press cue (feedback sounds)
+
+    @Test func pressPlaysTheListeningTone() async {
+        defer { cleanDualKey() }
+        let (coordinator, _, _) = makeGatedCoordinator()
+        let sounds = SpyFeedbackSounds()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator, configuration: .default(), sounds: sounds
+        )
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold)
+        #expect(sounds.cues == [.listening])
+
+        // Release is silent: the done tone belongs to the moment the words
+        // land, which the coordinator owns.
+        dispatch.receiveForTests(.keyUp, from: .hold)
+        #expect(sounds.cues == [.listening])
+    }
+
+    @Test func handsFreeStopPressIsSilent() async {
+        defer { cleanDualKey() }
+        let (coordinator, _, _) = makeGatedCoordinator()
+        let sounds = SpyFeedbackSounds()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator, configuration: .default(), sounds: sounds
+        )
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        #expect(sounds.cues == [.listening])
+    }
+
+    @Test func combinationAfterAPressAddsNoSecondTone() async {
+        defer { cleanDualKey() }
+        let (coordinator, _, _) = makeGatedCoordinator()
+        let sounds = SpyFeedbackSounds()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator, configuration: .default(), sounds: sounds
+        )
+
+        // A modifier used as a chord: the press already sounded (it cannot be
+        // unplayed without delaying every press to classify it), and the
+        // cancel adds nothing.
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold)
+        dispatch.receiveForTests(.combinationBegan, from: .hold)
+        #expect(sounds.cues == [.listening])
+    }
 }

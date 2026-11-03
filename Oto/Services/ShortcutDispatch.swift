@@ -44,6 +44,10 @@ enum TriggerUpdateResult: Equatable, Sendable {
 @MainActor
 final class ShortcutDispatch {
     private let coordinator: DictationCoordinator
+    /// Press cue (feedback sounds). Nil in tests and when unwired — the
+    /// transition machines stay pure, and a dispatch without a player is a
+    /// silent one, never a slower one.
+    private let sounds: (any FeedbackSounding)?
     private let log = Logger(subsystem: "app.Oto", category: "shortcut")
 
     private let holdComboMonitor = ModifierHotkeyMonitor()
@@ -103,9 +107,14 @@ final class ShortcutDispatch {
     /// While true, global registration is suspended (recorder listening).
     private(set) var isSuspended = false
 
-    init(coordinator: DictationCoordinator, configuration: DualShortcutConfiguration = .load()) {
+    init(
+        coordinator: DictationCoordinator,
+        configuration: DualShortcutConfiguration = .load(),
+        sounds: (any FeedbackSounding)? = nil
+    ) {
         self.coordinator = coordinator
         self.configuration = configuration
+        self.sounds = sounds
 
         holdComboMonitor.onEvent = { [weak self] in self?.receive($0, from: .hold) }
         handsFreeComboMonitor.onEvent = { [weak self] in self?.receive($0, from: .handsFree) }
@@ -684,6 +693,12 @@ final class ShortcutDispatch {
             // monitor swallows.
             cancelSessionAfterPendingBegins()
         case .begin:
+            // Press cue first: it must not sit behind the generation gate or
+            // the async hop below. A press that turns into a shortcut cancels
+            // after this and cancels nothing else — the tone already played,
+            // which is the honest cost of not delaying every press to classify
+            // it (a modifier being used as a chord is a rare gesture).
+            sounds?.play(.listening)
             // Generation-gated by convertDoubleTapToHandsFree: bumped
             // synchronously here, settled by the Task after storing.
             beginGeneration += 1
