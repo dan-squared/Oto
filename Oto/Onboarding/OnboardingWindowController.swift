@@ -127,9 +127,10 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         native.titlebarAppearsTransparent = true
         native.titlebarSeparatorStyle = .none
         // The form must remain readable even before Metal presents a frame,
-        // especially when reopening skips the animated intro. The window
-        // follows the system appearance; the shader is told the same thing.
-        native.backgroundColor = .windowBackgroundColor
+        // especially when reopening skips the animated intro. The page is pure
+        // white or pure black — not the window's native background — and the
+        // shader is told the same value.
+        native.backgroundColor = Self.ground
         native.isOpaque = true
         native.hasShadow = true
         native.isReleasedWhenClosed = false
@@ -254,6 +255,14 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     /// The system appearance at the moment the window is built.
     private static var isDark: Bool {
         NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    /// The page behind everything: pure white on paper, pure black at night.
+    /// Dynamic, so a live theme switch repaints the window without a rebuild.
+    private static var ground: NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .black : .white
+        }
     }
 
     /// The mark's own colour: white bars on a dark stage, ink on paper.

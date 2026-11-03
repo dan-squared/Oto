@@ -214,13 +214,14 @@ enum OtoSurface {
     private static let light = resolve(dark: false)
     private static let dark = resolve(dark: true)
 
+    /// The onboarding's page, in display space: pure black at night, pure white
+    /// on paper. The composite pass paints it underneath everything, so the
+    /// stage and the window colour are one value — no native grey shows through
+    /// anywhere on the page. `w` is the effect's settled opacity, not the
+    /// surface's alpha.
     private static func resolve(dark: Bool) -> SIMD4<Float> {
-        var value = SIMD4<Float>(repeating: dark ? 0.15 : 0.93)
-        NSAppearance(named: dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
-            if let color = NSColor.windowBackgroundColor.usingColorSpace(.sRGB) {
-                value = SIMD4(Float(color.redComponent), Float(color.greenComponent), Float(color.blueComponent), 1)
-            }
-        }
+        let level: Float = dark ? 0 : 1
+        var value = SIMD4<Float>(level, level, level, 1)
         value.w = dark ? 0.18 : 0.20
         return value
     }

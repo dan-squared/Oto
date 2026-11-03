@@ -42,8 +42,14 @@ enum OtoProbe {
         NSApp.appearance = NSAppearance(named: name == "light" ? .aqua : .darkAqua)
     }
 
+    /// The probe composites a captured view over this surface, so a forced
+    /// appearance has to be honoured here too — `NSApp.effectiveAppearance` can
+    /// still report the system's while a probe run is overriding it.
     private static var dark: Bool {
-        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        if let name = ProcessInfo.processInfo.environment["OTO_APPEARANCE"] {
+            return name == "dark"
+        }
+        return NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
     // MARK: - Shader

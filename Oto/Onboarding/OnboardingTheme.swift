@@ -5,12 +5,22 @@
 //  The stage's colours, resolved through the app's one adaptive table. The
 //  onboarding is a native window, so it follows the system appearance: in
 //  Light Mode the stage is paper and the ink is dark, and every value here
-//  mirrors by construction. Nothing on the stage is a literal white or black.
+//  mirrors by construction. The stage itself is pure white or pure black, not
+//  the window's native background — the onboarding is a page, not a panel.
 //
 
+import AppKit
 import SwiftUI
 
 enum OnboardingTheme {
+    /// The page: pure white in Light, pure black in Dark. The shader paints the
+    /// same value behind the first frame, so there is no seam anywhere.
+    static var ground: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .black : .white
+        })
+    }
+
     /// Type and icons.
     static var ink: Color { OtoPalette.ink }
     /// Secondary lines under a title.
@@ -41,4 +51,26 @@ enum OnboardingTheme {
     /// The one pill: the app's inversion — light on dark, ink on paper.
     static var pill: Color { OtoPalette.ink }
     static var pillLabel: Color { OtoPalette.ground }
+
+    // MARK: - The media panel
+
+    /// The chapter's film frame. Until a chapter has a picture or a film, a
+    /// two-stop field stands in: cool silver on paper, deep slate at night —
+    /// the only place on the stage with a colour of its own.
+    static var mediaTop: Color { self.tint(light: (0.90, 0.94, 1.00), dark: (0.13, 0.17, 0.24)) }
+    static var mediaBottom: Color { self.tint(light: (0.73, 0.82, 0.95), dark: (0.05, 0.07, 0.11)) }
+    static var mediaEdge: Color { OtoPalette.ink.opacity(0.10) }
+
+    // MARK: - Private
+
+    private static func tint(
+        light: (CGFloat, CGFloat, CGFloat),
+        dark: (CGFloat, CGFloat, CGFloat)
+    ) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let value = isDark ? dark : light
+            return NSColor(srgbRed: value.0, green: value.1, blue: value.2, alpha: 1)
+        })
+    }
 }

@@ -2,11 +2,12 @@
 //  OnboardingChapters.swift
 //  Oto
 //
-//  The frame every chapter shares, under the header that never moves: words
-//  on the left, the thing itself on the right, and one footer that stays put
-//  from the first chapter to the last. Ported from Firstlight — only what
-//  differs between two chapters leaves and arrives, and it leaves sideways,
-//  so the frame turns like a page rather than scrolling.
+//  The frame every chapter shares: words at the top left, the chapter's film
+//  frame — a rounded media panel — filling the right column, and one footer
+//  that stays put from the first chapter to the last. Only what differs
+//  between two chapters leaves and arrives, and it leaves sideways, so the
+//  frame turns like a page rather than scrolling. There is no header: the
+//  copy is the first thing on the page, the way the reference reads.
 //
 
 import SwiftUI
@@ -53,21 +54,24 @@ struct OnboardingChapterCopy {
     }
 }
 
-/// The frame every chapter shares: words on the left, the thing itself on the
-/// right, and one footer that stays put from the first chapter to the last.
+/// The frame every chapter shares: words at the top left, the chapter's film
+/// frame on the right, and one footer that stays put from the first chapter to
+/// the last.
 struct OnboardingChaptersView: View {
     @ObservedObject var flow: OnboardingFlow
 
     var body: some View {
         GeometryReader { proxy in
             let size = proxy.size
-            let compact = size.width < 900 || size.height < 600
-            let margin: CGFloat = compact ? 52 : 88
-            let gap: CGFloat = compact ? 24 : 48
-            let left: CGFloat = compact ? 250 : 340
+            let compact = size.width < 780 || size.height < 540
+            let margin: CGFloat = compact ? 34 : 46
+            let gap: CGFloat = compact ? 22 : 32
+            let column: CGFloat = compact ? 238 : 310
+            let inset: CGFloat = compact ? 22 : 30
+            let corner: CGFloat = compact ? 20 : 24
             let step = self.stage.step
             VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: gap) {
+                HStack(alignment: .top, spacing: gap) {
                     ZStack(alignment: .topLeading) {
                         if let copy = OnboardingChapterCopy.copy(for: step) {
                             self.words(copy, compact: compact)
@@ -75,26 +79,18 @@ struct OnboardingChaptersView: View {
                                 .transition(self.stage.turn(reduceMotion: self.reduceMotion))
                         }
                     }
-                    .frame(width: left, alignment: .leading)
-                    .frame(maxHeight: .infinity, alignment: .center)
+                    .frame(width: column, alignment: .leading)
 
-                    ZStack {
-                        // Replaced where it stands, not turned with the words:
-                        // the recorder and the cards are things being used,
-                        // and a thing in use does not go by.
-                        self.thing(for: step)
-                            .id(step)
-                            .transition(self.reduceMotion ? .opacity : self.stage.replacing)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    self.media(step: step, inset: inset, corner: corner)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(.top, compact ? 84 : 100)
+                .padding(.top, compact ? 38 : 50)
                 .padding(.horizontal, margin)
-                .padding(.bottom, 12)
+                .padding(.bottom, compact ? 20 : 26)
 
                 self.footer
-                    .padding(.horizontal, margin - 16)
-                    .padding(.bottom, compact ? 20 : 28)
+                    .padding(.horizontal, margin)
+                    .padding(.bottom, compact ? 22 : 30)
             }
             .frame(width: size.width, height: size.height)
         }
@@ -107,21 +103,48 @@ struct OnboardingChaptersView: View {
     @ObservedObject private var stage = OnboardingStage.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The chapter's film frame: the panel that will hold its picture or its
+    /// film. Until there is one, a gradient stands in — the thing itself, the
+    /// real control, floats on it.
+    private func media(step: OnboardingStage.Step, inset: CGFloat, corner: CGFloat) -> some View {
+        ZStack {
+            LinearGradient(
+                colors: [OnboardingTheme.mediaTop, OnboardingTheme.mediaBottom],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            ZStack {
+                // Replaced where it stands, not turned with the words: the
+                // recorder and the cards are things being used, and a thing
+                // in use does not go by.
+                self.thing(for: step)
+                    .id(step)
+                    .transition(self.reduceMotion ? .opacity : self.stage.replacing)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(inset)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .strokeBorder(OnboardingTheme.mediaEdge, lineWidth: 1)
+        )
+    }
+
     private var footer: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             OnboardingGlassCircleButton(symbol: "chevron.left", action: self.flow.back)
                 .opacity(self.flow.canGoBack ? 1 : 0)
                 .disabled(!self.flow.canGoBack)
                 .keyboardShortcut("[", modifiers: .command)
                 .accessibilityLabel("Back")
 
+            OnboardingContinueButton(title: self.flow.buttonTitle, action: self.flow.next)
+
+            Spacer(minLength: 16)
+
             OnboardingProgressDashes(step: self.stage.step) {
                 self.flow.jump(to: $0)
             }
-
-            Spacer(minLength: 12)
-
-            OnboardingContinueButton(title: self.flow.buttonTitle, action: self.flow.next)
         }
     }
 
@@ -135,20 +158,21 @@ struct OnboardingChaptersView: View {
             .foregroundStyle(OnboardingTheme.tagIdleText)
             .background(OnboardingTheme.tagIdle, in: Capsule())
             Text(copy.title)
-                .font(.system(size: compact ? 30 : 40, weight: .medium))
+                .font(.system(size: compact ? 30 : 38, weight: .medium))
                 .tracking(-1.0)
                 .lineSpacing(-2)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 14)
+                .padding(.top, 16)
                 .accessibilityAddTraits(.isHeader)
             Text(copy.subtitle)
                 .font(.system(size: compact ? 14 : 15))
                 .foregroundStyle(OnboardingTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 8)
+                .padding(.top, 10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
 
     @ViewBuilder
     private func thing(for step: OnboardingStage.Step) -> some View {
@@ -251,8 +275,8 @@ struct OnboardingCard<Content: View>: View {
     }
 }
 
-/// A quiet plate the popover stands on, scaled down only when the window is
-/// too small to hold it.
+/// A chapter's thing, scaled down only when the window is too small to hold it.
+/// It stands on the media panel itself, so it brings no backdrop of its own.
 struct OnboardingPreviewPlate<Content: View>: View {
     var width: CGFloat = 380
     var height: CGFloat = 300
@@ -260,13 +284,11 @@ struct OnboardingPreviewPlate<Content: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let scale = min(1, (proxy.size.width - 32) / self.width, (proxy.size.height - 32) / self.height)
-            ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(OnboardingTheme.card.opacity(0.7))
-                self.content()
-                    .frame(width: self.width, height: self.height)
-                    .scaleEffect(max(scale, 0.5))
-            }
+            let scale = min(1, (proxy.size.width - 8) / self.width, (proxy.size.height - 8) / self.height)
+            self.content()
+                .frame(width: self.width, height: self.height)
+                .scaleEffect(max(scale, 0.5))
+                .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }
 }

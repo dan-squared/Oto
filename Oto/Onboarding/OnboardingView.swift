@@ -48,7 +48,7 @@ struct OnboardingView: View {
                         onPresented: self.nativeSurface ? { self.playback.onNativeFramePresented?($0) } : nil
                     ).accessibilityHidden(true)
                 } else {
-                    Rectangle().fill(Color(nsColor: .windowBackgroundColor))
+                    Rectangle().fill(OnboardingTheme.ground)
                         .frame(width: panel.width, height: panel.height)
                         .position(x: panel.midX, y: panel.midY)
                 }
@@ -71,15 +71,6 @@ struct OnboardingView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             self.flow.uiState.refreshPermissions()
         }
-        // The tap that closes the rise: felt as the pair lands in the header,
-        // a little before its spring is over.
-        .onChange(of: self.pairRisen) { _, risen in
-            guard risen, !self.reduceMotion, self.nativeSurface else { return }
-            Task {
-                try? await Task.sleep(for: .seconds(OnboardingStage.stepDuration * 0.8))
-                OtoHaptics.introRiseLanded()
-            }
-        }
     }
 
     // MARK: Private
@@ -94,9 +85,6 @@ struct OnboardingView: View {
             .environment(\.onboardingPillTravels, !self.reduceMotion)
     }
 
-    /// The pair is the header after Welcome, always.
-    private var pairRisen: Bool { !self.stage.isWelcome }
-
     private func welcome(size: CGSize, handover: Double) -> some View {
         let time = self.playback.elapsed
         let compact = size.height < 538 || size.width < 748
@@ -109,7 +97,6 @@ struct OnboardingView: View {
         let enabled = time >= WelcomeTiming.interactiveAt
         let spacing: CGFloat = compact ? 8 : 10
         let lineHeight: CGFloat = compact ? 18 : 20
-        let risen = self.pairRisen
         // The pair settles just far enough up that it and its line are centred
         // together; the line rides with it, one group, one gap.
         let lift = WelcomeLayout.lift(for: lineHeight)
@@ -119,21 +106,20 @@ struct OnboardingView: View {
         )
 
         return ZStack {
-            // One view for the whole life of the pair: hero of Welcome, then
-            // the header of every step. Leaving Welcome moves it on the step's
-            // own spring, together with the pill.
-            WelcomePair(
-                time: time, size: size, lift: lift, rise: risen ? 1 : 0,
-                markOpacity: self.stage.markInFlight ? 0 : handover,
-                nameHidden: self.stage.markInFlight
-            )
-            .id(self.reduceMotion && risen)
-            .transition(.opacity)
-            .animation(OnboardingStage.stepAnimation, value: risen)
-            .animation(.easeOut(duration: 0.2), value: self.stage.markInFlight)
-            .accessibilityHidden(true)
-
             if self.stage.isWelcome {
+                // The arrival is the whole of Welcome: the mark, the word and
+                // the line. It no longer rises into a header — the first
+                // chapter starts on the copy alone — so leaving Welcome just
+                // takes it away.
+                WelcomePair(
+                    time: time, size: size, lift: lift, rise: 0,
+                    markOpacity: self.stage.markInFlight ? 0 : handover,
+                    nameHidden: self.stage.markInFlight
+                )
+                .transition(.opacity)
+                .animation(.easeOut(duration: 0.2), value: self.stage.markInFlight)
+                .accessibilityHidden(true)
+
                 // The line starts while the pair is still settling: the centre
                 // is never empty.
                 VStack(spacing: spacing) {
@@ -153,8 +139,8 @@ struct OnboardingView: View {
                 .frame(width: size.width, height: size.height, alignment: .top)
                 .opacity(titleAlpha)
                 .accessibilityHidden(titleAlpha < 1)
-                // Nothing of the welcome carries into the first chapter but
-                // the header, so it leaves the way a chapter does: sideways.
+                // What is left of Welcome leaves the way a chapter does:
+                // sideways.
                 .transition(self.reduceMotion ? .opacity : OnboardingStage.turningForward)
 
                 VStack {
@@ -175,7 +161,7 @@ struct OnboardingView: View {
                 }
                 .frame(width: size.width, height: size.height)
             } else {
-                // A step owns the centre and the bottom, under the same header.
+                // A step owns the page, from its first line to its footer.
                 self.steps
                     .frame(width: size.width, height: size.height)
                     .transition(OnboardingStage.chapters(reduceMotion: self.reduceMotion))
