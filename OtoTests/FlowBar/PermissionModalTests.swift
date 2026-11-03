@@ -49,7 +49,7 @@ struct PermissionModalTests {
 
     @Test func geometryAndTimeoutPinned() {
         #expect(PermissionCardView.maxWidth == 460)
-        #expect(PermissionModalController.visibleDuration == 10.0)
+        #expect(PermissionModalController.visibleDuration == 5.0)
     }
 
     @Test func widthFitsTheWords() {

@@ -2,5 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Hardened Runtime gates the microphone: without the Audio Input
+	     entitlement tccd refuses to even show the TCC dialog and answers
+	     .denied, so no Microphone row is ever created (verified in the
+	     macOS 27 tccd log, 2026-11-03). Apple's Hardened Runtime →
+	     Resource Access → Audio Input checkbox writes this exact key. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 </dict>
 </plist>

@@ -352,10 +352,12 @@ final class PermissionCardView: NSView {
 @Observable @MainActor
 final class PermissionModalController {
     nonisolated static let height: CGFloat = PermissionCardView.height
-    /// Visible window: long enough to read + reach the button (macOS banner
-    /// persistence class), short enough to never linger. Then fades out.
-    /// 10 s per explicit product direction (5 s missed too many glances).
-    nonisolated static let visibleDuration: Double = 10.0
+    /// Visible window: long enough to read + reach the button, short enough
+    /// to never linger. Then fades out.
+    /// 5 s cap per explicit product direction (user, 2026-11-03). This
+    /// supersedes the earlier 10 s hold: a permission nudge is not a
+    /// notification, and the card sat long enough to be mistaken for one.
+    nonisolated static let visibleDuration: Double = 5.0
 
     private var panel: NSPanel?
     private var card: PermissionCardView?
@@ -410,7 +412,7 @@ final class PermissionModalController {
             position: position
         )
         card?.morph(from: pill, card: frame, position: position)
-        // A fresh show supersedes any pending fade: full 10s, never truncated.
+        // A fresh show supersedes any pending fade: full 5s, never truncated.
         showGeneration += 1
         let generation = showGeneration
         hideTask?.cancel()
