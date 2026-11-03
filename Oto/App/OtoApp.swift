@@ -54,7 +54,7 @@ struct OtoApp: App {
     /// Fakes stay for tests.
     private let coordinator: DictationCoordinator
     private let dispatch: ShortcutDispatch
-    /// Feedback tones (start / landed / failed). One instance, built at launch
+    /// Feedback tones (press / stop / failed). One instance, built at launch
     /// so every voice is prepared before the first press — preparing cold on
     /// the press path would cost ~105 ms.
     private let feedbackSounds: FeedbackSoundPlayer

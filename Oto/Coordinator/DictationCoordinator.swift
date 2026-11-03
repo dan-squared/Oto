@@ -524,6 +524,15 @@ actor DictationCoordinator {
 
         guard currentSessionID == sessionID else { return }
 
+        // Native dictation feel: the stop tone lands with the release, not
+        // with the transcript. Audio has stopped, so the duck can be given
+        // back here — the tone is heard at once instead of after insertion,
+        // and media resumes while the words are being finalised rather than
+        // waiting out the transcription. Every later restore on this path is
+        // an idempotent no-op.
+        await restoreMedia(sessionID: sessionID)
+        announce(.stopped)
+
         // Silent-skip: whole-session silence completes without
         // transcription, so the loader never exists. Late speech always
         // counts — this reads the full-session peak once, after the last
@@ -652,7 +661,6 @@ actor DictationCoordinator {
         switch result {
         case .inserted:
             state = .completed(context)
-            announce(.landed)
             log.info("completed, inserted \(final.count, privacy: .public) chars into \(context.target.bundleIdentifier ?? "?", privacy: .public)")
         case .recoverableFailure(let reason):
             // No false success: the transcript stays recoverable.

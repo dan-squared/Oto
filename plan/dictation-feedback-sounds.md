@@ -129,6 +129,12 @@ exactly one "dictation could not start" cue, and inventing a second error
 vocabulary would mean synthesising or sourcing a sound, which is what this plan
 avoids.
 
+**Superseded by §10.4 (same day, user direction):** the done tone is no longer
+tied to `.inserted`. It sounds at the stop — key-up, second press, Flow Bar
+stop — the way native dictation does, and a later failure still adds the error
+tone on top. Read `.landed` below as `.stopped` emitted from
+`finalizeSession`.
+
 ## 5. Exact changes
 
 ### 5.1 New — `Oto/Services/FeedbackSounds.swift`
@@ -367,4 +373,46 @@ reaches the transcript, and the tone is not itself transcribed as speech (a
 - Not verified by ear in this run: the packaged app playing the tones is the
   human step (§7 step 3–6); the `.caf` copies for listening live in
   `.context/dictation-sounds/`.
+
+### 10.4 The stop tone moved to the release (native dictation feel)
+
+User feedback the same day: "the sound effect is not playing when the dictation
+is stopped" — the sound arrived only when the transcript was inserted, which is
+both late and, on a failure path, never. Direction: prefer the native dictation
+feel, then improve on it.
+
+Shipped:
+
+- `DictationCue.landed` → `.stopped`. The cue names the gesture, not the
+  transcript; `.stopped` maps to `end_record.caf` exactly as `.landed` did.
+- `DictationCoordinator.finalizeSession` now does `await restoreMedia` +
+  `announce(.stopped)` immediately after `await audio.stop()`. That is the
+  single finalize funnel for key-up, hands-free second press, Flow Bar stop,
+  and release-during-`starting` (`finishRequested`), so every honest stop
+  sounds once. The later terminal `restoreMedia` calls are idempotent no-ops.
+- `announce(.landed)` was removed from the `.inserted` branch. A successful
+  insert adds no second tone: the stop already said it, as in native dictation.
+- Failures keep `announce(.failed)` at every terminal, so a stopped-then-failed
+  session plays stop → error. That is the deliberate "better than native" part:
+  native has no error vocabulary for a session that already started, and this
+  one never lets the stop tone claim words that did not land.
+- Cancel stays silent (an abort, not a stop), and the silent-skip / empty-final
+  paths now sound the stop tone too — it reports the gesture, not the words.
+
+Mechanics that forced the shape:
+
+- The duck zeroes the output for the whole recording, and `end_record.caf` runs
+  0.43 s. Restoring only at the terminal point would swallow the tone, so the
+  duck is given back at stop. Media therefore resumes while the words are being
+  finalised (a few hundred ms) instead of after insertion — a small, welcome
+  side effect, and safe because `audio.stop()` runs first, so nothing leaks
+  into the capture.
+- The tone is emitted after the restore await, never next to the state
+  assignment, keeping the rule from §5.4.
+
+Tests updated to pin the new contract: success `[.stopped]`, silent session and
+empty final `[.stopped]`, post-recording failures `[.stopped, .failed]`,
+pre-audio failures still `[.failed]`, cancel empty, and the timeline
+`[.ducked, .restored, .cue(.stopped), …]`. `LoggingDuck.restore` is now
+idempotent like the real duck so the extra terminal restore does not show up.
 

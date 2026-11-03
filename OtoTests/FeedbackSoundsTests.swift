@@ -64,12 +64,20 @@ final class LoggingDuck: MediaDucking {
     }
 
     func duck(sessionID: UUID) async {
+        guard !self.ducked else { return }
+        self.ducked = true
         log.record(.ducked)
     }
 
     func restore(sessionID: UUID) async {
+        // Idempotent like the real duck: only a live duck restores once, so
+        // the terminal path's second restore never pollutes the timeline.
+        guard self.ducked else { return }
+        self.ducked = false
         log.record(.restored)
     }
+
+    private var ducked = false
 }
 
 @MainActor
@@ -154,19 +162,22 @@ struct FeedbackSoundsTests {
 
     // MARK: - Success
 
-    @Test func insertedAnnouncesLanded() async {
+    @Test func releaseAnnouncesStop() async {
+        // Native dictation feel: the end tone belongs to the release, so a
+        // successful insert adds nothing — the stop already said it.
         let sut = await makeSUT()
         let terminal = await runSession(sut)
         guard case .completed = terminal else {
             Issue.record("expected completed, got \(terminal)")
             return
         }
-        #expect(sut.log.cues == [.landed])
+        #expect(sut.log.cues == [.stopped])
     }
 
-    @Test func silentSessionAnnouncesNothing() async {
-        // Whole-session silence skips transcription and inserts nothing —
-        // there are no words to confirm, so there is nothing to announce.
+    @Test func silentSessionStillAnnouncesStop() async {
+        // Whole-session silence skips transcription and inserts nothing, but
+        // the person still stopped the session — the stop tone is about the
+        // gesture, not the words.
         let sut = await makeSUT(audioPeak: 0)
         guard let id = await sut.coordinator.beginHold() else {
             Issue.record("beginHold refused")
@@ -176,20 +187,21 @@ struct FeedbackSoundsTests {
         try? await Task.sleep(for: .milliseconds(600))
         await sut.coordinator.finish(id)
         _ = await waitFor(sut.coordinator) { $0.isTerminal && $0 != .idle }
-        #expect(sut.log.cues.isEmpty)
+        #expect(sut.log.cues == [.stopped])
     }
 
-    @Test func emptyTranscriptAnnouncesNothing() async {
+    @Test func emptyTranscriptStillAnnouncesStop() async {
         let sut = await makeSUT(finalText: "")
         let terminal = await runSession(sut)
         guard case .completed = terminal else {
             Issue.record("expected completed, got \(terminal)")
             return
         }
-        #expect(sut.log.cues.isEmpty)
+        #expect(sut.log.cues == [.stopped])
     }
 
     @Test func cancelledSessionAnnouncesNothing() async {
+        // Cancel is an abort, not a stop: no tone at either end of it.
         let sut = await makeSUT()
         guard let id = await sut.coordinator.beginHold() else {
             Issue.record("beginHold refused")
@@ -225,13 +237,15 @@ struct FeedbackSoundsTests {
     }
 
     @Test func speechFinalizeErrorAnnouncesFailed() async {
+        // Stop, then fail: the release tone is honest about the gesture and the
+        // error tone is honest about the result. Native plays only the first.
         let sut = await makeSUT(finishError: FakeSpeechService.FinalizationError())
         let terminal = await runSession(sut)
         guard case .failed(_, .speechPreparation) = terminal else {
             Issue.record("expected failed(speechPreparation), got \(terminal)")
             return
         }
-        #expect(sut.log.cues == [.failed])
+        #expect(sut.log.cues == [.stopped, .failed])
     }
 
     @Test func targetGoneAnnouncesFailed() async {
@@ -241,7 +255,7 @@ struct FeedbackSoundsTests {
             Issue.record("expected failed(targetGone), got \(terminal)")
             return
         }
-        #expect(sut.log.cues == [.failed])
+        #expect(sut.log.cues == [.stopped, .failed])
     }
 
     @Test func insertionFailureAnnouncesFailed() async {
@@ -251,7 +265,7 @@ struct FeedbackSoundsTests {
             Issue.record("expected failed(insertionFailed), got \(terminal)")
             return
         }
-        #expect(sut.log.cues == [.failed])
+        #expect(sut.log.cues == [.stopped, .failed])
     }
 
     @Test func noTextFieldAnnouncesFailed() async {
@@ -263,25 +277,25 @@ struct FeedbackSoundsTests {
             Issue.record("expected failed(noTextField), got \(terminal)")
             return
         }
-        #expect(sut.log.cues == [.failed])
+        #expect(sut.log.cues == [.stopped, .failed])
     }
 
     // MARK: - Ordering (the one rule that can be silently wrong)
 
-    @Test func failureIsAnnouncedAfterTheDuckIsRestored() async {
-        // Media ducking zeroes the output volume while recording, so a failure
-        // tone played next to the state assignment would be inaudible. The
-        // timeline proves the cue comes after the restore, not merely that
-        // both happened.
+    @Test func failureIsAnnouncedAfterTheStopToneAndTheDuckIsRestored() async {
+        // Media ducking zeroes the output volume while recording, so a tone
+        // played next to the state assignment would be inaudible. The timeline
+        // proves both cues come after the restore, not merely that they
+        // happened — and that the error follows the stop, never precedes it.
         let sut = await makeSUT(insertionResult: .recoverableFailure(reason: "denied"))
         _ = await runSession(sut)
-        #expect(sut.log.all == [.ducked, .restored, .cue(.failed)])
+        #expect(sut.log.all == [.ducked, .restored, .cue(.stopped), .cue(.failed)])
     }
 
-    @Test func landedIsAnnouncedAfterTheDuckIsRestored() async {
+    @Test func stopIsAnnouncedAfterTheDuckIsRestored() async {
         let sut = await makeSUT()
         _ = await runSession(sut)
-        #expect(sut.log.all == [.ducked, .restored, .cue(.landed)])
+        #expect(sut.log.all == [.ducked, .restored, .cue(.stopped)])
     }
 
     // MARK: - The start tone owns the first half-second
@@ -320,7 +334,7 @@ struct FeedbackSoundsTests {
         // Let the (abandoned) tone window close, then prove nothing ducked.
         try? await Task.sleep(for: .milliseconds(600))
         #expect(!sut.log.all.contains(.ducked))
-        #expect(sut.log.cues == [.landed])
+        #expect(sut.log.cues == [.stopped])
     }
 
     // MARK: - Settings
@@ -392,7 +406,7 @@ struct FeedbackSoundsTests {
         let player = FeedbackSoundPlayer(directory: directory)
         #expect(player.loadedCues == [.listening])
         // Missing cues are silent, not fatal.
-        player.play(.landed)
+        player.play(.stopped)
         player.play(.failed)
     }
 

@@ -2,13 +2,18 @@
 //  FeedbackSounds.swift
 //  Oto
 //
-//  The three moments a dictation session can sound — start, landed, failed —
+//  The three moments a dictation session can sound — press, stop, failed —
 //  played from Apple's own dictation tones: `begin_record.caf` and
 //  `end_record.caf` from the shared system sound library, plus the
 //  "dictation could not start" tone `DictationIM.app` ships. Nothing is
 //  bundled: the files are read from the system at launch, so the repo carries
 //  no Apple audio and people hear the palette they already know from macOS
 //  dictation.
+//
+//  The stop tone belongs to the release, the way native dictation sounds it —
+//  not to the transcript. The result may take a second to land, and a tone
+//  then would read as a late, mysterious ping; a failure still gets the error
+//  tone on top, so "stop" never claims the words arrived.
 //
 //  Latency rule: loading an AVAudioPlayer is cheap (0.2–10 ms measured) but
 //  the first `prepareToPlay()` costs ~105 ms cold, so every voice is loaded and
@@ -17,7 +22,7 @@
 //
 //  Volume: these files are mastered quietly (peak RMS ≈ 0.06), so they sit
 //  beside media without a trim. Media ducking zeroes the output while
-//  recording, which is why outcome cues must be emitted after
+//  recording, which is why cues must be emitted after
 //  `DictationCoordinator.restoreMedia` — not next to the state assignment.
 //
 
@@ -31,8 +36,9 @@ import os
 enum DictationCue: String, CaseIterable, Hashable, Sendable {
     /// The shortcut began a session.
     case listening
-    /// A transcript was inserted into the captured target.
-    case landed
+    /// The person stopped — key-up, second press, or the Flow Bar's stop.
+    /// This is the native dictation moment, not the transcript's.
+    case stopped
     /// Something needs the person: a permission card, a catcher, a failure.
     case failed
 
@@ -40,7 +46,7 @@ enum DictationCue: String, CaseIterable, Hashable, Sendable {
     nonisolated var asset: FeedbackSoundAsset {
         switch self {
         case .listening: .beginRecord
-        case .landed: .endRecord
+        case .stopped: .endRecord
         case .failed: .unableToStart
         }
     }
