@@ -1,54 +1,55 @@
 # Oto
 
-> **A quiet, instant, and completely private macOS dictation utility.**  
-> Press a shortcut, speak, release — and your words appear directly in whatever app you are using.
+> Speak freely. Oto listens, cleans up your thoughts, and inserts polished prose directly where your cursor lives.
+
+Oto is a native macOS dictation tool designed to bridge the gap between how we talk and how we write. Instead of transcribing every verbal stumble, filler word, or false start literally, Oto refines your spoken words into clear, natural prose before inserting them directly into your active app — all entirely on-device with zero cloud latency.
 
 ---
 
-## Why Oto?
+## Why Oto
 
-Most dictation tools either send your private voice recordings to cloud servers or force you to install heavy, power-draining models that spin up your Mac's fans.
+Traditional dictation tools force a frustrating compromise: either your voice is streamed to third-party cloud servers with noticeable latency and privacy trade-offs, or you run massive local models that drain your battery and heat up your machine.
 
-**Oto is designed from the ground up for the Mac:**
-- **100% On-Device & Private:** Powered entirely by Apple Speech and Apple Foundation Models (`SystemLanguageModel`). Your voice, transcripts, and text never leave your machine. No accounts, no subscriptions, no tracking.
-- **Instant & Lightweight:** Starts immediately with virtually zero memory footprint. No heavy runtimes, no background servers, no multi-gigabyte model downloads.
-- **Built-in AI Writing Cleanup:** Speaks like you, but writes cleanly. Intelligently removes stumbles, filler words, and awkward phrasing in real time without altering your voice or meaning.
-- **Fail-Safe Text Insertion:** Focus is captured the millisecond you hit the trigger. If you dictate without an active text box, Oto catches the transcript and gives you a one-click copy card so you never lose a word.
-- **Seamless System Integration:** Automatically ducks background media while speaking and provides crisp, native audio and haptic feedback.
+Oto takes a different path:
+
+- **Invisible Editing in Real Time:** Speaks like you, but writes like an editor. Verbal filler ("um", "like", "you know"), accidental repeats, and awkward pauses are stripped away seamlessly without altering your voice or meaning.
+- **Strictly Local and Private:** Powered entirely by Apple Speech and on-device Foundation Models. Your voice and text never touch a server, an API, or external storage. It operates seamlessly even completely offline.
+- **Instantaneous Response:** Native Swift architecture with near-zero memory footprint and no heavy runtimes. Dictation starts the instant you press your shortcut and finishes the moment you let go.
+- **Never Loses a Thought:** If you dictate without an active text field focused, Oto does not drop your words. It catches the transcript in a compact floating card with a single-click copy button.
+- **Native macOS Craft:** Mutes and ducks background media during recording, provides subtle native audio cues, and stays completely out of your way when you are done.
 
 ---
 
-## Features
+## Capabilities
 
-### 🎙️ Effortless Hold-to-Talk & Hands-Free
-- **Hold-to-Talk:** Press and hold your shortcut (e.g. `Right Option`), speak, and release to insert.
-- **Hands-Free:** Tap once to begin dictation, tap again to finish.
-- **Dedicated Trigger Slots:** Assign different keys for raw transcription versus AI-polished output.
+### Hold-to-Talk and Hands-Free Modes
+- **Hold-to-Talk:** Press and hold your trigger key (such as `Right Option`), speak naturally, and release to insert text.
+- **Hands-Free:** Tap once to start dictation, tap again to finish.
+- **Independent Triggers:** Map separate shortcuts for raw verbatim dictation versus AI-polished output.
 
-### 🔮 The Flow Bar
-- A beautiful, minimalist liquid glass indicator that floats smoothly on your screen.
-- Real-time voice wave reactivity while you speak.
-- Snaps cleanly to the **Top** (under the notch) or **Bottom** of your display with smooth drag-and-drop.
-- Five aesthetic glass color palettes: **Graphite**, **Crimson**, **Pink**, **Violet**, and **Ocean**.
-
-### ✨ On-Device AI Writing & Cleanup
-Powered by Apple's on-device Foundation Models, Oto refines your raw speech into polished writing before it reaches the page:
+### On-Device Writing Polish
+Oto refines raw transcripts before insertion using Apple's local language models:
 - **Auto Cleanup:**
-  - **Light:** Corrects punctuation, capitalization, and minor slips while preserving your exact phrasing.
-  - **Medium:** Removes stuttering, repetition, and filler words ("um", "ah", "like") into clear, cohesive sentences.
+  - **Light:** Corrects punctuation, capitalization, and minor slips while preserving your exact sentence phrasing.
+  - **Medium:** Eliminates filler words, stammers, and stuttering into clear, flowing sentences.
 - **One-Touch Transforms:**
-  - **Polish:** Refines sentence structure and clarity.
-  - **Concise:** Trims verbosity and cuts straight to the point.
-  - **Professional:** Elevates tone for emails, documentation, and client communication.
-  - **Custom Prompt:** Define your own instructions (e.g. bullet points, action items, formatting).
+  - **Polish:** Smooths syntax and clarifies meaning.
+  - **Concise:** Cuts verbosity to deliver short, direct messages.
+  - **Professional:** Adjusts tone for workplace communications, emails, and documentation.
+  - **Custom Prompts:** Supply custom instructions for specific workflows, such as bulleted action items or structured summaries.
 
-### 📚 Personal Dictionary & Snippets
-- **Custom Dictionary:** Teach Oto technical jargon, names, acronyms, or industry terms (e.g., *Kubernetes*, *PostgreSQL*, *Next.js*) so they are always transcribed with exact spelling and casing.
-- **Snippets:** Instant text expansions for frequently spoken templates or phrases.
-- **Local History:** Private, searchable, on-device history log so you can retrieve past dictations anytime.
+### Personal Dictionary and Snippets
+- **Custom Dictionary:** Teach Oto technical jargon, names, and industry terms (e.g., *PostgreSQL*, *Kubernetes*, *GraphQL*) so they always transcribe with exact spelling and casing.
+- **Snippets:** Instant expansion for frequently spoken boilerplate and templates.
+- **Local History:** Private, searchable, on-device history log to retrieve past dictations at any time.
 
-### 🛡️ Never Lose a Thought (The Catcher)
-If you start speaking while browsing or reading without an active cursor in a text field, Oto automatically morphs into a compact **Catcher card** displaying your full transcript with a quick **Copy** button.
+### The Flow Bar
+- A minimalist frosted-glass indicator that reflects your voice wave in real time.
+- Snaps cleanly to the top (under the notch) or bottom of your display with smooth drag-and-drop.
+- Five distinct glass color palettes: Graphite, Crimson, Pink, Violet, and Ocean.
+
+### The Catcher
+- Dictating while reading or browsing without a text field selected? Oto catches the transcript into a non-intrusive floating surface with an instant copy action and full history retention.
 
 ---
 
@@ -56,40 +57,40 @@ If you start speaking while browsing or reading without an active cursor in a te
 
 ```
 Oto/
-├── App/            # App lifecycle and dependency composition
+├── App/            # Application lifecycle and dependencies
 ├── Coordinator/    # DictationCoordinator (actor-isolated session management)
 ├── Services/       # Speech, on-device AI polish, accessibility capture, text insertion
 ├── UI/
 │   ├── FlowBar/    # Floating liquid glass indicator and live audio visualizer
 │   ├── Scratchpad/ # Non-activating Catcher card & recovery surface
 │   └── Theme/      # Native macOS controls, typography, and palette shaders
-├── Settings/       # Native macOS Settings with full keyboard customization
-└── Onboarding/     # Seamless permission setup and interactive walkthrough
+├── Settings/       # Pure macOS Settings scenes with full keyboard customization
+└── Onboarding/     # Permissions and setup workflow
 ```
 
-- **Actor-Isolated Coordination:** `DictationCoordinator` governs session state transitions with idempotent finish/cancel handling and reentrancy safety.
-- **Zero Cloud Footprint:** Built on native Apple frameworks (`Speech`, `FoundationModels`, `AVFoundation`, `CoreGraphics`).
+- **Actor-Isolated Architecture:** `DictationCoordinator` owns session state transitions with idempotent finish/cancel handling and reentrancy safety.
+- **Native Frameworks:** Built exclusively on Apple's standard frameworks (`Speech`, `FoundationModels`, `AVFoundation`, `CoreGraphics`).
 
 ---
 
 ## Requirements
 
-- **macOS 15.0 or later** (Apple Silicon required for on-device Foundation Models)
-- **Xcode 16.0+** (to build from source)
+- macOS 15.0 or later (Apple Silicon required for on-device Foundation Models)
+- Xcode 16.0+ (to build from source)
 
 ---
 
 ## Building from Source
 
 ```bash
-git clone https://github.com/dan-squared/Oto.git
-cd Oto
+git clone https://github.com/dan-squared/oto.git
+cd oto
 
-# Build with Xcode
+# Build the project
 xcodebuild -scheme Oto -destination 'platform=macOS' build
 
-# Run test suite
-xcodebuild test -scheme Oto -destination 'platform=macOS'
+# Run unit tests
+xcodebuild test -scheme Oto -destination 'platform=macOS' -only-testing:OtoTests
 ```
 
 ---
