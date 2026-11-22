@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Set OTO_FEED_URL before shipping; the default is a placeholder. -->
+	<key>SUFeedURL</key>
+	<string>$(OTO_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>2VhZbBhuDkrI34qLKTAPK+LSWDIdKbR04KyCKC/6bJg=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+	</array>
+</dict>
+</plist>

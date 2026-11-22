@@ -1,0 +1,104 @@
+//
+//  FlowBarPosition.swift
+//  Oto
+//
+//  Phase 8: where the pill lives. Two slots — Top (top-center, just below
+//  the menu-bar/notch line) and Bottom (today's bottom-center). The slot is
+//  a persisted setting AND a drag-and-snap gesture target; both write the
+//  same key, so they can never disagree. Geometry is pure (nonisolated) so
+//  slots and snap splits are headless-tested; the panel owns pixels.
+//
+
+import CoreGraphics
+import Foundation
+
+/// Pill slot. Raw values are the persisted strings — never rename them.
+enum FlowBarPosition: String, Sendable, Hashable {
+    case top
+    case bottom
+
+    nonisolated static let defaultsKey = "app.Oto.flowBarPosition"
+    /// Fresh-install slot (user asked: Top). Single source of truth for
+    /// BOTH readers — the `current()` fallbacks below AND the Settings
+    /// selector's `@AppStorage` default — so the two can never disagree
+    /// on a fresh profile again (they did: Top vs Bottom).
+    nonisolated static let freshDefault: FlowBarPosition = .top
+    nonisolated static let topMargin: CGFloat = 12
+    nonisolated static let bottomMargin: CGFloat = 28
+    /// Drop-glide length (s). The land tick uses the SAME constant — the
+    /// animation and the tick can never drift apart (v8b F1).
+    nonisolated static let snapDuration: Double = 0.15
+    /// Minimum gap between mid-drag threshold ticks. Boundary wiggle
+    /// inside this window stays silent — no machine-gun (v8b).
+    nonisolated static let tickRefractory: Duration = .milliseconds(100)
+
+    /// Default: absent key means `freshDefault` (Top, user asked). Stored
+    /// choices win — a dragged-to-bottom pill is never overridden.
+    /// Unknown strings fail safe to `freshDefault`.
+    nonisolated static func current(defaults: UserDefaults = .standard) -> FlowBarPosition {
+        guard let raw = defaults.object(forKey: defaultsKey) as? String else { return .freshDefault }
+        return FlowBarPosition(rawValue: raw) ?? .freshDefault
+    }
+
+    nonisolated static func save(_ position: FlowBarPosition, defaults: UserDefaults = .standard) {
+        defaults.set(position.rawValue, forKey: defaultsKey)
+    }
+
+    /// Slot frame for a card width/height on a screen's visible frame. Same
+    /// clamp/center math the panel always used; only Y is slot-dependent.
+    /// `visibleFrame` already excludes the menu bar (and the notch lives
+    /// inside the menu strip), so Top truly sits below the notch on every Mac.
+    /// Height-aware: taller cards (permission modal) anchor by their own
+    /// height — a fixed pill-height anchor would push their tops under the
+    /// menu bar. Defaults to the pill so existing callers are untouched.
+    nonisolated static func frame(
+        width: CGFloat, height: CGFloat = VisualizerMath.pillHeight,
+        on visible: NSRect, position: FlowBarPosition
+    ) -> NSRect {
+        let clamped = min(width, visible.width - 16)
+        let x = max(visible.minX + 8, visible.midX - clamped / 2)
+        let y: CGFloat
+        switch position {
+        case .top:
+            y = visible.maxY - height - Self.topMargin
+        case .bottom:
+            y = visible.minY + Self.bottomMargin
+        }
+        return NSRect(
+            x: x, y: y,
+            width: clamped, height: height
+        )
+    }
+
+
+
+    /// Snap split: the slot whose half holds the pill's center Y.
+    /// The exact midpoint belongs to Top (a dropped pill straddling the
+    /// line reads as "up there", not "down here").
+    nonisolated static func nearest(dropCenterY y: CGFloat, on visible: NSRect) -> FlowBarPosition {
+        y < visible.midY ? .bottom : .top
+    }
+}
+
+/// Debounce for mid-drag threshold ticks (Phase 8b): edge-triggered,
+/// with a refractory window so boundary wiggle can't machine-gun. Pure so
+/// the cadence is headless-tested; the panel owns pixels. Static +
+/// nonisolated throughout (default-MainActor would otherwise isolate the
+/// instance and lock tests out — VisualizerMath precedent).
+struct SnapTickGate: Sendable {
+    var lastFire: ContinuousClock.Instant?
+
+    nonisolated static func shouldTick(
+        _ gate: inout SnapTickGate, now: ContinuousClock.Instant, slotChanged: Bool
+    ) -> Bool {
+        guard slotChanged else { return false }
+        if let last = gate.lastFire,
+           now - last < FlowBarPosition.tickRefractory { return false }
+        gate.lastFire = now
+        return true
+    }
+
+    nonisolated static func reset(_ gate: inout SnapTickGate) {
+        gate.lastFire = nil
+    }
+}

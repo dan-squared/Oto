@@ -1,0 +1,509 @@
+//
+//  FlowBarControllerTests.swift
+//  OtoTests
+//
+//  Slice 6B/6C1: controller transitions through a REAL fake coordinator
+//  (no mocks of the state machine — fakes only at the hardware boundary).
+//  Recording arms the analyzer path; failed insertion routes to auto-copy
+//  (setting OFF, scratch pasteboard — never the user's) or the catcher
+//  modal (setting ON); analyzer stop guarantees silence.
+//
+//  Display note: routing assertions create real NSPanels, so these run
+//  where a window server exists (same requirement class as OtoUITests).
+//
+
+import AppKit
+import Foundation
+import Testing
+@testable import Oto
+
+// Serialized: two tests flip the global modal kill-switch; parallel runs
+// would race UserDefaults.standard between them.
+@Suite(.serialized)
+@MainActor
+struct FlowBarControllerTests {
+    private func scratchBoard() -> NSPasteboard {
+        NSPasteboard(name: NSPasteboard.Name("oto-flowbar-\(UUID().uuidString)"))
+    }
+
+    private func makeSUT(
+        insertionResult: InsertionResult = .inserted,
+        pasteboard: NSPasteboard? = nil,
+        micDenied: Bool = false,
+        finalText: String = "kept words",
+        runner: TransformRunner? = nil,
+        finishError: (any Error)? = nil,
+        prepareError: (any Error)? = nil,
+        coordinatorMicDenied: Bool = false
+    ) -> (
+        controller: FlowBarController,
+        coordinator: DictationCoordinator,
+        box: LevelFeedBox,
+        board: NSPasteboard,
+        permission: PermissionModalController
+    ) {
+        let board = pasteboard ?? scratchBoard()
+        let coordinator = DictationCoordinator(
+            audio: FakeAudioCapture(),
+            speech: FakeSpeechService(
+                finalText: finalText,
+                prepareError: prepareError,
+                finishError: finishError
+            ),
+            targetService: FakeTargetCapture(stubTarget: TargetApplication(
+                bundleIdentifier: "com.example.FakeTarget",
+                processIdentifier: 1234
+            )),
+            inserter: FakeTextInsertion(result: insertionResult),
+            history: nil,
+            microphoneAccessOverride: { !coordinatorMicDenied }
+        )
+        let box = LevelFeedBox()
+        let permission = PermissionModalController()
+        let controller = FlowBarController(
+            coordinator: coordinator,
+            analyzer: AudioLevelAnalyzer(),
+            box: box,
+            modal: NoTargetModalController(),
+            permission: permission,
+            pasteboard: board,
+            runner: runner,
+            isMicDenied: { micDenied }
+        )
+        return (controller, coordinator, box, board, permission)
+    }
+
+    private func waitFor(
+        _ coordinator: DictationCoordinator,
+        _ predicate: @Sendable (DictationState) -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(5)
+        while clock.now < deadline {
+            if predicate(await coordinator.state) { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    private func withModalSetting(_ enabled: Bool, _ body: () async throws -> Void) async throws {
+        let key = NoTargetModalSettings.key
+        let previous = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(enabled, forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        try await body()
+    }
+
+    @Test func recordingProjectsAndAnalyzerStopsSilent() async throws {
+        let sut = makeSUT()
+        await sut.controller.pollOnce()
+        #expect(sut.controller.model.projection.state == .hidden)
+
+        let id = await sut.coordinator.beginHold()
+        #expect(id != nil)
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.model.projection.state == .recording)
+
+        // Feed real synthetic audio through the box while recording, then
+        // finish: stop() must leave the model silent (the guarantee).
+        sut.box.setArmed(true)
+        sut.box.offer(sineBuffer())
+        try await withModalSetting(true) {
+            await sut.coordinator.finish(id!)
+        }
+        await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        // v6: completion renders no pixels — the loader melts straight out.
+        #expect(sut.controller.model.projection.state == .hidden)
+        // Leaving recording stops the analyzer → silence, awaited.
+        #expect(sut.controller.model.sample == .silence)
+    }
+
+    @Test func failedInsertionAutoCopiesWhenModalOff() async throws {
+        let sut = makeSUT(insertionResult: .recoverableFailure(reason: "nope"))
+        try await withModalSetting(false) {
+            let id = await sut.coordinator.beginHold()
+            await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+            await sut.coordinator.finish(id!)
+            await waitFor(sut.coordinator) { if case .failed = $0 { true } else { false } }
+
+            await sut.controller.pollOnce()
+            #expect(sut.board.string(forType: .string) == "kept words")
+
+            // Second poll: no double-write path, clipboard holds.
+            await sut.controller.pollOnce()
+            #expect(sut.board.string(forType: .string) == "kept words")
+            // No notice pixels, ever: the melt completes and the pill is
+            // gone (clipboard + menu own recovery now).
+            try? await Task.sleep(for: .milliseconds(250))
+            await sut.controller.pollOnce()
+            #expect(!sut.controller.isPillVisible)
+        }
+    }
+
+    @Test func overLimitFailureShowsCopiedPillThenHides() async throws {
+        // >100 words with the catcher on: no modal — auto-copy plus a
+        // transient message pill at current size, gone after its deadline.
+        // Data stays whole on the clipboard throughout.
+        let longText = Array(repeating: "word", count: 101).joined(separator: " ")
+        let sut = makeSUT(insertionResult: .recoverableFailure(reason: "nope"), finalText: longText)
+        try await withModalSetting(true) {
+            let id = await sut.coordinator.beginHold()
+            await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+            await sut.coordinator.finish(id!)
+            await waitFor(sut.coordinator) { if case .failed = $0 { true } else { false } }
+
+            await sut.controller.pollOnce()
+            #expect(sut.controller.isPillVisible)
+            #expect(sut.board.string(forType: .string) == longText)
+
+            try? await Task.sleep(for: .milliseconds(2700))
+            await sut.controller.pollOnce()
+            try? await Task.sleep(for: .milliseconds(250))
+            await sut.controller.pollOnce()
+            #expect(!sut.controller.isPillVisible)
+        }
+    }
+
+    @Test func bareFailureShowsTransientPillThenHides() async throws {
+        // No dedicated surface: the short notice must appear at the
+        // shortcut, then expire (the menu row is the durable record).
+        let sut = makeSUT(finishError: SpeechSessionError.engineFailure("test"))
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.coordinator.finish(id!)
+        await waitFor(sut.coordinator) { if case .failed = $0 { true } else { false } }
+
+        await sut.controller.pollOnce()
+        // The latch drives pixels, not `model.projection` (which stays the
+        // honest terminal state). Visibility is the observable contract.
+        #expect(sut.controller.isPillVisible)
+
+        try? await Task.sleep(for: .milliseconds(3_200))
+        await sut.controller.pollOnce()
+        try? await Task.sleep(for: .milliseconds(250))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func micDeniedFailureNeverUsesPill() async throws {
+        let sut = makeSUT(micDenied: true, coordinatorMicDenied: true)
+        let id = await sut.coordinator.beginHold()
+        if let id { await sut.coordinator.finish(id) }
+        await waitFor(sut.coordinator) { if case .failed = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.model.projection.state == .hidden)
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func recoveryOwnedFailureNeverUsesPill() async throws {
+        let sut = makeSUT(insertionResult: .recoverableFailure(reason: "nope"))
+        try await withModalSetting(false) {
+            let id = await sut.coordinator.beginHold()
+            await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+            await sut.coordinator.finish(id!)
+            await waitFor(sut.coordinator) { if case .failed = $0 { true } else { false } }
+            await sut.controller.pollOnce()
+            #expect(sut.board.string(forType: .string) == "kept words")
+            #expect(sut.controller.model.projection.state == .hidden)
+            #expect(!sut.controller.isPillVisible)
+        }
+    }
+
+    @Test func completedHoldsLoaderPastVanish() async throws {
+        // Loader guarantee: finalizing/inserting often pass inside one
+        // 150 ms poll, and completion melts in 0.14s — without the tail
+        // the loader would never paint. A completed session holds loader
+        // pixels for loaderMinDwell (0.6s) instead.
+        let sut = makeSUT(insertionResult: .inserted)
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.coordinator.finish(id!)
+        await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        // Past the 0.14s melt, inside the 0.4s dwell: still showing AND
+        // fully opaque (a lingering window with faded content is the
+        // exact missing-loader shape this tail fixes).
+        try? await Task.sleep(for: .milliseconds(300))
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        #expect(sut.controller.isContentFull)
+        // Past the dwell: gone and stays gone (single-shot per session).
+        try? await Task.sleep(for: .milliseconds(450))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func cancelledGetsNoTail() async throws {
+        // Cancellation celebrates nothing: no loader tail, normal melt.
+        let sut = makeSUT(insertionResult: .inserted)
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.coordinator.cancel(id!)
+        await waitFor(sut.coordinator) { if case .cancelled = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        try? await Task.sleep(for: .milliseconds(350))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func failedInsertionShowsModalWhenModalOn() async throws {
+        let sut = makeSUT(insertionResult: .recoverableFailure(reason: "nope"))
+        defer { Task { @MainActor in sut.controller.modal.hide() } }
+        try await withModalSetting(true) {
+            let id = await sut.coordinator.beginHold()
+            await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+            await sut.coordinator.finish(id!)
+            await waitFor(sut.coordinator) { if case .failed = $0 { true } else { false } }
+
+            await sut.controller.pollOnce()
+            #expect(sut.controller.modal.isVisible)
+            // Pill stays out of recovery's way.
+            #expect(sut.controller.model.projection.state == .hidden)
+            // Scratch board untouched — modal owns the text, nothing auto-wrote.
+            #expect(sut.board.string(forType: .string) == nil)
+        }
+    }
+
+    @Test func failureLeavesThePillToTheMenu() async throws {
+        // v7: errors never reach the pill — no panel, no hold, no buttons.
+        // The concise home is menu status (`lastSessionSummary`), pinned
+        // here so the copy has a test. Microphone-denied fails fast
+        // (prepare throws on open gate).
+        let denied = DictationCoordinator(
+            audio: FakeAudioCapture(),
+            speech: FakeSpeechService(finalText: "x", prepareError: SpeechReadiness.microphoneDenied),
+            targetService: FakeTargetCapture(stubTarget: TargetApplication(
+                bundleIdentifier: "com.example.FakeTarget",
+                processIdentifier: 1234
+            )),
+            inserter: FakeTextInsertion(result: .inserted),
+            history: nil,
+            microphoneAccessOverride: { true }
+        )
+        let controller = FlowBarController(
+            coordinator: denied,
+            analyzer: AudioLevelAnalyzer(),
+            box: LevelFeedBox(),
+            modal: NoTargetModalController(),
+            permission: PermissionModalController(),
+            pasteboard: scratchBoard(),
+            isMicDenied: { false }
+        )
+        _ = await denied.beginHold()
+        await waitFor(denied) { if case .failed = $0 { true } else { false } }
+        await controller.pollOnce()
+        #expect(controller.model.projection.state == .hidden)
+
+        // Still hidden two polls later: nothing held, nothing rendered.
+        await controller.pollOnce()
+        await controller.pollOnce()
+        #expect(controller.model.projection.state == .hidden)
+
+        // …while the menu names it concisely (the v7 contract).
+        #expect(await denied.lastSessionSummary().contains("microphone denied"))
+
+        // Recovery itself is untouched (menu + modal): a new session still
+        // starts from terminal failure — and fails pill-free again, fast.
+        let second = await denied.beginHold()
+        #expect(second != nil)
+        await waitFor(denied) { if case .failed = $0 { true } else { false } }
+        await controller.pollOnce()
+        #expect(controller.model.projection.state == .hidden)
+    }
+
+    @Test func micDeniedShowsPermissionModalAtSlot() async throws {
+        // Mic-denied owns a card, never the pill: the permission modal
+        // renders at the slot while the projection stays hidden.
+        let denied = DictationCoordinator(
+            audio: FakeAudioCapture(),
+            speech: FakeSpeechService(finalText: "x", prepareError: SpeechReadiness.microphoneDenied),
+            targetService: FakeTargetCapture(stubTarget: TargetApplication(
+                bundleIdentifier: "com.example.FakeTarget",
+                processIdentifier: 1234
+            )),
+            inserter: FakeTextInsertion(result: .inserted),
+            history: nil,
+            microphoneAccessOverride: { true }
+        )
+        let controller = FlowBarController(
+            coordinator: denied,
+            analyzer: AudioLevelAnalyzer(),
+            box: LevelFeedBox(),
+            modal: NoTargetModalController(),
+            permission: PermissionModalController(),
+            pasteboard: scratchBoard(),
+            isMicDenied: { false }
+        )
+        defer { Task { @MainActor in controller.permission.hide() } }
+        _ = await denied.beginHold()
+        await waitFor(denied) { if case .failed = $0 { true } else { false } }
+        await controller.pollOnce()
+        #expect(controller.permission.isVisible)
+        #expect(controller.model.projection.state == .hidden)
+        // Second poll: once per transition — no reshow, no duplicate.
+        await controller.pollOnce()
+        #expect(controller.permission.isVisible)
+    }
+
+    @Test func micGateSuppressesPillEntirelyWhenDenied() async throws {
+        // No-flash workstream: with mic denied the pill never renders —
+        // not during starting, not during recording. (Fakes don't gate on
+        // mic, so recording is reachable here and still pill-free.)
+        let sut = makeSUT(micDenied: true)
+        let id = await sut.coordinator.beginHold()
+        #expect(id != nil)
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+        #expect(!sut.controller.isLiveValues)
+        // The gate is view-layer only: state truth still projects.
+        #expect(sut.controller.model.projection.state == .recording)
+        await sut.coordinator.finish(id!)
+        await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
+    }
+
+    @Test func liveValuesLinkRunsWhileBarsAreLive() async throws {
+        // Fluid-waves workstream: the vsync link owns bar transforms while
+        // bars show, and dies with the vanish path.
+        let sut = makeSUT()
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        #expect(sut.controller.isLiveValues)
+        await sut.coordinator.finish(id!)
+        await waitFor(sut.coordinator) { if case .completed = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        // Past the adoption park (400 ms) and the 0.6 s loader dwell:
+        // the parked hide melts as usual.
+        try? await Task.sleep(for: .milliseconds(800))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isLiveValues)
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func cancelParkAdoptsNextSessionWithoutDip() async throws {
+        // Double-tap shape: cancel parks the hide; the next session inside
+        // the window adopts the live panel — visible at every poll, no
+        // hideNow between (a dip would need hideNow, the only hider).
+        let sut = makeSUT()
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await sut.coordinator.cancel(id!)
+        await waitFor(sut.coordinator) { if case .cancelled = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        let id2 = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await sut.coordinator.finish(id2!)
+        await waitFor(sut.coordinator) { $0.isTerminal && $0 != .idle }
+    }
+
+    @Test func parkedHideExpiresWithoutNewSession() async throws {
+        let sut = makeSUT()
+        let id = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await sut.coordinator.cancel(id!)
+        await waitFor(sut.coordinator) { if case .cancelled = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        try? await Task.sleep(for: .milliseconds(550))
+        await sut.controller.pollOnce()
+        #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func transformPillRepaintsOnRepeatPress() async {
+        // Repeat-press invisibility class: run 1 shows then hides; run 2
+        // must re-show with the new word (pre-fix the resize-only path
+        // skipped orderFront, so the pill stayed hidden with live work).
+        // Streams park at the gate so the transient beat is observable
+        // (instant fakes would finish before the first poll).
+        let grabber = FakeSelectionGrabber()
+        grabber.selection = "helo wrld"
+        let inserter = FakeTextInsertion()
+        let polish = FakePolishService()
+        polish.chunks = ["Hello world."]
+        await polish.streamGate.setOpen(false)
+        let runner = TransformRunner(
+            grabber: grabber, inserter: inserter,
+            targetService: FakeTargetCapture(stubTarget: TargetApplication(
+                bundleIdentifier: "com.example.FakeTarget",
+                processIdentifier: 1234
+            )),
+            polish: polish,
+            behaviorProvider: { CleanupBehavior(enabled: true, level: .light) }
+        )
+        let sut = makeSUT(runner: runner)
+
+        // Press 1: run in the background, poll until the beat shows.
+        let run1 = Task { await runner.execute(preset: .polish) }
+        await self.waitForWork(runner, timeout: .seconds(5))
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await polish.streamGate.setOpen(true)
+        await run1.value
+        // Let the melt + hide fire fully.
+        await self.waitForHidden(sut, timeout: .seconds(5))
+        #expect(!sut.controller.isPillVisible)
+
+        // Press 2 (new text, new preset): the pill must repaint, new word.
+        grabber.selection = "Hello world."
+        polish.chunks = ["Hello again."]
+        await polish.streamGate.setOpen(false)
+        let run2 = Task { await runner.execute(preset: .concise) }
+        await self.waitForWork(runner, timeout: .seconds(5))
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+        await polish.streamGate.setOpen(true)
+        await run2.value
+        #expect(await inserter.replaceSelectionCalls.count == 2)
+    }
+
+    /// Polls until the runner publishes work (the pill feed is live).
+    private func waitForWork(_ runner: TransformRunner, timeout: Duration) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if await runner.currentWorkLabel() != nil { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("timed out waiting for work beat")
+    }
+
+    /// Polls until the pill melts out fully.
+    private func waitForHidden(
+        _ sut: (
+            controller: FlowBarController,
+            coordinator: DictationCoordinator,
+            box: LevelFeedBox,
+            board: NSPasteboard,
+            permission: PermissionModalController
+        ),
+        timeout: Duration
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            await sut.controller.pollOnce()
+            if !sut.controller.isPillVisible { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        Issue.record("timed out waiting for pill hide")
+    }
+}

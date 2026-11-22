@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder. Scripts/release.sh regenerates this file with a signed entry. -->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Oto updates</title>
+    <link>https://github.com/dan-squared/Oto</link>
+    <description>Beta updates for Oto.</description>
+    <language>en</language>
+  </channel>
+</rss>

@@ -1,0 +1,689 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 110;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		D3F2CE82305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE74305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md */; };
+		D3F2CE83305EA62300F5674F /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7F305EA62300F5674F /* README.md */; };
+		D3F2CE84305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE71305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md */; };
+		D3F2CE85305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7A305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md */; };
+		D3F2CE86305EA62300F5674F /* 10_NEXT_STEP.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE78305EA62300F5674F /* 10_NEXT_STEP.md */; };
+		D3F2CE87305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE70305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md */; };
+		D3F2CE88305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE76305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md */; };
+		D3F2CE89305EA62300F5674F /* 13_TYPA_UI_AUDIT.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7B305EA62300F5674F /* 13_TYPA_UI_AUDIT.md */; };
+		D3F2CE8A305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE72305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md */; };
+		D3F2CE8B305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7D305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md */; };
+		D3F2CE8C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md */; };
+		D3F2CE8D305EA62300F5674F /* 16_REBUILD_DECISIONS.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE7E305EA62300F5674F /* 16_REBUILD_DECISIONS.md */; };
+		D3F2CE8E305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE6F305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md */; };
+		D3F2CE8F305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE75305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md */; };
+		D3F2CE90305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE79305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md */; };
+		D3F2CE91305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE77305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md */; };
+		D3F2CE92305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */; };
+		D3F2CE94305EAE6C00F5674F /* START_HERE_PRODUCT.md in Resources */ = {isa = PBXBuildFile; fileRef = D3F2CE93305EAE6C00F5674F /* START_HERE_PRODUCT.md */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		D3F2CE55305E9EDD00F5674F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D3F2CE3D305E9EDB00F5674F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D3F2CE44305E9EDB00F5674F;
+			remoteInfo = Oto;
+		};
+		D3F2CE5F305E9EDD00F5674F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D3F2CE3D305E9EDB00F5674F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D3F2CE44305E9EDB00F5674F;
+			remoteInfo = Oto;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		D3F2CE45305E9EDB00F5674F /* Oto.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Oto.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D3F2CE54305E9EDD00F5674F /* OtoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OtoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D3F2CE5E305E9EDD00F5674F /* OtoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OtoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D3F2CE6F305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 01_YAP_PARITY_ARCHITECTURE.md; sourceTree = "<group>"; };
+		D3F2CE70305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 02_RECORDING_WORKFLOWS.md; sourceTree = "<group>"; };
+		D3F2CE71305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 03_NATIVE_SWIFTUI_UI.md; sourceTree = "<group>"; };
+		D3F2CE72305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md; sourceTree = "<group>"; };
+		D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 05_CURRENT_TO_REBUILD_MAP.md; sourceTree = "<group>"; };
+		D3F2CE74305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 06_BAR_VISUALIZER_RECREATION.md; sourceTree = "<group>"; };
+		D3F2CE75305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md; sourceTree = "<group>"; };
+		D3F2CE76305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 08_ENGINEERING_PLAYBOOK.md; sourceTree = "<group>"; };
+		D3F2CE77305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md; sourceTree = "<group>"; };
+		D3F2CE78305EA62300F5674F /* 10_NEXT_STEP.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 10_NEXT_STEP.md; sourceTree = "<group>"; };
+		D3F2CE79305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 11_RELIABILITY_TEST_MATRIX.md; sourceTree = "<group>"; };
+		D3F2CE7A305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 12_SHORTCUT_BACKEND_PLAN.md; sourceTree = "<group>"; };
+		D3F2CE7B305EA62300F5674F /* 13_TYPA_UI_AUDIT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 13_TYPA_UI_AUDIT.md; sourceTree = "<group>"; };
+		D3F2CE7C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 14_YAP_BACKEND_AUDIT.md; sourceTree = "<group>"; };
+		D3F2CE7D305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 15_ENGINEERING_WISDOM_AND_MISTAKES.md; sourceTree = "<group>"; };
+		D3F2CE7E305EA62300F5674F /* 16_REBUILD_DECISIONS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = 16_REBUILD_DECISIONS.md; sourceTree = "<group>"; };
+		D3F2CE7F305EA62300F5674F /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		D3F2CE93305EAE6C00F5674F /* START_HERE_PRODUCT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = START_HERE_PRODUCT.md; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		D3F2CE47305E9EDB00F5674F /* Oto */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Oto;
+			sourceTree = "<group>";
+		};
+		D3F2CE57305E9EDD00F5674F /* OtoTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OtoTests;
+			sourceTree = "<group>";
+		};
+		D3F2CE61305E9EDD00F5674F /* OtoUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OtoUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D3F2CE42305E9EDB00F5674F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		D3F2CE51305E9EDD00F5674F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		D3F2CE5B305E9EDD00F5674F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		D3F2CE3C305E9EDB00F5674F = {
+			isa = PBXGroup;
+			children = (
+				D3F2CE47305E9EDB00F5674F /* Oto */,
+				D3F2CE57305E9EDD00F5674F /* OtoTests */,
+				D3F2CE61305E9EDD00F5674F /* OtoUITests */,
+				D3F2CE81305EA62300F5674F /* Docs */,
+				D3F2CE46305E9EDB00F5674F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D3F2CE46305E9EDB00F5674F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D3F2CE45305E9EDB00F5674F /* Oto.app */,
+				D3F2CE54305E9EDD00F5674F /* OtoTests.xctest */,
+				D3F2CE5E305E9EDD00F5674F /* OtoUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		D3F2CE80305EA62300F5674F /* OTO_REBUILD_PLAN */ = {
+			isa = PBXGroup;
+			children = (
+				D3F2CE6F305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md */,
+				D3F2CE70305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md */,
+				D3F2CE71305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md */,
+				D3F2CE93305EAE6C00F5674F /* START_HERE_PRODUCT.md */,
+				D3F2CE72305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md */,
+				D3F2CE73305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md */,
+				D3F2CE74305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md */,
+				D3F2CE75305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md */,
+				D3F2CE76305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md */,
+				D3F2CE77305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md */,
+				D3F2CE78305EA62300F5674F /* 10_NEXT_STEP.md */,
+				D3F2CE79305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md */,
+				D3F2CE7A305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md */,
+				D3F2CE7B305EA62300F5674F /* 13_TYPA_UI_AUDIT.md */,
+				D3F2CE7C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md */,
+				D3F2CE7D305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md */,
+				D3F2CE7E305EA62300F5674F /* 16_REBUILD_DECISIONS.md */,
+				D3F2CE7F305EA62300F5674F /* README.md */,
+			);
+			path = OTO_REBUILD_PLAN;
+			sourceTree = "<group>";
+		};
+		D3F2CE81305EA62300F5674F /* Docs */ = {
+			isa = PBXGroup;
+			children = (
+				D3F2CE80305EA62300F5674F /* OTO_REBUILD_PLAN */,
+			);
+			path = Docs;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		D3F2CE44305E9EDB00F5674F /* Oto */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D3F2CE66305E9EDD00F5674F /* Build configuration list for PBXNativeTarget "Oto" */;
+			buildPhases = (
+				D3F2CE41305E9EDB00F5674F /* Sources */,
+				D3F2CE42305E9EDB00F5674F /* Frameworks */,
+				D3F2CE43305E9EDB00F5674F /* Resources */,
+			);
+			buildRules = (
+			);
+			packageProductDependencies = (
+				B1A7C0DE0000000000000002 /* Sparkle */,
+			);
+			fileSystemSynchronizedGroups = (
+				D3F2CE47305E9EDB00F5674F /* Oto */,
+			);
+			name = Oto;
+			productName = Oto;
+			productReference = D3F2CE45305E9EDB00F5674F /* Oto.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D3F2CE53305E9EDD00F5674F /* OtoTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D3F2CE69305E9EDD00F5674F /* Build configuration list for PBXNativeTarget "OtoTests" */;
+			buildPhases = (
+				D3F2CE50305E9EDD00F5674F /* Sources */,
+				D3F2CE51305E9EDD00F5674F /* Frameworks */,
+				D3F2CE52305E9EDD00F5674F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D3F2CE56305E9EDD00F5674F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				D3F2CE57305E9EDD00F5674F /* OtoTests */,
+			);
+			name = OtoTests;
+			productName = OtoTests;
+			productReference = D3F2CE54305E9EDD00F5674F /* OtoTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		D3F2CE5D305E9EDD00F5674F /* OtoUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D3F2CE6C305E9EDD00F5674F /* Build configuration list for PBXNativeTarget "OtoUITests" */;
+			buildPhases = (
+				D3F2CE5A305E9EDD00F5674F /* Sources */,
+				D3F2CE5B305E9EDD00F5674F /* Frameworks */,
+				D3F2CE5C305E9EDD00F5674F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D3F2CE60305E9EDD00F5674F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				D3F2CE61305E9EDD00F5674F /* OtoUITests */,
+			);
+			name = OtoUITests;
+			productName = OtoUITests;
+			productReference = D3F2CE5E305E9EDD00F5674F /* OtoUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		D3F2CE3D305E9EDB00F5674F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					D3F2CE44305E9EDB00F5674F = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					D3F2CE53305E9EDD00F5674F = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = D3F2CE44305E9EDB00F5674F;
+					};
+					D3F2CE5D305E9EDD00F5674F = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = D3F2CE44305E9EDB00F5674F;
+					};
+				};
+			};
+			buildConfigurationList = D3F2CE40305E9EDB00F5674F /* Build configuration list for PBXProject "Oto" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = D3F2CE3C305E9EDB00F5674F;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			packageReferences = (
+				B1A7C0DE0000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
+			productRefGroup = D3F2CE46305E9EDB00F5674F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D3F2CE44305E9EDB00F5674F /* Oto */,
+				D3F2CE53305E9EDD00F5674F /* OtoTests */,
+				D3F2CE5D305E9EDD00F5674F /* OtoUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D3F2CE43305E9EDB00F5674F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+				D3F2CE82305EA62300F5674F /* 06_BAR_VISUALIZER_RECREATION.md in Resources */,
+				D3F2CE83305EA62300F5674F /* README.md in Resources */,
+				D3F2CE84305EA62300F5674F /* 03_NATIVE_SWIFTUI_UI.md in Resources */,
+				D3F2CE85305EA62300F5674F /* 12_SHORTCUT_BACKEND_PLAN.md in Resources */,
+				D3F2CE86305EA62300F5674F /* 10_NEXT_STEP.md in Resources */,
+				D3F2CE87305EA62300F5674F /* 02_RECORDING_WORKFLOWS.md in Resources */,
+				D3F2CE88305EA62300F5674F /* 08_ENGINEERING_PLAYBOOK.md in Resources */,
+				D3F2CE89305EA62300F5674F /* 13_TYPA_UI_AUDIT.md in Resources */,
+				D3F2CE8A305EA62300F5674F /* 04_TESTING_AND_FUTURE_AGENT_HANDOFF.md in Resources */,
+				D3F2CE8B305EA62300F5674F /* 15_ENGINEERING_WISDOM_AND_MISTAKES.md in Resources */,
+				D3F2CE8C305EA62300F5674F /* 14_YAP_BACKEND_AUDIT.md in Resources */,
+				D3F2CE8D305EA62300F5674F /* 16_REBUILD_DECISIONS.md in Resources */,
+				D3F2CE8E305EA62300F5674F /* 01_YAP_PARITY_ARCHITECTURE.md in Resources */,
+				D3F2CE8F305EA62300F5674F /* 07_APPLE_SPEECH_IMPLEMENTATION_PLAN.md in Resources */,
+				D3F2CE90305EA62300F5674F /* 11_RELIABILITY_TEST_MATRIX.md in Resources */,
+				D3F2CE91305EA62300F5674F /* 09_PRODUCT_DESIGN_AND_EXECUTION_PLAN.md in Resources */,
+				D3F2CE92305EA62300F5674F /* 05_CURRENT_TO_REBUILD_MAP.md in Resources */,
+				D3F2CE94305EAE6C00F5674F /* START_HERE_PRODUCT.md in Resources */,
+			);
+		};
+		D3F2CE52305E9EDD00F5674F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		D3F2CE5C305E9EDD00F5674F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D3F2CE41305E9EDB00F5674F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		D3F2CE50305E9EDD00F5674F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		D3F2CE5A305E9EDD00F5674F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D3F2CE56305E9EDD00F5674F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D3F2CE44305E9EDB00F5674F /* Oto */;
+			targetProxy = D3F2CE55305E9EDD00F5674F /* PBXContainerItemProxy */;
+		};
+		D3F2CE60305E9EDD00F5674F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D3F2CE44305E9EDB00F5674F /* Oto */;
+			targetProxy = D3F2CE5F305E9EDD00F5674F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B1A7C0DE0000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B1A7C0DE0000000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B1A7C0DE0000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCBuildConfiguration section */
+		D3F2CE64305E9EDD00F5674F /* Debug configuration for PBXProject "Oto" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 78458476CJ;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		D3F2CE65305E9EDD00F5674F /* Release configuration for PBXProject "Oto" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 78458476CJ;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		D3F2CE67305E9EDD00F5674F /* Debug configuration for PBXNativeTarget "Oto" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Oto/Oto.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 78458476CJ;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Oto/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Daniel Girma. All rights reserved.";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone required for dictation.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speech recognition is used to transcribe dictation on this Mac.";
+				INFOPLIST_KEY_CFBundleLocalizations = (
+					en,
+				);
+				OTO_FEED_URL = "https://example.com/appcast.xml";
+				INFOPLIST_KEY_SUFeedURL = "$(OTO_FEED_URL)";
+				INFOPLIST_KEY_SUPublicEDKey = "2VhZbBhuDkrI34qLKTAPK+LSWDIdKbR04KyCKC/6bJg=";
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUScheduledCheckInterval = 86400;
+				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.Oto;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		D3F2CE68305E9EDD00F5674F /* Release configuration for PBXNativeTarget "Oto" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Oto/Oto.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 78458476CJ;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Oto/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Daniel Girma. All rights reserved.";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone required for dictation.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speech recognition is used to transcribe dictation on this Mac.";
+				INFOPLIST_KEY_CFBundleLocalizations = (
+					en,
+				);
+				OTO_FEED_URL = "https://example.com/appcast.xml";
+				INFOPLIST_KEY_SUFeedURL = "$(OTO_FEED_URL)";
+				INFOPLIST_KEY_SUPublicEDKey = "2VhZbBhuDkrI34qLKTAPK+LSWDIdKbR04KyCKC/6bJg=";
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUScheduledCheckInterval = 86400;
+				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.Oto;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		D3F2CE6A305E9EDD00F5674F /* Debug configuration for PBXNativeTarget "OtoTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 78458476CJ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.OtoTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Oto.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Oto";
+			};
+			name = Debug;
+		};
+		D3F2CE6B305E9EDD00F5674F /* Release configuration for PBXNativeTarget "OtoTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 78458476CJ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.OtoTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Oto.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Oto";
+			};
+			name = Release;
+		};
+		D3F2CE6D305E9EDD00F5674F /* Debug configuration for PBXNativeTarget "OtoUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 78458476CJ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.OtoUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Oto;
+			};
+			name = Debug;
+		};
+		D3F2CE6E305E9EDD00F5674F /* Release configuration for PBXNativeTarget "OtoUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 78458476CJ;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.OtoUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Oto;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		D3F2CE40305E9EDB00F5674F /* Build configuration list for PBXProject "Oto" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D3F2CE64305E9EDD00F5674F /* Debug configuration for PBXProject "Oto" */,
+				D3F2CE65305E9EDD00F5674F /* Release configuration for PBXProject "Oto" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		D3F2CE66305E9EDD00F5674F /* Build configuration list for PBXNativeTarget "Oto" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D3F2CE67305E9EDD00F5674F /* Debug configuration for PBXNativeTarget "Oto" */,
+				D3F2CE68305E9EDD00F5674F /* Release configuration for PBXNativeTarget "Oto" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		D3F2CE69305E9EDD00F5674F /* Build configuration list for PBXNativeTarget "OtoTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D3F2CE6A305E9EDD00F5674F /* Debug configuration for PBXNativeTarget "OtoTests" */,
+				D3F2CE6B305E9EDD00F5674F /* Release configuration for PBXNativeTarget "OtoTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		D3F2CE6C305E9EDD00F5674F /* Build configuration list for PBXNativeTarget "OtoUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D3F2CE6D305E9EDD00F5674F /* Debug configuration for PBXNativeTarget "OtoUITests" */,
+				D3F2CE6E305E9EDD00F5674F /* Release configuration for PBXNativeTarget "OtoUITests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = D3F2CE3D305E9EDB00F5674F /* Project object */;
+	validationLevel = 1;
+}

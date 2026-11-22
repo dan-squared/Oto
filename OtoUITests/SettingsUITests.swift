@@ -1,0 +1,153 @@
+//
+//  SettingsUITests.swift
+//  OtoUITests
+//
+//  Phase 5: 03 acceptance — Settings opens as ONE native window. The menu
+//  path (SettingsLink) is device-matrix covered: XCUITest cannot reach the
+//  system menu bar in this environment (probed: systemuiserver vends zero
+//  menu bars to the runner), so this test drives the equivalent Cmd-comma
+//  path, which targets the same native scene. Menu-bar-only app, so the test
+//  starts from zero windows — except first-run onboarding ("Welcome to
+//  Oto"), which is finished and dismissed here when present (that doubles
+//  as onboarding dismissal coverage). Any other window at launch is itself
+//  a failure. No mic, no tap, no dictation.
+//
+//  NOTE: finishing onboarding writes `app.Oto.onboardingVersion` to the
+//  real defaults domain on the test machine. The onboarding device matrix
+//  starts from the wipe protocol, which clears it — never read this test's
+//  pass as proof of first-launch behavior; the matrix owns that.
+//
+
+import XCTest
+
+final class SettingsUITests: XCTestCase {
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    @MainActor
+    func testSettingsOpensAsOneNativeWindow() throws {
+        let app = XCUIApplication()
+        // The trial chapter asks macOS for Accessibility and the microphone
+        // through the system's own dialogs; the walk must never wait behind
+        // one. `-OtoUITest` suppresses just those prompts.
+        app.launchArguments += ["-OtoUITest"]
+        app.launch()
+
+        finishOnboardingIfPresent(app)
+        XCTAssertEqual(app.windows.count, 0, "Oto must launch windowless")
+
+        app.activate()
+        app.typeKey(",", modifierFlags: .command)
+
+        let settingsWindow = app.windows.firstMatch
+        XCTAssertTrue(
+            settingsWindow.waitForExistence(timeout: 10),
+            "Exactly one Settings window must open"
+        )
+        XCTAssertEqual(app.windows.count, 1, "Only one Settings window may exist")
+
+        // Native chrome proof: the standard traffic lights exist, and the
+        // native sidebar lists all four destinations (labels, not custom
+        // buttons — rows are native List cells).
+        XCTAssertTrue(settingsWindow.buttons["_XCUI:CloseWindow"].exists)
+        for name in ["General", "Dictation", "Dictionary", "Snippets", "History", "Privacy", "Intelligence"] {
+            XCTAssertTrue(
+                settingsWindow.descendants(matching: .any)[name].exists,
+                "Sidebar must list \(name)"
+            )
+        }
+
+        // Dock setting (phase-5-dock-visibility): single source of truth in
+        // Settings General. Existence only — never flipped here (flipping
+        // would hide the runner's Dock via setActivationPolicy).
+        settingsWindow.descendants(matching: .any)["General"].click()
+        XCTAssertTrue(
+            settingsWindow.descendants(matching: .any)["ShowInDockToggle"]
+                .waitForExistence(timeout: 10),
+            "General must expose the Show-in-Dock toggle"
+        )
+
+        // Catcher toggle: flip it and flip it back, asserting the value
+        // round-trips through the real defaults. Self-restoring by
+        // construction — the runner leaves the pref as it found it.
+        // (The Dock toggle above stays existence-only: flipping it would
+        // hide the runner's Dock.)
+        //
+        // Behavior lives on General (it is how a dictation lands, not what
+        // makes dictation work), so the catcher is asserted here rather than
+        // on Dictation.
+        //
+        // Query by identifier across all types: SwiftUI renders `Toggle` as
+        // an AXSwitch, which the `.toggles` query does not match on macOS
+        // (measured — `.toggles` returns nothing while the switch is present
+        // in the hierarchy). Its value is a number, not "On"/"Off", so the
+        // round-trip compares numeric state.
+        let catcher = settingsWindow.descendants(matching: .any)["CatcherToggle"]
+        XCTAssertTrue(
+            catcher.waitForExistence(timeout: 10),
+            "General must expose the catcher toggle"
+        )
+        func state() -> Int? {
+            if let number = catcher.value as? NSNumber { return number.intValue }
+            if let text = catcher.value as? String { return Int(text) }
+            return nil
+        }
+        guard let before = state() else {
+            XCTFail("Catcher toggle must expose a value")
+            return
+        }
+        catcher.click()
+        wait(
+            for: [expectation(for: NSPredicate(format: "value.intValue != %d", before), evaluatedWith: catcher, handler: nil)],
+            timeout: 5
+        )
+        XCTAssertNotEqual(state(), before, "Catcher toggle must flip from \(before)")
+        catcher.click()
+        wait(
+            for: [expectation(for: NSPredicate(format: "value.intValue == %d", before), evaluatedWith: catcher, handler: nil)],
+            timeout: 5
+        )
+        XCTAssertEqual(state(), before, "Catcher toggle must restore to \(before)")
+    }
+
+    /// First-run onboarding ("Welcome to Oto") is the only window allowed
+    /// at launch besides none. When present: prove it stands alone, walk
+    /// it to Finish (Continue is never gated, Finish marks seen), and prove
+    /// it closes. When absent (already seen): nothing to do.
+    @MainActor
+    private func finishOnboardingIfPresent(_ app: XCUIApplication) {
+        let onboarding = app.windows["Welcome to Oto"]
+        guard onboarding.waitForExistence(timeout: 10) else { return }
+        // The intro plays in a borderless carrier above the window for about
+        // ten seconds, so a second, untitled window can exist while it runs.
+        // What matters is that onboarding is the only real surface.
+        let finish = onboarding.buttons["Finish"]
+        // Welcome, then the chapters: how, catcher, intelligence, dictionary,
+        // and hands-free finishes.
+        for _ in 0 ..< 12 {
+            if finish.exists { break }
+            let button = onboarding.buttons["Continue"].exists
+                ? onboarding.buttons["Continue"]
+                : onboarding.buttons["Next"]
+            guard self.waitUntilHittable(button, timeout: 30) else { break }
+            button.click()
+        }
+        XCTAssertTrue(finish.waitForExistence(timeout: 10), "Onboarding must reach Finish")
+        finish.click()
+        XCTAssertTrue(
+            onboarding.waitForNonExistence(timeout: 10),
+            "Finish must close onboarding"
+        )
+    }
+
+    /// The one button is inert while the intro plays: it exists long before it
+    /// accepts a click, so wait for both.
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+}

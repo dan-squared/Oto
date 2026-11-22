@@ -1,0 +1,137 @@
+//
+//  PersistenceTests.swift
+//  OtoTests
+//
+//  Phase 6A: bytes-level files (round-trip, missing, delete, atomicity)
+//  plus the versioned envelope (schema-mismatch/corrupt backup + empty).
+//
+
+import Foundation
+import Testing
+@testable import Oto
+
+@MainActor
+struct PersistenceTests {
+    private struct Record: Codable, Equatable, Sendable {
+        var name: String
+    }
+
+    /// The stores carry `Date` fields (history timestamps). The envelope
+    /// must round-trip them: `save` writes ISO-8601, so `load` must read it.
+    private struct DatedRecord: Codable, Equatable, Sendable {
+        var name: String
+        var createdAt: Date
+    }
+
+    private func makePersistence() -> LocalPersistence {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        return LocalPersistence(directory: dir)
+    }
+
+    @Test func envelopeRoundTrip() async throws {
+        let persistence = makePersistence()
+        let loaded0: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded0.isEmpty)
+        try await VersionedStoreFile.save([Record(name: "a"), Record(name: "b")], filename: "t.v1.json", via: persistence)
+        let loaded: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded == [Record(name: "a"), Record(name: "b")])
+    }
+
+    @Test func datedEnvelopeRoundTrips() async throws {
+        // Regression: save encoded dates as ISO-8601 while load used the
+        // default (reference-date Double) strategy, so the app moved its own
+        // history file to Backups as "corrupt" on the next launch.
+        let persistence = makePersistence()
+        let date = Date(timeIntervalSince1970: 1_790_000_000)
+        try await VersionedStoreFile.save(
+            [DatedRecord(name: "a", createdAt: date)],
+            filename: "t.v1.json",
+            via: persistence
+        )
+        let loaded: [DatedRecord] = await VersionedStoreFile.load(DatedRecord.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded.count == 1)
+        #expect(abs(loaded.first!.createdAt.timeIntervalSince(date)) < 1)
+        // And it was not moved aside.
+        let backups = try persistence.url(for: "t.v1.json")
+            .deletingLastPathComponent().appendingPathComponent("Backups", isDirectory: true)
+        let contents = (try? FileManager.default.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil)) ?? []
+        #expect(contents.isEmpty)
+    }
+
+    @Test func deleteRemovesFile() async throws {
+        let persistence = makePersistence()
+        try await VersionedStoreFile.save([Record(name: "a")], filename: "t.v1.json", via: persistence)
+        try await persistence.delete(filename: "t.v1.json")
+        let loaded: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded.isEmpty)
+        // Deleting a missing file is not an error.
+        try await persistence.delete(filename: "t.v1.json")
+    }
+
+    @Test func corruptFileBackedUpAndEmptied() async throws {
+        let persistence = makePersistence()
+        try await VersionedStoreFile.save([Record(name: "a")], filename: "t.v1.json", via: persistence)
+        let url = try persistence.url(for: "t.v1.json")
+        try Data("{{not json".utf8).write(to: url, options: .atomic)
+        let loaded: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded.isEmpty)
+        // Original preserved under Backups/, never silently deleted.
+        let backups = url.deletingLastPathComponent().appendingPathComponent("Backups", isDirectory: true)
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: backups, includingPropertiesForKeys: nil
+        )
+        #expect(contents.count == 1)
+        #expect(contents[0].lastPathComponent.contains("corrupt"))
+    }
+
+    @Test func schemaMismatchBackedUpAndEmptied() async throws {
+        let persistence = makePersistence()
+        try await VersionedStoreFile.save([Record(name: "a")], filename: "t.v1.json", via: persistence)
+        let url = try persistence.url(for: "t.v1.json")
+        struct Future: Codable { var schemaVersion: Int; var items: [Record] }
+        let future = try JSONEncoder().encode(Future(schemaVersion: 99, items: [Record(name: "a")]))
+        try future.write(to: url, options: .atomic)
+        let loaded: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded.isEmpty)
+        let backups = url.deletingLastPathComponent().appendingPathComponent("Backups", isDirectory: true)
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: backups, includingPropertiesForKeys: nil
+        )
+        #expect(contents.count == 1)
+        #expect(contents[0].lastPathComponent.contains("schema"))
+    }
+
+    @Test func concurrentSavesStayValid() async throws {
+        let persistence = makePersistence()
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<10 {
+                group.addTask {
+                    try? await VersionedStoreFile.save([Record(name: "n\(index)")], filename: "t.v1.json", via: persistence)
+                }
+            }
+        }
+        // Exactly one writer won; the file is valid either way.
+        let loaded: [Record] = await VersionedStoreFile.load(Record.self, filename: "t.v1.json", via: persistence)
+        #expect(loaded.count == 1)
+    }
+
+    @Test func sandboxedStoreMigratesOnce() throws {
+        // Audit F7: Container-scoped JSON moves over only into an empty
+        // home (never merge/overwrite); second run and non-empty homes
+        // are no-ops.
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let oldDir = tmp.appendingPathComponent("old", isDirectory: true)
+        let newDir = tmp.appendingPathComponent("new", isDirectory: true)
+        try fm.createDirectory(at: oldDir, withIntermediateDirectories: true)
+        try "rules".write(to: oldDir.appendingPathComponent("dictionary.v1.json"), atomically: true, encoding: .utf8)
+        LocalPersistence.migrateSandboxedStoreIfNeeded(home: newDir, containerHome: oldDir)
+        #expect(fm.fileExists(atPath: newDir.appendingPathComponent("dictionary.v1.json").path))
+        try "changed".write(to: oldDir.appendingPathComponent("dictionary.v1.json"), atomically: true, encoding: .utf8)
+        LocalPersistence.migrateSandboxedStoreIfNeeded(home: newDir, containerHome: oldDir)
+        let kept = try String(contentsOf: newDir.appendingPathComponent("dictionary.v1.json"), encoding: .utf8)
+        #expect(kept == "rules")
+        try fm.removeItem(at: tmp)
+    }
+}

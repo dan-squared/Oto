@@ -1,0 +1,136 @@
+//
+//  SnippetStoreTests.swift
+//  OtoTests
+//
+//  Phase 6A: snippet CRUD, validation, preview truncation, and the
+//  manual-only guarantee (no trigger key in v1 JSON, pipeline ignores
+//  snippets by construction).
+//
+
+import Foundation
+import Testing
+@testable import Oto
+
+@MainActor
+struct SnippetStoreTests {
+    private func makeStore() -> SnippetStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        return SnippetStore(persistence: LocalPersistence(directory: dir))
+    }
+
+    @Test func crud() async {
+        let store = makeStore()
+        await store.load()
+        #expect(store.snippets.isEmpty)
+        let added = await store.add(name: "Addr", expansion: "1 Main St", bundleIDs: [])
+        guard case .success(let snippet) = added else {
+            Issue.record("add must succeed"); return
+        }
+        #expect(store.snippets.count == 1)
+        var edited = snippet
+        edited.expansion = "2 Main St"
+        let updated = await store.update(edited)
+        guard case .success = updated else {
+            Issue.record("update must succeed"); return
+        }
+        #expect(store.snippets[0].expansion == "2 Main St")
+        await store.remove(id: snippet.id)
+        #expect(store.snippets.isEmpty)
+    }
+
+    @Test func failedWriteSetsFlagAndKeepsEdit() async throws {
+        // A regular file at the store directory makes createDirectory fail,
+        // so persist() throws. The in-memory edit must survive and the pane
+        // gets a flag to show — the old code only logged the failure.
+        let blocked = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+        try Data("blocked".utf8).write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let store = SnippetStore(persistence: LocalPersistence(directory: blocked))
+        let added = await store.add(name: "Addr", expansion: "1 Main St", bundleIDs: [])
+        guard case .success = added else {
+            Issue.record("add must succeed in memory"); return
+        }
+        #expect(store.saveFailed)
+        #expect(store.snippets.count == 1)
+    }
+
+    @Test func validation() async {
+        let store = makeStore()
+        if case .failure(let error) = await store.add(name: "  ", expansion: "x", bundleIDs: []) {
+            #expect(error == .emptyName)
+        } else { Issue.record("expected emptyName") }
+        if case .failure(let error) = await store.add(name: "n", expansion: "  ", bundleIDs: []) {
+            #expect(error == .emptyExpansion)
+        } else { Issue.record("expected emptyExpansion") }
+        _ = await store.add(name: "Addr", expansion: "x", bundleIDs: [])
+        if case .failure(let error) = await store.add(name: "addr", expansion: "y", bundleIDs: []) {
+            #expect(error == .duplicateName)
+        } else { Issue.record("expected duplicateName (case-insensitive)") }
+        if case .failure(let error) = await store.add(name: "n2", expansion: "x", bundleIDs: ["  "]) {
+            #expect(error == .emptyAppScope)
+        } else { Issue.record("expected emptyAppScope") }
+    }
+
+    @Test func previewTruncates() {
+        let short = Snippet(name: "s", expansion: "hello")
+        #expect(short.preview() == "hello")
+        let long = Snippet(name: "l", expansion: String(repeating: "w ", count: 100))
+        let preview = long.preview()
+        #expect(preview.count <= Snippet.previewLength + 20)
+        #expect(preview.hasSuffix("more)"))
+    }
+
+    @Test func deletePersistsCleanly() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let persistence = LocalPersistence(directory: dir)
+        let store = SnippetStore(persistence: persistence)
+        guard case .success(let first) = await store.add(name: "One", expansion: "1", bundleIDs: []),
+              case .success = await store.add(name: "Two", expansion: "2", bundleIDs: [])
+        else {
+            Issue.record("setup adds must succeed"); return
+        }
+        await store.remove(id: first.id)
+        // Fresh instance over the same file: exactly the survivor.
+        // Proves the file, not just memory — no deleted-row residue.
+        let reloaded = SnippetStore(persistence: persistence)
+        await reloaded.load()
+        #expect(reloaded.snippets.count == 1)
+        #expect(reloaded.snippets[0].name == "Two")
+    }
+
+    @Test func updateMissingIsNotFound() async {
+        let store = makeStore()
+        let ghost = Snippet(name: "Ghost", expansion: "x")
+        let result = await store.update(ghost)
+        if case .failure(let error) = result {
+            #expect(error == .notFound)
+        } else { Issue.record("expected notFound for deleted id") }
+    }
+    @Test func v1SchemaHasNoTriggerKey() async throws {
+        let store = makeStore()
+        // Scoped snippet: every v1 key present, trigger absent by bytes.
+        _ = await store.add(name: "Addr", expansion: "1 Main St", bundleIDs: ["com.a.App"])
+        let encoded = try JSONEncoder().encode(store.snippets[0])
+        let keys = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        #expect(Set(keys.keys) == ["id", "name", "expansion", "bundleIDs"])
+        // Unscoped snippet: the scope key is omitted, still decodes to empty
+        // — still no trigger key.
+        _ = await store.add(name: "Sig", expansion: "bye", bundleIDs: [])
+        let encoded2 = try JSONEncoder().encode(store.snippets[1])
+        let keys2 = try JSONSerialization.jsonObject(with: encoded2) as! [String: Any]
+        #expect(Set(keys2.keys) == ["id", "name", "expansion"])
+    }
+
+    @Test func legacySingleScopeDecodesIntoScopeList() throws {
+        let id = UUID().uuidString
+        let legacy = #"{"id":"\#(id)","name":"Addr","expansion":"1 Main St","bundleID":"com.a.App"}"#
+        let decoded = try JSONDecoder().decode(Snippet.self, from: Data(legacy.utf8))
+        #expect(decoded.bundleIDs == ["com.a.App"])
+
+        let global = #"{"id":"\#(id)","name":"Addr","expansion":"1 Main St"}"#
+        #expect(try JSONDecoder().decode(Snippet.self, from: Data(global.utf8)).bundleIDs.isEmpty)
+    }
+}

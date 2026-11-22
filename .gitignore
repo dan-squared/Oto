@@ -1,0 +1,10 @@
+.context/
+.conductor/
+.DS_Store
+*.profraw
+build/
+updates/*.zip
+updates/appcast.xml
+updates/old_updates/
+Videos/
+*.mov
