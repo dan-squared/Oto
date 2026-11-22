@@ -12,7 +12,6 @@ No cloud servers. No subscriptions. No battery drain. Everything runs completely
 - **100% private and offline:** Built on Apple's native speech recognition. Your voice never leaves your Mac and it works without an internet connection.
 - **Never loses your words:** If you speak without clicking inside a text box first, Oto doesn't lose what you said. It shows a small card with your text and a Copy button.
 - **Custom dictionary:** Add names, acronyms, or technical terms (like *PostgreSQL* or *Kubernetes*) so they are always spelled and capitalized correctly.
-- **Optional AI cleanup:** If you want, you can turn on on-device cleanup to remove "um", fix stumbles, or polish sentences before they are pasted.
 - **Clean floating indicator:** A small, minimal pill on your screen shows when Oto is listening and fades away when you're done.
 - **Audio ducking:** Automatically lowers background music or podcasts while you talk so you don't have to pause them.
 
@@ -28,10 +27,20 @@ If you have a longer thought or note, tap the shortcut once to start recording, 
 
 ---
 
+## Optional on-device AI cleanup
+
+Oto includes an optional cleanup tool powered by Apple's built-in Foundation Models. When turned on, it cleans up your spoken words before pasting them:
+
+- **Auto-cleanup:** Removes filler words ("um", "ah", "like"), accidental repeats, and verbal stumbles so your sentences read clearly.
+- **Quick transforms:** Map a shortcut to automatically format what you say — such as making text more concise, polishing tone for emails, or turning your thoughts into a bulleted list.
+
+It runs 100% on your Apple Silicon chip, meaning your thoughts never get sent to OpenAI, Anthropic, or any third-party cloud.
+
+---
+
 ## Extra tools
 
 - **Snippets:** Save text shortcuts for things you say or type often.
-- **Text transforms:** Quick options to make your dictated text more concise, format it into bullet points, or adjust the tone.
 - **Local history:** A simple, private history of your recent dictations in case you ever need to copy something again.
 
 ---
