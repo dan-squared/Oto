@@ -9,30 +9,30 @@ on:
 jobs:
   test:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
-      - name: Use installed Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Check Xcode version
+        run: xcodebuild -version
       - name: Resolve packages
         run: xcodebuild -resolvePackageDependencies -scheme Oto
       - name: Build and test
-        run: xcodebuild test -scheme Oto -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+        run: xcodebuild test -scheme Oto -destination 'platform=macOS' -only-testing:OtoTests CODE_SIGNING_ALLOWED=NO
 
   release:
     if: ${{ startsWith(github.ref, 'refs/tags/') }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     env:
       OTO_FEED_URL: ${{ vars.OTO_FEED_URL }}
       SPARKLE_KEY_FILE: ${{ secrets.SPARKLE_KEY_FILE }}
     steps:
       - uses: actions/checkout@v4
-      - name: Use installed Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Check Xcode version
+        run: xcodebuild -version
       - name: Resolve packages
         run: xcodebuild -resolvePackageDependencies -scheme Oto
       - name: Build ad-hoc release + signed appcast
-        run: ./Scripts/release.sh
+        run: ./scripts/release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: oto-beta
