@@ -24,7 +24,7 @@ struct DictionaryPane: View {
     @State private var infoRuleID: UUID?
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if dictionary.saveFailed { SaveFailureNote() }
             if dictionary.rules.isEmpty {
                 OtoPaneCanvas {
@@ -94,9 +94,7 @@ struct DictionaryPane: View {
         ) {
             Button("Delete \(dictionary.rules.count) rules", role: .destructive) {
                 Task {
-                    for rule in dictionary.rules {
-                        await dictionary.remove(id: rule.id)
-                    }
+                    await dictionary.clearAll()
                     pushRules()
                 }
             }
@@ -232,22 +230,22 @@ private struct DictionaryRuleEditor: View {
     }
 
     private func save() {
+        error = nil
         Task {
-            let scopes = scopeGlobal ? [] : bundleIDs
+            let scope: AppScope = scopeGlobal ? .global : .apps(bundleIDs)
             if let rule {
                 var edited = rule
                 edited.spoken = spoken
                 edited.replacement = replacement
-                edited.bundleIDs = scopes
                 edited.isEnabled = isEnabled
-                switch await dictionary.update(edited) {
+                switch await dictionary.update(edited, scope: scope) {
                 case .success(let saved): onDone(saved)
                 case .failure(let failure): error = failure.errorDescription
                 }
             } else {
                 switch await dictionary.add(
                     spoken: spoken, replacement: replacement,
-                    bundleIDs: scopes, isEnabled: isEnabled
+                    scope: scope, isEnabled: isEnabled
                 ) {
                 case .success(let saved): onDone(saved)
                 case .failure(let failure): error = failure.errorDescription

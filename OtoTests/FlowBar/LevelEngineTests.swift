@@ -107,6 +107,42 @@ struct LevelEngineTests {
         #expect(box.takeLatest() == nil)
     }
 
+    @Test func directRMSHandlesInterleavedFloat32Int16AndInt32() {
+        let frames = 1024
+        let engine = LevelEngine()
+
+        // Interleaved stereo Float32 with constant 0.1
+        let f32Format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 48_000,
+            channels: 2, interleaved: true
+        )!
+        let f32 = AVAudioPCMBuffer(pcmFormat: f32Format, frameCapacity: AVAudioFrameCount(frames))!
+        f32.frameLength = AVAudioFrameCount(frames)
+        for i in 0..<(frames * 2) { f32.floatChannelData![0][i] = 0.1 }
+        #expect(abs(LevelEngine.rms(f32) - 0.1) < 0.001)
+        #expect(engine.level(f32) > 0)
+
+        // Int16 half-scale (0.5)
+        let i16Format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16, sampleRate: 48_000,
+            channels: 1, interleaved: false
+        )!
+        let i16 = AVAudioPCMBuffer(pcmFormat: i16Format, frameCapacity: AVAudioFrameCount(frames))!
+        i16.frameLength = AVAudioFrameCount(frames)
+        for i in 0..<frames { i16.int16ChannelData![0][i] = 16384 }
+        #expect(abs(LevelEngine.rms(i16) - 0.5) < 0.001)
+
+        // Int32 quarter-scale (0.25)
+        let i32Format = AVAudioFormat(
+            commonFormat: .pcmFormatInt32, sampleRate: 48_000,
+            channels: 1, interleaved: false
+        )!
+        let i32 = AVAudioPCMBuffer(pcmFormat: i32Format, frameCapacity: AVAudioFrameCount(frames))!
+        i32.frameLength = AVAudioFrameCount(frames)
+        for i in 0..<frames { i32.int32ChannelData![0][i] = Int32(1 << 29) }
+        #expect(abs(LevelEngine.rms(i32) - 0.25) < 0.001)
+    }
+
     // MARK: - Helpers
 
     /// The engine consumes 16 kHz mono; convert the 48 kHz test tone

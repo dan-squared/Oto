@@ -9,37 +9,11 @@
 
 import SwiftUI
 
-/// A standard settings action. Glass is reserved for the segmented track and
-/// the recorder popover; ordinary actions use the quiet macOS bordered face.
-struct OtoBig: View {
-    let title: String
-    var filled = true
-    let act: () -> Void
-
-    init(_ title: String, filled: Bool = true, act: @escaping () -> Void) {
-        self.title = title
-        self.filled = filled
-        self.act = act
-    }
-
-    var body: some View {
-        Group {
-            if filled {
-                Button(title, action: act).buttonStyle(.borderedProminent)
-            } else {
-                Button(title, action: act).buttonStyle(.bordered)
-            }
-        }
-        .controlSize(.regular)
-        .tint(OtoPalette.ink)
-    }
-}
-
 /// A native bordered action button. The system supplies its appearance and
 /// interaction states; destructive actions retain their red tint.
-/// `large` steps the system control size up one notch (`.regular` 24 pt →
-/// `.large` 28 pt tall, measured on macOS 27): the catcher footer asks for
-/// "a little bigger, not too big", and that is the only native step.
+/// `large` steps the system control size up to `.large` (28 pt tall, measured
+/// on macOS 27): the catcher footer asks for "a little bigger, not too big",
+/// and that is the only native step.
 struct OtoPill: View {
     let title: String
     var filled = false
@@ -63,30 +37,12 @@ struct OtoPill: View {
                 Button(title, action: action).buttonStyle(.bordered)
             }
         }
-        .controlSize(large ? .regular : .small)
+        .controlSize(large ? .large : .small)
         .tint(tint)
     }
 }
 
-/// Native macOS switch used by settings rows.
-struct OtoSwitch: View {
-    @Binding var on: Bool
-    let title: String
-
-    init(on: Binding<Bool>, title: String = "Setting") {
-        _on = on
-        self.title = title
-    }
-
-    var body: some View {
-        Toggle(title, isOn: $on)
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .accessibilityLabel(title)
-    }
-}
-
-/// Native segmented picker for mutually exclusive options.
+/// Segmented picker for mutually exclusive options.
 struct OtoSegmented<Option: Hashable>: View {
     let options: [(Option, String)]
     @Binding var selection: Option
@@ -94,6 +50,7 @@ struct OtoSegmented<Option: Hashable>: View {
     /// choosers (Auto Cleanup); a value makes the track hug its content so a
     /// settings row can put its label left and the control right.
     var segmentWidth: CGFloat? = nil
+    var accessibilityLabel: String = "Options"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -111,20 +68,28 @@ struct OtoSegmented<Option: Hashable>: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(selection == item.0 || hoveredOption == item.0 ? Color.primary : Color.secondary)
-                .animation(.easeOut(duration: 0.12), value: hoveredOption)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoveredOption)
                 .frame(width: segmentWidth)
                 .frame(maxWidth: segmentWidth == nil ? .infinity : nil)
-                .onHover { hovering in hoveredOption = hovering ? item.0 : nil }
+                .onHover { hovering in
+                    if hovering {
+                        hoveredOption = item.0
+                    } else if hoveredOption == item.0 {
+                        hoveredOption = nil
+                    }
+                }
                 .accessibilityAddTraits(selection == item.0 ? [.isSelected] : [])
             }
         }
         .background(alignment: .leading) {
             GeometryReader { geometry in
+                let segmentW = geometry.size.width / CGFloat(max(options.count, 1))
+                let rawOffset = segmentW * CGFloat(selectedIndex)
                 Capsule()
                     .fill(colorScheme == .dark ? Color.white.opacity(0.15) : Color.white.opacity(0.94))
                     .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.10), radius: 2, y: 1)
-                    .frame(width: geometry.size.width / CGFloat(max(options.count, 1)))
-                    .offset(x: geometry.size.width * CGFloat(selectedIndex) / CGFloat(max(options.count, 1)))
+                    .frame(width: segmentW)
+                    .offset(x: layoutDirection == .rightToLeft ? -rawOffset : rawOffset)
                     .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: selection)
             }
             .allowsHitTesting(false)
@@ -132,7 +97,7 @@ struct OtoSegmented<Option: Hashable>: View {
         }
         .padding(3)
         .background {
-            if #available(macOS 26.0, *), !reduceTransparency {
+            if !reduceTransparency {
                 Color.clear.glassEffect(.regular, in: .capsule)
             } else {
                 Capsule().fill(Color(NSColor.controlBackgroundColor))
@@ -141,46 +106,37 @@ struct OtoSegmented<Option: Hashable>: View {
         .overlay {
             // Hairline track: on a light card the glass capsule and the white
             // selection pill need an edge to read as one control (reference:
-            // the grouped-settings segmented row).
-            Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.7)
+            // the grouped-settings segmented row). Strengthened under Increase Contrast.
+            Capsule().strokeBorder(
+                Color.primary.opacity(colorSchemeContrast == .increased ? 0.28 : 0.10),
+                lineWidth: colorSchemeContrast == .increased ? 1.0 : 0.7
+            )
         }
         .frame(maxWidth: segmentWidth == nil ? .infinity : nil)
         .opacity(isEnabled ? 1 : 0.48)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Options")
+        .accessibilityLabel(accessibilityLabel)
         .onMoveCommand { direction in
-            let nextIndex: Int
+            let step: Int
             switch direction {
-            case .left: nextIndex = max(0, selectedIndex - 1)
-            case .right: nextIndex = min(options.count - 1, selectedIndex + 1)
+            case .left: step = layoutDirection == .rightToLeft ? 1 : -1
+            case .right: step = layoutDirection == .rightToLeft ? -1 : 1
             default: return
             }
+            let nextIndex = min(max(0, selectedIndex + step), options.count - 1)
             guard options.indices.contains(nextIndex) else { return }
             selection = options[nextIndex].0
         }
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.isEnabled) private var isEnabled
     @State private var hoveredOption: Option?
     private var selectedIndex: Int { options.firstIndex { $0.0 == selection } ?? 0 }
-}
-
-/// A native compact icon button for the shortcut editor.
-struct OtoDoor: View {
-    let systemName: String
-    var on = false
-    var help = ""
-    let act: () -> Void
-    var body: some View {
-        Button(action: act) { Image(systemName: systemName) }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .tint(on ? OtoPalette.ink : .secondary)
-        .help(help)
-    }
 }
 
 /// A compact keycap in the quiet filled well used by Firstlight's recorder.
@@ -308,20 +264,30 @@ struct OtoShortcutPill: View {
 /// Press physics for the shortcut face: the capsule grows the same hairline
 /// stroke while the mouse is down, so a click reads as "this is the control I
 /// am editing" before the recorder appears. Hover still only brightens.
+/// Drops `.scaleEffect` completely under Reduce Motion.
 struct OtoShortcutPress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .overlay {
-                Capsule().strokeBorder(
-                    Color.primary.opacity(configuration.isPressed ? 0.34 : 0),
-                    lineWidth: 1
+        ShortcutPressBody(configuration: configuration)
+    }
+
+    private struct ShortcutPressBody: View {
+        let configuration: Configuration
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            configuration.label
+                .overlay {
+                    Capsule().strokeBorder(
+                        Color.primary.opacity(configuration.isPressed ? 0.34 : 0),
+                        lineWidth: 1
+                    )
+                }
+                .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.985 : 1))
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.12),
+                    value: configuration.isPressed
                 )
-            }
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(
-                OtoMotion.reduced ? nil : .easeOut(duration: 0.12),
-                value: configuration.isPressed
-            )
+        }
     }
 }
 
@@ -360,42 +326,29 @@ struct OtoShortcutField: View {
 /// that reads as bounce, never a resize on hover. A `ButtonStyle` — not a
 /// DragGesture modifier — so `configuration.isPressed` is the documented
 /// press signal and it also fires for keyboard activation, which a drag
-/// gesture misses. Deliberately NOT a `PrimitiveButtonStyle`: that
-/// configuration type has `role`/`label`/`trigger()` and no `isPressed`
-/// (SDK: PrimitiveButtonStyleConfiguration vs ButtonStyleConfiguration),
-/// and a `ButtonStyle` still owns the whole appearance — returning the
-/// label untouched is what `.plain` does. Reduce Motion drops the scale.
+/// gesture misses. Reduce Motion drops the scale completely.
 struct OtoBounce: ButtonStyle {
     /// Squish depth. Below ~0.94 the label reads as broken, above ~0.98 it
     /// reads as nothing; 0.96 is the band that reads as bounce.
     var scale: CGFloat = 0.96
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? scale : 1)
-            .animation(
-                OtoMotion.reduced ? nil : .spring(response: 0.25, dampingFraction: 0.55),
-                value: configuration.isPressed
-            )
-    }
-}
-
-/// A native borderless text action inside a settings row.
-struct OtoQuick: View {
-    let title: String
-    var tint: Color = OtoPalette.ink
-    let act: () -> Void
-
-    init(_ title: String, tint: Color = OtoPalette.ink, act: @escaping () -> Void) {
-        self.title = title
-        self.tint = tint
-        self.act = act
+        BounceBody(configuration: configuration, scale: scale)
     }
 
-    var body: some View {
-        Button(title, action: act)
-            .foregroundStyle(tint)
-            .buttonStyle(.borderless)
+    private struct BounceBody: View {
+        let configuration: Configuration
+        let scale: CGFloat
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            configuration.label
+                .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? scale : 1))
+                .animation(
+                    reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.55),
+                    value: configuration.isPressed
+                )
+        }
     }
 }
 

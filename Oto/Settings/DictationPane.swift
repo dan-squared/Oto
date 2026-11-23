@@ -8,7 +8,19 @@
 //  rows without backends do not exist here.
 //
 
+import AppKit
+import Carbon.HIToolbox
 import SwiftUI
+
+private enum KeyboardSettingsLink {
+    nonisolated static func candidates() -> [URL] {
+        [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.keyboard",
+            "x-apple.systempreferences:",
+        ].compactMap(URL.init(string:))
+    }
+}
 
 struct DictationPane: View {
     let dispatch: ShortcutDispatch
@@ -22,6 +34,8 @@ struct DictationPane: View {
     /// recorder popover is still open.
     @State private var holdKind: ShortcutTrigger.Kind
     @State private var handsFreeKind: ShortcutTrigger.Kind
+    @State private var fnUsage: SystemFnUsage = SystemFnUsage.read()
+    @AppStorage(SmartSpacing.defaultsKey) private var smartSpacingEnabled = true
 
     @State private var trialText = ""
 
@@ -69,12 +83,15 @@ struct DictationPane: View {
             }
 #endif
             .onAppear {
-                // Fast only: shortcut summary (the config can change in the
-                // modal or onboarding, so re-sync on every visit and on modal
-                // close) plus grant-in-System-Settings flows live with no
-                // flash (never re-probes speech or devices here).
+                // Re-sync shortcuts, permissions, audio inputs, and fn key
+                // system usage on every visit without resetting hoisted state.
                 syncFromDispatch()
                 uiState.refreshPermissions()
+                uiState.refreshMicrophones()
+                fnUsage = SystemFnUsage.read()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                fnUsage = SystemFnUsage.read()
             }
 
             // One row per shortcut: the grouped Form draws the same divider
@@ -105,6 +122,23 @@ struct DictationPane: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                if usesFnKey && fnUsage != .none {
+                    HStack(spacing: 8) {
+                        Label(
+                            "Set “Press 🌐 key to” → “Do Nothing” in Keyboard Settings for instant fn dictation.",
+                            systemImage: "globe"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Button("Keyboard Settings") {
+                            SettingsLinkOpener.open(KeyboardSettingsLink.candidates())
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
                 if let shortcutMessage {
                     Label(shortcutMessage, systemImage: "exclamationmark.circle")
                         .font(.footnote)
@@ -128,6 +162,13 @@ struct DictationPane: View {
             }
 
             Section {
+                Toggle("Smart spacing", isOn: $smartSpacingEnabled)
+                OtoPanelNote("Automatically adds a leading space when dictating after a word or punctuation mark.")
+            } header: {
+                Text("Formatting")
+            }
+
+            Section {
                 TextEditor(text: $trialText)
                     .font(.body)
                     .frame(minHeight: 70)
@@ -146,11 +187,18 @@ struct DictationPane: View {
     }
 
     private var requiresAccessibility: Bool {
-        func isModifier(_ kind: ShortcutTrigger.Kind) -> Bool {
-            if case .modifierHold = kind { return true }
-            return false
+        func needsAX(_ kind: ShortcutTrigger.Kind) -> Bool {
+            switch kind {
+            case .modifierHold, .functionKey: return true
+            case .combo, .unassigned: return false
+            }
         }
-        return isModifier(holdKind) || isModifier(handsFreeKind)
+        return needsAX(holdKind) || needsAX(handsFreeKind)
+    }
+
+    private var usesFnKey: Bool {
+        let fn = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_Function))
+        return holdKind == fn || handsFreeKind == fn
     }
 
     private func shortcutRow(_ title: String, slot: ShortcutSlot) -> some View {

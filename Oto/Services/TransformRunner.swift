@@ -15,7 +15,7 @@ import Foundation
 import os
 
 /// Serial transform executor. Publishes `currentWork` for the pill feed
-/// (the controller polls it next to the coordinator's feed).
+/// (both pull via `currentWorkLabel()` and push via `workChanges()`).
 actor TransformRunner {
     /// Selection jobs are user-waited, so a longer honest bound than Auto
     /// Cleanup. Missing it leaves the selection untouched, silently.
@@ -27,6 +27,8 @@ actor TransformRunner {
     private let polish: any PolishServing
     private let behaviorProvider: (@Sendable () -> CleanupBehavior)
     private(set) var currentWork: WorkLabel?
+    private var activeRunID: UUID?
+    private var workWaiters: [UUID: AsyncStream<Void>.Continuation] = [:]
     private let log = Logger(subsystem: "app.Oto", category: "transform")
 
     init(
@@ -45,10 +47,40 @@ actor TransformRunner {
 
     func currentWorkLabel() -> WorkLabel? { currentWork }
 
+    /// Event-driven notification stream yielding whenever `currentWork` changes.
+    func workChanges() -> AsyncStream<Void> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            self.workWaiters[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeWorkWaiter(id) }
+            }
+        }
+    }
+
+    private func removeWorkWaiter(_ id: UUID) {
+        workWaiters.removeValue(forKey: id)
+    }
+
+    private func setCurrentWork(_ label: WorkLabel?) {
+        guard currentWork != label else { return }
+        currentWork = label
+        for waiter in workWaiters.values {
+            waiter.yield(())
+        }
+    }
+
+    /// Synchronous target capture helper so `TransformDispatch` can snapshot
+    /// the frontmost app at keypress before any settle sleep or actor hop.
+    nonisolated func captureTarget() -> TargetApplication {
+        targetService.capture()
+    }
+
     /// Runs one transform to completion. Serialized by the caller
     /// (TransformDispatch scope — never call concurrently): cancellation
     /// cooperates at the usual points (fresh checks, race end, replace).
-    func execute(preset: TransformPreset) async {
+    /// `target` may be pre-captured synchronously at keypress.
+    func execute(preset: TransformPreset, target preCapturedTarget: TargetApplication? = nil) async {
         guard behaviorProvider().enabled else { return }
         guard polish.availability() == .available else { return }
         // Custom with no written instruction is idle: fail closed before
@@ -57,11 +89,18 @@ actor TransformRunner {
         if preset == .custom, !CustomPrompt.load().isUsable { return }
         // Target captured synchronously at press, before any Oto UI could
         // appear — never re-resolved later (insertion-rule precedent).
-        let target = targetService.capture()
+        let target = preCapturedTarget ?? targetService.capture()
         guard await targetService.isAlive(target) else { return }
         guard !Task.isCancelled else { return }
-        currentWork = .preset(preset)
-        defer { currentWork = nil }
+        let runID = UUID()
+        activeRunID = runID
+        setCurrentWork(.preset(preset))
+        defer {
+            if activeRunID == runID {
+                activeRunID = nil
+                setCurrentWork(nil)
+            }
+        }
         guard let selection = await grabber.grabSelection(),
               !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
@@ -80,7 +119,7 @@ actor TransformRunner {
             log.info("transform applied chars=\(rewritten.count, privacy: .public)")
         case .recoverableFailure(let reason):
             // Selection stands as it was; native Cmd+Z was never needed.
-            log.info("transform refused (\(reason), privacy: .public); selection stands")
+            log.info("transform refused (\(reason, privacy: .public)); selection stands")
         case .noEditableField:
             log.info("transform refused (no editable field); selection stands")
         }
@@ -96,8 +135,8 @@ actor TransformRunner {
 final class TransformDispatch {
     /// Settle window: a same-family hold `begin` fires on modifier-down
     /// BEFORE any combo completes (queued async emit vs direct Carbon
-    /// delivery — order is racy). Every transform press waits this out,
-    /// then cancels a live hold-to-talk session of its own modifier family,
+    /// delivery — order is racy). Every same-family transform press waits this
+    /// out, then cancels a live hold-to-talk session of its own modifier family,
     /// so stale configs work deterministically instead of flaking. Invisible
     /// against model latency (seconds); pinned, never tuned by feel.
     nonisolated static let comboSettle: Duration = .milliseconds(100)
@@ -106,19 +145,23 @@ final class TransformDispatch {
     private let dictationLive: @Sendable () async -> Bool
     private let dictationKinds: () -> (hold: ShortcutTrigger.Kind, handsFree: ShortcutTrigger.Kind)
     /// Combo-wins safety net: cancels a live hold-to-talk session that this
-    /// press's modifier-down may have started (lossless pre-insertion). Any
-    /// age: the HID layer only reports a combination for a chord that
-    /// actually uses the held modifier, so the hold has already lost.
+    /// press's modifier-down may have started (lossless pre-insertion). Only
+    /// invoked when the pressed transform combo actually shares a modifier
+    /// family with the active hold slot.
     private let cancelHoldForCombination: @Sendable () async -> Bool
     /// Mutual exclusion: dictation keys sleep for the run duration so no
     /// later hold press can strand a session mid-transform. Idle-safe
     /// (nothing active to cancel when a transform legitimately starts).
     private let setDictationSuspended: (Bool) -> Void
+    private let behaviorProvider: @Sendable () -> CleanupBehavior
 
     private var monitors: [TransformPreset: ModifierHotkeyMonitor] = [:]
     private let log = Logger(subsystem: "app.Oto", category: "transform")
     private var transformTask: Task<Void, Never>?
-    private var transformGeneration = 0
+    private var isDictationSuspended = false
+    private var isStarted = false
+    private var registeredEnabledState: Bool?
+    nonisolated(unsafe) private var defaultsObserver: (any NSObjectProtocol)?
     private(set) var shortcuts: TransformShortcuts {
         didSet { shortcuts.save() }
     }
@@ -129,7 +172,8 @@ final class TransformDispatch {
         dictationLive: @Sendable @escaping () async -> Bool,
         dictationKinds: @escaping () -> (hold: ShortcutTrigger.Kind, handsFree: ShortcutTrigger.Kind),
         cancelHoldForCombination: @Sendable @escaping () async -> Bool,
-        setDictationSuspended: @escaping (Bool) -> Void
+        setDictationSuspended: @escaping (Bool) -> Void,
+        behaviorProvider: @Sendable @escaping () -> CleanupBehavior = { CleanupBehavior.current() }
     ) {
         self.runner = runner
         self.shortcuts = shortcuts
@@ -137,14 +181,26 @@ final class TransformDispatch {
         self.dictationKinds = dictationKinds
         self.cancelHoldForCombination = cancelHoldForCombination
         self.setDictationSuspended = setDictationSuspended
+        self.behaviorProvider = behaviorProvider
     }
 
-    /// (Re)register all four combos. Unregisters first: re-registering can
-    /// never leave a stale callback behind. Non-combo kinds never register
-    /// (the UI refuses to save them with guidance — transforms need a
-    /// combination like ⌥1).
+    deinit {
+        if let observer = defaultsObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// (Re)register all four combos when Apple Intelligence is enabled.
+    /// Unregisters first: re-registering can never leave a stale callback
+    /// behind. Non-combo kinds never register (the UI refuses to save them
+    /// with guidance — transforms need a combination like ⌥1).
     func start() {
-        stop()
+        unregisterMonitors()
+        isStarted = true
+        installDefaultsObserverIfNeeded()
+        let enabled = behaviorProvider().enabled
+        registeredEnabledState = enabled
+        guard enabled else { return }
         for preset in TransformPreset.allCases {
             guard case .combo(let modifiers, let keyCode) = shortcuts.kind(for: preset) else { continue }
             let monitor = ModifierHotkeyMonitor()
@@ -154,9 +210,62 @@ final class TransformDispatch {
         }
     }
 
+    /// Re-evaluates hotkey registration against the current
+    /// `CleanupBehavior.enabled` flag without interrupting a stopped state.
+    func refreshRegistration() {
+        guard isStarted else { return }
+        start()
+    }
+
     func stop() {
+        isStarted = false
+        registeredEnabledState = nil
+        transformTask?.cancel()
+        transformTask = nil
+        setSuspended(false)
+        unregisterMonitors()
+    }
+
+    private func unregisterMonitors() {
         monitors.values.forEach { $0.stop() }
         monitors = [:]
+    }
+
+    private func installDefaultsObserverIfNeeded() {
+        guard defaultsObserver == nil else { return }
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isStarted else { return }
+                let nowEnabled = self.behaviorProvider().enabled
+                if self.registeredEnabledState != nowEnabled {
+                    self.start()
+                }
+            }
+        }
+    }
+
+    private func setSuspended(_ suspended: Bool) {
+        guard isDictationSuspended != suspended else { return }
+        isDictationSuspended = suspended
+        setDictationSuspended(suspended)
+    }
+
+    /// Pure modifier-family check: true only when the active hold slot is a
+    /// bare modifier whose family appears in the pressed transform combo.
+    nonisolated static func comboSharesHoldFamily(
+        comboKind: ShortcutTrigger.Kind,
+        holdKind: ShortcutTrigger.Kind
+    ) -> Bool {
+        guard case .combo(let modifiers, _) = comboKind,
+              case .modifierHold(let holdCode) = holdKind
+        else { return false }
+        return ShortcutTrigger.Kind.holdCodeSharesComboFamily(
+            holdCode: holdCode, comboModifiers: modifiers
+        )
     }
 
     /// False when the OS refused registration (used by another app) — the
@@ -173,32 +282,36 @@ final class TransformDispatch {
 
     private func receive(_ event: ShortcutEvent, preset: TransformPreset) {
         guard case .keyDown(let isRepeat) = event, !isRepeat else { return }
-        // Serial scope: a new press cancels the previous run (no piles, no
-        // queues). Generation-guarded resume: a cancelled stale task never
-        // resumes dictation keys early from its defer.
-        transformGeneration += 1
-        let generation = transformGeneration
-        transformTask?.cancel()
+        // Capture target synchronously at keypress (before any settle sleep).
+        let capturedTarget = runner.captureTarget()
+        let pressedKind = shortcuts.kind(for: preset)
+        // Strict serialization: cancel the prior run AND await its cleanup
+        // before starting the new run, so clipboard grabs never overlap and
+        // `setSuspended(false)` can never be leaked.
+        let previousTask = transformTask
+        previousTask?.cancel()
         transformTask = Task { [weak self] in
-            guard let self else { return }
+            await previousTask?.value
+            guard let self, !Task.isCancelled else { return }
             // Settle: let an in-flight hold-begin from THIS press's
-            // modifier-down land, then combo-wins cancel it (lossless) if it
-            // is a same-family hold. Any age: the combination already fired.
+            // modifier-down land, then combo-wins cancel it ONLY if this
+            // transform combo actually shares a modifier family with the hold.
             try? await Task.sleep(for: Self.comboSettle)
             guard !Task.isCancelled else { return }
-            let cancelledHold = await self.cancelHoldForCombination()
-            if cancelledHold {
-                self.log.info("transform cancelled a same-family hold and won")
+            if Self.comboSharesHoldFamily(
+                comboKind: pressedKind,
+                holdKind: self.dictationKinds().hold
+            ) {
+                let cancelledHold = await self.cancelHoldForCombination()
+                if cancelledHold {
+                    self.log.info("transform cancelled a same-family hold and won")
+                }
             }
             // Real sessions (hands-free, other-family hold, finalizing) veto.
             guard await !self.dictationLive() else { return }
-            self.setDictationSuspended(true)
-            defer {
-                if generation == self.transformGeneration {
-                    self.setDictationSuspended(false)
-                }
-            }
-            await self.runner.execute(preset: preset)
+            self.setSuspended(true)
+            defer { self.setSuspended(false) }
+            await self.runner.execute(preset: preset, target: capturedTarget)
         }
     }
 

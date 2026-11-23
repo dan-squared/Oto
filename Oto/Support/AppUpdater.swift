@@ -46,29 +46,29 @@ final class UpdaterStatus {
     }
 }
 
-/// Sparkle calls the delegate from its own queue; hop to the main actor before
-/// touching observable state.
-final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
+/// Sparkle calls the delegate from its own queue; mark methods `nonisolated`
+/// and hop to the main actor before touching observable state.
+final class UpdaterDelegate: NSObject, SPUUpdaterDelegate, Sendable {
     let status: UpdaterStatus
 
-    init(status: UpdaterStatus) {
+    nonisolated init(status: UpdaterStatus) {
         self.status = status
     }
 
-    private func report(_ text: String, busy: Bool = false) {
+    nonisolated private func report(_ text: String, busy: Bool = false) {
         Task { @MainActor in status.set(text, busy: busy) }
     }
 
     // MARK: Testable status transitions
 
-    func markUpToDate() { report("Up to date") }
-    func markFound(_ version: String) { report("Update \(version) found") }
-    func markDownloading() { report("Downloading update…", busy: true) }
-    func markDownloaded() { report("Update downloaded — ready to install") }
-    func markDownloadFailed(_ reason: String) { report("Download failed: \(reason)") }
-    func markCheckFailed(_ reason: String) { report("Update check failed: \(reason)") }
+    nonisolated func markUpToDate() { report("Up to date") }
+    nonisolated func markFound(_ version: String) { report("Update \(version) found") }
+    nonisolated func markDownloading() { report("Downloading update…", busy: true) }
+    nonisolated func markDownloaded() { report("Update downloaded — ready to install") }
+    nonisolated func markDownloadFailed(_ reason: String) { report("Download failed: \(reason)") }
+    nonisolated func markCheckFailed(_ reason: String) { report("Update check failed: \(reason)") }
 
-    func finishCheck(errorMessage: String?) {
+    nonisolated func finishCheck(errorMessage: String?) {
         Task { @MainActor in
             if status.text.hasPrefix("Checking") {
                 status.set(
@@ -83,29 +83,29 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
 
     // MARK: SPUUpdaterDelegate
 
-    func updaterDidNotFindUpdate(_ updater: SPUUpdater) { markUpToDate() }
+    nonisolated func updaterDidNotFindUpdate(_ updater: SPUUpdater) { markUpToDate() }
 
-    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+    nonisolated func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         markFound(item.displayVersionString)
     }
 
-    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+    nonisolated func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
         markDownloading()
     }
 
-    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+    nonisolated func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
         markDownloaded()
     }
 
-    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+    nonisolated func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
         markDownloadFailed(error.localizedDescription)
     }
 
-    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+    nonisolated func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         markCheckFailed(error.localizedDescription)
     }
 
-    func updater(
+    nonisolated func updater(
         _ updater: SPUUpdater,
         didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
         error: Error?
@@ -117,18 +117,22 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
 @MainActor
 final class AppUpdater: NSObject {
     let status = UpdaterStatus()
-    @ObservationIgnored private let controller: SPUStandardUpdaterController
-    @ObservationIgnored private let disabled: Bool
+    private let updaterDelegate: UpdaterDelegate
+    private let controller: SPUStandardUpdaterController
+    private let disabled: Bool
 
     init(
         disabled: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || ProcessInfo.processInfo.environment["OTO_SHOT"] != nil
+            || ProcessInfo.processInfo.environment["OTO_SETTINGS_SHOT"] != nil
             || ProcessInfo.processInfo.arguments.contains("-OtoUITest")
     ) {
         self.disabled = disabled
+        let delegate = UpdaterDelegate(status: self.status)
+        self.updaterDelegate = delegate
         self.controller = SPUStandardUpdaterController(
             startingUpdater: !disabled,
-            updaterDelegate: UpdaterDelegate(status: self.status),
+            updaterDelegate: delegate,
             userDriverDelegate: nil
         )
         super.init()

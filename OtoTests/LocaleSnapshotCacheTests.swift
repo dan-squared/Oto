@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import Synchronization
 import Testing
 @testable import Oto
 
@@ -96,5 +97,25 @@ struct LocaleSnapshotCacheTests {
         let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
         defaults.set(true, forKey: LocaleCacheExperiment.enabledKey)
         #expect(LocaleCacheExperiment.current(defaults: defaults).enabled == true)
+    }
+
+    @Test func invalidatePostsOnInjectedNotificationCenter() {
+        let center = NotificationCenter()
+        let receivedOnInjected = Mutex(0)
+        let token = center.addObserver(
+            forName: .otoSpeechLocaleInvalidated,
+            object: nil,
+            queue: nil
+        ) { _ in
+            receivedOnInjected.withLock { $0 += 1 }
+        }
+        defer { center.removeObserver(token) }
+
+        let cache = LocaleSnapshotCache(notificationCenter: center)
+        cache.store(supported: Self.supported, installed: Self.supported)
+        center.post(name: NSLocale.currentLocaleDidChangeNotification, object: nil)
+
+        #expect(receivedOnInjected.withLock { $0 } == 1)
+        #expect(cache.resolve(current: Locale(identifier: "en_US")) == .requery)
     }
 }

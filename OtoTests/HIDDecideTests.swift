@@ -102,6 +102,23 @@ struct HIDDecideTests {
         #expect(release.emit == .keyUp)
     }
 
+    @Test func keyUpRolloverDoesNotSwallowHold() {
+        let monitor = holdMonitor()
+        _ = monitor.decide(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        _ = monitor.decide(
+            type: .keyUp, keyCode: Int64(kVK_ANSI_U),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        let release = monitor.decide(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: []
+        )
+        #expect(release.emit == .keyUp)
+    }
+
     // MARK: - Function keys: bare press tracked, matched release consumed
 
     @Test func bareFunctionPressEmitsDownConsumed() {

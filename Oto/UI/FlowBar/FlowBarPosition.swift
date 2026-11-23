@@ -9,6 +9,7 @@
 //  slots and snap splits are headless-tested; the panel owns pixels.
 //
 
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -44,23 +45,35 @@ enum FlowBarPosition: String, Sendable, Hashable {
         defaults.set(position.rawValue, forKey: defaultsKey)
     }
 
+    /// Additional top safe inset not already excluded by `screen.visibleFrame`.
+    /// On a normal desktop on a notched MacBook, `visibleFrame` already excludes
+    /// the menu bar/notch strip (so this returns 0); in a Fullscreen Space the
+    /// menu bar auto-hides and `visibleFrame.maxY == frame.maxY`, so this returns
+    /// `safeAreaInsets.top` to keep Top pills/cards below the camera housing.
+    @MainActor
+    static func additionalSafeTopInset(for screen: NSScreen) -> CGFloat {
+        let excludedTop = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
+        return max(0, screen.safeAreaInsets.top - excludedTop)
+    }
+
     /// Slot frame for a card width/height on a screen's visible frame. Same
     /// clamp/center math the panel always used; only Y is slot-dependent.
-    /// `visibleFrame` already excludes the menu bar (and the notch lives
-    /// inside the menu strip), so Top truly sits below the notch on every Mac.
+    /// `safeTopInset` drops the Top slot below the MacBook camera notch when
+    /// `visibleFrame` extends to the top edge (Fullscreen Spaces).
     /// Height-aware: taller cards (permission modal) anchor by their own
     /// height — a fixed pill-height anchor would push their tops under the
     /// menu bar. Defaults to the pill so existing callers are untouched.
     nonisolated static func frame(
         width: CGFloat, height: CGFloat = VisualizerMath.pillHeight,
-        on visible: NSRect, position: FlowBarPosition
+        on visible: NSRect, position: FlowBarPosition,
+        safeTopInset: CGFloat = 0
     ) -> NSRect {
         let clamped = min(width, visible.width - 16)
         let x = max(visible.minX + 8, visible.midX - clamped / 2)
         let y: CGFloat
         switch position {
         case .top:
-            y = visible.maxY - height - Self.topMargin
+            y = visible.maxY - safeTopInset - height - Self.topMargin
         case .bottom:
             y = visible.minY + Self.bottomMargin
         }

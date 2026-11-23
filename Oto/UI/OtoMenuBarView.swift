@@ -22,13 +22,14 @@ struct OtoMenuBarView: View {
     let settings: OtoSettingsWindowController
     let updater: AppUpdater
 
-    @State private var lastSummary = ""
+    @State private var lastError: String?
+    @AppStorage(OnboardingStore.key) private var onboardingVersion = 0
 
     var body: some View {
         // Slice B undo: REMOVED (2026-10-06) — the OS owns undo; History's
         // Undo AI edit + Copy is the single raw-recovery path.
-        if lastSummary.hasPrefix("failed:") {
-            Text(lastSummary)
+        if let lastError {
+            Text(lastError)
             Button("Open Settings…") {
                 settings.show()
             }
@@ -37,7 +38,7 @@ struct OtoMenuBarView: View {
         // Onboarding stays while the first-run flow is being refined: it is
         // the only way to reach the walkthrough on demand. Until the walk is
         // finished the entry says what it does — continue, not start over.
-        Button(OnboardingStore.shouldShow() ? "Continue setup…" : "Show onboarding…") {
+        Button(onboardingVersion < OnboardingStore.current ? "Continue setup…" : "Show onboarding…") {
             onboarding.show()
         }
         // The button itself changes label (Checking… / Up to date / error);
@@ -49,22 +50,24 @@ struct OtoMenuBarView: View {
         Button("Settings…") {
             settings.show()
         }
+        .keyboardShortcut(",", modifiers: .command)
         Divider()
         Button("Quit Oto") {
             NSApplication.shared.terminate(nil)
         }
+        .keyboardShortcut("q", modifiers: .command)
         .task {
             await refreshStatus()
-        }
-        // Opening the menu activates the app; that is the natural moment to
-        // re-read the coordinator's one-shot summary (no polling timer).
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await self.refreshStatus() }
+            let stream = await coordinator.stateChanges()
+            for await _ in stream {
+                guard !Task.isCancelled else { break }
+                await refreshStatus()
+            }
         }
     }
 
     @MainActor
     private func refreshStatus() async {
-        lastSummary = await coordinator.lastSessionSummary()
+        lastError = await coordinator.menuErrorSummary()
     }
 }

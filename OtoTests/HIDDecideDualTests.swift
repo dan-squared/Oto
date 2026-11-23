@@ -339,4 +339,209 @@ struct HIDDecideDualTests {
         #expect(chord.combination == .hold)
         #expect(monitor.isInCombination(code: UInt16(kVK_Function)) == true)
     }
+
+    // MARK: - Regression tests (rollover, sided flags, multi-slot combo, fn/Globe)
+
+    @Test func keyUpRolloverDoesNotDisqualifyHold() {
+        // Releasing a typed letter right after pressing Right ⌥ must not
+        // falsely mark combination-use (typing rollover).
+        let monitor = dualMonitor()
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        let rolloverUp = monitor.decideRouted(
+            type: .keyUp, keyCode: Int64(kVK_ANSI_A),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        #expect(rolloverUp.combinations.isEmpty)
+        #expect(monitor.isInCombination(code: UInt16(kVK_RightOption)) == false)
+        let release = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: []
+        )
+        #expect(release.emit == .keyUp)
+    }
+
+    @Test func sidedModifierReleaseDoesNotStickWhenOppositeSideHeld() {
+        // Holding Left ⌥ while pressing and releasing Right ⌥: device-sided
+        // bits (0x20 vs 0x40) detect Right ⌥ release cleanly even though
+        // generic .maskAlternate stays set.
+        let monitor = dualMonitor()
+        let leftAndRightAlt = CGEventFlags(rawValue:
+            CGEventFlags.maskAlternate.rawValue
+                | ModifierHoldState.deviceLeftAltMask
+                | ModifierHoldState.deviceRightAltMask
+        )
+        let leftOnlyAlt = CGEventFlags(rawValue:
+            CGEventFlags.maskAlternate.rawValue
+                | ModifierHoldState.deviceLeftAltMask
+        )
+        let down = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: leftAndRightAlt
+        )
+        #expect(down.slot == .hold)
+        #expect(down.emit == .keyDown(isRepeat: false))
+
+        let up = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: leftOnlyAlt
+        )
+        #expect(up.slot == .hold)
+        #expect(up.emit == .keyUp)
+    }
+
+    @Test func bothHeldSlotsReceiveCombinationWhenChordUsesBothModifiers() {
+        let monitor = dualMonitor()
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightOption),
+            isRepeat: false, flags: [.maskAlternate]
+        )
+        _ = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_RightCommand),
+            isRepeat: false, flags: [.maskAlternate, .maskCommand]
+        )
+        let chord = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_ANSI_A),
+            isRepeat: false, flags: [.maskAlternate, .maskCommand]
+        )
+        #expect(chord.combinations == [.hold, .handsFree])
+    }
+
+    @Test func globeKeyCodeAndKeyDownFnRouteToFnHold() {
+        let monitor = HIDEventMonitor()
+        monitor.configure(
+            holdSlots: [UInt16(kVK_Function): .hold],
+            functionSlots: [:]
+        )
+        // Globe keycode (179) via flagsChanged
+        let globeDown = monitor.decideRouted(
+            type: .flagsChanged, keyCode: HIDEventMonitor.globeKeyCode,
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(globeDown.slot == .hold)
+        #expect(globeDown.emit == .keyDown(isRepeat: false))
+        #expect(!globeDown.consume)
+        let globeUp = monitor.decideRouted(
+            type: .flagsChanged, keyCode: HIDEventMonitor.globeKeyCode,
+            isRepeat: false, flags: []
+        )
+        #expect(globeUp.slot == .hold)
+        #expect(globeUp.emit == .keyUp)
+
+        // External keyboard delivering fn (63) as keyDown/keyUp
+        let keyDown = monitor.decideRouted(
+            type: .keyDown, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: []
+        )
+        #expect(keyDown.slot == .hold)
+        #expect(keyDown.emit == .keyDown(isRepeat: false))
+        #expect(keyDown.combinations.isEmpty)
+        #expect(!keyDown.consume)
+        let keyUp = monitor.decideRouted(
+            type: .keyUp, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: []
+        )
+        #expect(keyUp.slot == .hold)
+        #expect(keyUp.emit == .keyUp)
+    }
+
+    @Test func hidManagerFnDeduplicatesAgainstCGEventTap() {
+        let monitor = HIDEventMonitor()
+        monitor.configure(
+            holdSlots: [UInt16(kVK_Function): .hold],
+            functionSlots: [:]
+        )
+        // IOHIDManager reports physical down first…
+        let hidDown = monitor.decideHIDFn(isDown: true)
+        #expect(hidDown.slot == .hold)
+        #expect(hidDown.emit == .keyDown(isRepeat: false))
+        // …CGEventTap's flagsChanged is cleanly deduplicated.
+        let tapDown = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(tapDown.emit == nil)
+
+        // IOHIDManager reports physical up first…
+        let hidUp = monitor.decideHIDFn(isDown: false)
+        #expect(hidUp.slot == .hold)
+        #expect(hidUp.emit == .keyUp)
+        // …CGEventTap's release is cleanly deduplicated.
+        let tapUp = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: []
+        )
+        #expect(tapUp.emit == nil)
+    }
+
+    @Test func fnReleasesOnAnyFlagsChangedClearingSecondaryFn() {
+        let monitor = HIDEventMonitor()
+        monitor.configure(
+            holdSlots: [UInt16(kVK_Function): .hold],
+            functionSlots: [:]
+        )
+        let down = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(down.slot == .hold)
+        #expect(down.emit == .keyDown(isRepeat: false))
+
+        // macOS can deliver fn release with keyCode == 0 or another modifier's
+        // keyCode while clearing `.maskSecondaryFn` — must still close cleanly.
+        let upZero = monitor.decideRouted(
+            type: .flagsChanged, keyCode: 0,
+            isRepeat: false, flags: []
+        )
+        #expect(upZero.slot == .hold)
+        #expect(upZero.emit == .keyUp)
+
+        // Also supports keyCode == 0 fn press + release via another modifier's flagsChanged.
+        let downZero = monitor.decideRouted(
+            type: .flagsChanged, keyCode: 0,
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(downZero.slot == .hold)
+        #expect(downZero.emit == .keyDown(isRepeat: false))
+
+        let upViaShift = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Shift),
+            isRepeat: false, flags: [.maskShift]
+        )
+        #expect(upViaShift.slot == .hold)
+        #expect(upViaShift.emit == .keyUp)
+
+        // MacBook Globe/fn tap emits BOTH keyDown/keyUp(179, .maskSecondaryFn)
+        // AND flagsChanged(63, .maskSecondaryFn). Must emit ONE keyDown and ONE
+        // keyUp for the tap — never two (which would turn a single click to stop
+        // hands-free into a fake double-tap).
+        let globeKeyDown = monitor.decideRouted(
+            type: .keyDown, keyCode: HIDEventMonitor.globeKeyCode,
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(globeKeyDown.emit == nil)
+        #expect(globeKeyDown.combinations.isEmpty)
+
+        let flagsDown = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(flagsDown.slot == .hold)
+        #expect(flagsDown.emit == .keyDown(isRepeat: false))
+
+        let globeKeyUp = monitor.decideRouted(
+            type: .keyUp, keyCode: HIDEventMonitor.globeKeyCode,
+            isRepeat: false, flags: [.maskSecondaryFn]
+        )
+        #expect(globeKeyUp.emit == nil)
+
+        let flagsUp = monitor.decideRouted(
+            type: .flagsChanged, keyCode: Int64(kVK_Function),
+            isRepeat: false, flags: []
+        )
+        #expect(flagsUp.slot == .hold)
+        #expect(flagsUp.emit == .keyUp)
+    }
 }

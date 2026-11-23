@@ -78,4 +78,24 @@ struct BufferConverterTests {
         #expect(out2.frameLength > 0)
         #expect(abs(Int(out2.frameLength) - 743) <= 3)
     }
+
+    @Test func flushAndResetWorkCleanlyAcrossSessions() throws {
+        let converter = BufferConverter()
+        let target = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+        let input = makeBuffer(sampleRate: 48_000, channels: 1, frames: 2048)
+
+        let out1 = try converter.convertBuffer(input, to: target)
+        #expect(out1.frameLength > 0)
+        // Flush drains any trailing resampler frames without throwing.
+        if let flushed = try converter.flush(to: target) {
+            #expect(flushed.format == target)
+            #expect(flushed.frameLength > 0)
+        }
+
+        // Reset clears converter state; subsequent session converts cleanly.
+        converter.reset()
+        #expect(try converter.flush(to: target) == nil)
+        let out2 = try converter.convertBuffer(input, to: target)
+        #expect(out2.frameLength > 0)
+    }
 }

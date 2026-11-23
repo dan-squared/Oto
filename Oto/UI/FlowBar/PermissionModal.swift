@@ -27,6 +27,7 @@
 //
 
 import AppKit
+import QuartzCore
 
 /// Grant-button routing. Pure so the branch is headless-tested without
 /// touching TCC: undetermined → the system prompt ("access giving window");
@@ -113,6 +114,15 @@ final class PermissionCardView: NSView {
     /// disagree.
     private let ramp = CAGradientLayer()
     private let capsule = CAShapeLayer()
+    /// GPU-composited reveal silhouette masking the root layer during the
+    /// pill → card expansion. Animating the mask path instead of scaling the
+    /// root layer keeps `NSGlassEffectView`, text, and the "Allow Microphone"
+    /// button at 1:1 crisp resolution with zero horizontal squishing or
+    /// WindowServer glass-resampling stutter.
+    private let revealMask = CAShapeLayer()
+    private var isMorphing = false
+    private var morphFinishTask: Task<Void, Never>?
+    private var morphGeneration: UInt64 = 0
     /// The real material, exactly as the pill builds it: frost with the
     /// palette's tint, hosting an ink view that carries the scrim, the ramp
     /// and every subview (AppKit only guarantees the content view sits
@@ -124,6 +134,9 @@ final class PermissionCardView: NSView {
     private(set) var contentSize: NSSize = .zero
     private var didClampTitle = false
     private(set) var copy = PermissionCardCopy.forStatus(.notDetermined)
+
+    nonisolated static let morphAnimationKey = "oto.permission.morph"
+    nonisolated static let morphDuration: Double = 0.38
 
     /// The card's colour is FIXED red, not the pill's choice: this is a
     /// permission failure, and a warning that turns sky blue because of a
@@ -138,6 +151,8 @@ final class PermissionCardView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        revealMask.fillColor = NSColor.black.cgColor
+        layer?.mask = revealMask
 
         // The pill's hierarchy, verbatim: a real glass capsule whose content
         // view carries the scrim, the ramp and every subview.
@@ -151,6 +166,7 @@ final class PermissionCardView: NSView {
         ramp.mask = capsule
         ink.layer?.addSublayer(ramp)
         glass.style = .regular
+        glass.effectIsInteractive = true
         glass.contentView = ink
         addSubview(glass)
 
@@ -176,6 +192,10 @@ final class PermissionCardView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("PermissionCardView has no nib")
+    }
+
+    isolated deinit {
+        morphFinishTask?.cancel()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -275,6 +295,10 @@ final class PermissionCardView: NSView {
         capsule.path = path
         capsule.frame = rect
         ramp.frame = rect
+        revealMask.frame = bounds
+        if !isMorphing {
+            revealMask.path = path
+        }
 
         let midY = h / 2
         title.frame = CGRect(
@@ -292,37 +316,128 @@ final class PermissionCardView: NSView {
         onGrant?()
     }
 
-    /// Expands out of the pill's own rect. The card is a capsule at every
-    /// scale, so a scale transform IS the shape morph — no radius to
-    /// interpolate, no window resize (catcher precedent), and the slot edge
-    /// stays put while the silhouette opens.
-    func morph(from pill: NSRect, card: NSRect, position: FlowBarPosition) {
-        guard let layer, card.width > 0, card.height > 0 else { return }
-        let sx0 = pill.width / card.width
-        let sy0 = pill.height / card.height
-        // Anchor on the edge the pill shares with the card: top slot grows
-        // downward, bottom slot upward (y-up layer space).
-        layer.anchorPoint = CGPoint(x: 0.5, y: position == .top ? 1 : 0)
-        layer.position = CGPoint(
-            x: bounds.midX, y: position == .top ? bounds.maxY : bounds.minY
-        )
-        let values = MorphCurve.stops.map { stop -> NSValue in
-            let t = CGFloat(stop.value)
-            let sx = sx0 + (1 - sx0) * t
-            let sy = sy0 + (1 - sy0) * t
-            return NSValue(caTransform3D: CATransform3DMakeScale(sx, sy, 1))
+    /// Pure scale transform around the slot edge without mutating the root
+    /// `NSView` layer's `anchorPoint` or `position`. Works for any layer
+    /// `anchorPoint` (AppKit layer-backed views default to `(0, 0)`).
+    nonisolated static func morphTransform(
+        bounds: CGRect,
+        anchorPoint: CGPoint,
+        position: FlowBarPosition,
+        sx: CGFloat,
+        sy: CGFloat
+    ) -> CATransform3D {
+        let anchorX = bounds.width * anchorPoint.x
+        let anchorY = bounds.height * anchorPoint.y
+        let pivotX = bounds.midX
+        let pivotY = position == .top ? bounds.maxY : bounds.minY
+        let dx = pivotX - anchorX
+        let dy = pivotY - anchorY
+        var transform = CATransform3DMakeTranslation(dx, dy, 0)
+        transform = CATransform3DScale(transform, sx, sy, 1)
+        transform = CATransform3DTranslate(transform, -dx, -dy, 0)
+        return transform
+    }
+
+    /// Smoothly reveals the card out of the pill's capsule using a GPU-composited
+    /// `CAShapeLayer` mask path animation (`MorphGeometry.path` + `MorphCurve`),
+    /// matching `CatcherSurfaceView`. Never scales `NSGlassEffectView` or squishes
+    /// the "Allow Microphone" button/text, and never mutates `layer.anchorPoint`.
+    func morph(
+        from pill: NSRect,
+        card: NSRect,
+        position: FlowBarPosition,
+        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    ) {
+        guard card.width > 0, card.height > 0 else { return }
+        morphGeneration += 1
+        let generation = morphGeneration
+        morphFinishTask?.cancel()
+        morphFinishTask = nil
+        revealMask.removeAnimation(forKey: Self.morphAnimationKey)
+        layer?.removeAnimation(forKey: Self.morphAnimationKey)
+        layer?.transform = CATransform3DIdentity
+        title.layer?.removeAllAnimations()
+        button.layer?.removeAllAnimations()
+
+        let finalPath = MorphGeometry.path(bounds, radius: Self.cardRadius)
+        guard !reduceMotion else {
+            isMorphing = false
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            revealMask.frame = bounds
+            revealMask.path = finalPath
+            title.alphaValue = 1
+            button.alphaValue = 1
+            CATransaction.commit()
+            return
         }
-        let anim = CAKeyframeAnimation(keyPath: "transform")
+
+        let localPill = NSRect(
+            x: pill.minX - card.minX,
+            y: pill.minY - card.minY,
+            width: pill.width,
+            height: pill.height
+        )
+        let values: [Any] = MorphCurve.stops.map { stop in
+            let rect = MorphGeometry.rect(
+                pill: localPill, card: bounds, position: position, progress: stop.value
+            )
+            let radius = MorphGeometry.radius(
+                pillHeight: localPill.height, cardRadius: Self.cardRadius, progress: stop.value
+            )
+            return MorphGeometry.path(rect, radius: radius)
+        }
+
+        isMorphing = true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        revealMask.frame = bounds
+        revealMask.path = finalPath
+        title.alphaValue = 0
+        button.alphaValue = 0
+        CATransaction.commit()
+
+        let anim = CAKeyframeAnimation(keyPath: "path")
         anim.values = values
         anim.keyTimes = MorphCurve.keyTimes
-        anim.duration = 0.42
-        anim.timingFunction = CAMediaTimingFunction(name: .linear)
+        anim.calculationMode = .linear
+        anim.duration = Self.morphDuration
         anim.fillMode = .backwards
-        layer.add(anim, forKey: "oto.permission.morph")
-        layer.transform = CATransform3DIdentity
+        anim.isRemovedOnCompletion = true
+        revealMask.add(anim, forKey: Self.morphAnimationKey)
+
+        // Fade inner text & "Allow Microphone" button in crisply at 1:1 size
+        // while the glass capsule opens around them.
+        morphFinishTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(55))
+            guard let self, !Task.isCancelled, generation == self.morphGeneration else { return }
+            self.fadeContentIn()
+            try? await Task.sleep(for: .milliseconds(Int(Self.morphDuration * 1000)))
+            guard !Task.isCancelled, generation == self.morphGeneration else { return }
+            self.isMorphing = false
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.revealMask.path = MorphGeometry.path(self.bounds, radius: Self.cardRadius)
+            self.title.alphaValue = 1
+            self.button.alphaValue = 1
+            CATransaction.commit()
+        }
+    }
+
+    private func fadeContentIn() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
+            self.title.animator().alphaValue = 1
+            self.button.animator().alphaValue = 1
+        }
     }
 
     // MARK: - Test hooks (no window needed)
+
+    func hasActiveMorphAnimation() -> Bool {
+        revealMask.animation(forKey: Self.morphAnimationKey) != nil
+    }
 
     func titleText() -> String { title.stringValue }
     func contentWidth() -> CGFloat { contentSize.width }
@@ -358,6 +473,9 @@ final class PermissionModalController {
     /// supersedes the earlier 10 s hold: a permission nudge is not a
     /// notification, and the card sat long enough to be mistaken for one.
     nonisolated static let visibleDuration: Double = 5.0
+    /// Extended hold when VoiceOver is running so screen-reader users have
+    /// time to hear the prompt and reach the action button.
+    nonisolated static let voiceOverVisibleDuration: Double = 15.0
 
     private var panel: NSPanel?
     private var card: PermissionCardView?
@@ -366,6 +484,10 @@ final class PermissionModalController {
     private var showGeneration: UInt64 = 0
     /// Internal for tests: prewarm stability.
     var hasPanel: Bool { panel != nil }
+
+    isolated deinit {
+        hideTask?.cancel()
+    }
 
     /// MainActor-bound (MicrophoneStatus's synthesized Equatable inherits
     /// default isolation); all callers — grant() and tests — are MainActor.
@@ -391,7 +513,11 @@ final class PermissionModalController {
         }
     }
 
-    func show(displayID: CGDirectDisplayID?, position: FlowBarPosition) {
+    func show(
+        displayID: CGDirectDisplayID?,
+        position: FlowBarPosition,
+        reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    ) {
         prewarm()
         // The card's words follow the live status: macOS prompts natively
         // only while undetermined; after a denial this card is the route.
@@ -400,8 +526,10 @@ final class PermissionModalController {
             contentWidth = card.contentSize.width
         }
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
+        let safeTop = FlowBarPosition.additionalSafeTopInset(for: screen)
         let frame = FlowBarPosition.frame(
-            width: contentWidth, height: Self.height, on: screen.visibleFrame, position: position
+            width: contentWidth, height: Self.height,
+            on: screen.visibleFrame, position: position, safeTopInset: safeTop
         )
         // The card opens out of the pill, not on top of it: same slot,
         // same capsule, the reference's 420 ms shape curve.
@@ -409,33 +537,51 @@ final class PermissionModalController {
             width: VisualizerMath.dictationWidth,
             height: VisualizerMath.pillHeight,
             on: screen.visibleFrame,
-            position: position
+            position: position,
+            safeTopInset: safeTop
         )
-        card?.morph(from: pill, card: frame, position: position)
-        // A fresh show supersedes any pending fade: full 5s, never truncated.
+        // A fresh show supersedes any pending fade: full window, never truncated.
         showGeneration += 1
         let generation = showGeneration
         hideTask?.cancel()
-        panel?.setFrame(frame, display: false)
-        panel?.alphaValue = 0
+        // Position and lay out at final 1:1 resolution BEFORE ordering front,
+        // arm the mask-reveal animation, then order front so frame 0 starts
+        // cleanly at the pill silhouette with zero glass-resampling stutter.
+        panel?.setFrame(frame, display: true)
+        panel?.alphaValue = 1
+        card?.morph(from: pill, card: frame, position: position, reduceMotion: reduceMotion)
         // orderFront, never key: focus must stay wherever the user had it.
         panel?.orderFront(nil)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel?.animator().alphaValue = 1
+        if let app = NSApp, let title = card?.copy.title {
+            NSAccessibility.post(
+                element: app,
+                notification: .announcementRequested,
+                userInfo: [
+                    NSAccessibility.NotificationUserInfoKey.announcement: title,
+                    NSAccessibility.NotificationUserInfoKey.priority: NSAccessibilityPriorityLevel.high.rawValue,
+                ]
+            )
         }
-        hideTask = Task {
-            try? await Task.sleep(for: .seconds(Self.visibleDuration))
-            guard !Task.isCancelled, generation == self.showGeneration else { return }
+        let duration = NSWorkspace.shared.isVoiceOverEnabled
+            ? Self.voiceOverVisibleDuration
+            : Self.visibleDuration
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard let self, !Task.isCancelled, generation == self.showGeneration else { return }
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                self.panel?.orderOut(nil)
+                return
+            }
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.15
                 context.timingFunction = CAMediaTimingFunction(name: .easeIn)
                 self.panel?.animator().alphaValue = 0
-            }, completionHandler: {
-                // Late hide() already ordered out: only land when still ours.
-                if generation == self.showGeneration {
-                    self.panel?.orderOut(nil)
+            }, completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    // Late hide() already ordered out: only land when still ours.
+                    if let self, generation == self.showGeneration {
+                        self.panel?.orderOut(nil)
+                    }
                 }
             })
         }
@@ -454,6 +600,7 @@ final class PermissionModalController {
 
     /// Test seam: opener injectable so tests never launch Settings.
     func grant(opener: (URL) -> Bool = { NSWorkspace.shared.open($0) }) {
+        hide()
         switch Self.action(for: PermissionsManager().microphoneStatus()) {
         case .systemPrompt:
             Task { _ = await PermissionsManager().requestMicrophone() }

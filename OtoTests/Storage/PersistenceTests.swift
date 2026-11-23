@@ -12,13 +12,13 @@ import Testing
 
 @MainActor
 struct PersistenceTests {
-    private struct Record: Codable, Equatable, Sendable {
+    nonisolated private struct Record: Codable, Equatable, Sendable {
         var name: String
     }
 
     /// The stores carry `Date` fields (history timestamps). The envelope
     /// must round-trip them: `save` writes ISO-8601, so `load` must read it.
-    private struct DatedRecord: Codable, Equatable, Sendable {
+    nonisolated private struct DatedRecord: Codable, Equatable, Sendable {
         var name: String
         var createdAt: Date
     }
@@ -133,5 +133,72 @@ struct PersistenceTests {
         let kept = try String(contentsOf: newDir.appendingPathComponent("dictionary.v1.json"), encoding: .utf8)
         #expect(kept == "rules")
         try fm.removeItem(at: tmp)
+    }
+
+    @Test func migrationIgnoresNonJsonEntriesLikeCrashesAndDSStore() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let oldDir = tmp.appendingPathComponent("old", isDirectory: true)
+        let newDir = tmp.appendingPathComponent("new", isDirectory: true)
+        try fm.createDirectory(at: oldDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: newDir.appendingPathComponent("Crashes", isDirectory: true), withIntermediateDirectories: true)
+        try Data().write(to: newDir.appendingPathComponent(".DS_Store"))
+        try "rules".write(to: oldDir.appendingPathComponent("dictionary.v1.json"), atomically: true, encoding: .utf8)
+
+        LocalPersistence.migrateSandboxedStoreIfNeeded(home: newDir, containerHome: oldDir)
+        #expect(fm.fileExists(atPath: newDir.appendingPathComponent("dictionary.v1.json").path))
+        try fm.removeItem(at: tmp)
+    }
+
+    @Test func permissionsAndBackupExclusionAreApplied() async throws {
+        let persistence = makePersistence()
+        try await VersionedStoreFile.save([Record(name: "secret")], filename: HistoryStore.filename, via: persistence)
+        let fileURL = try persistence.url(for: HistoryStore.filename)
+        let dirURL = fileURL.deletingLastPathComponent()
+
+        let dirPerms = try FileManager.default.attributesOfItem(atPath: dirURL.path)[.posixPermissions] as? Int
+        let filePerms = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.posixPermissions] as? Int
+        #expect(dirPerms == 0o700)
+        #expect(filePerms == 0o600)
+
+        let values = try fileURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        #expect(values.isExcludedFromBackup == true)
+    }
+
+    @Test func rapidBackupsSanitizeColonsAndDoNotCollide() async throws {
+        let persistence = makePersistence()
+        let url = try persistence.url(for: HistoryStore.filename)
+        for index in 0..<2 {
+            try await persistence.write(Data("bad \(index)".utf8), filename: HistoryStore.filename)
+            await persistence.moveAside(filename: HistoryStore.filename, reason: "corrupt")
+        }
+        let backups = url.deletingLastPathComponent().appendingPathComponent("Backups", isDirectory: true)
+        let backupValues = try backups.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        #expect(backupValues.isExcludedFromBackup == true)
+        let contents = try FileManager.default.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil)
+        #expect(contents.count == 2)
+        for file in contents {
+            #expect(!file.lastPathComponent.contains(":"))
+        }
+        await persistence.purgeBackups(matchingPrefix: "history.v1")
+        let remaining = try FileManager.default.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil)
+        #expect(remaining.isEmpty)
+    }
+
+    @Test func readDistinguishesMissingFromRealIOError() async throws {
+        let persistence = makePersistence()
+        let missing = try await persistence.read(filename: "does-not-exist.v1.json")
+        #expect(missing == nil)
+
+        // A directory at the target filename triggers a real read error (EISDIR),
+        // not a clean missing file.
+        let fileURL = try persistence.url(for: "broken.v1.json")
+        try FileManager.default.createDirectory(at: fileURL, withIntermediateDirectories: true)
+        let outcome = await VersionedStoreFile.loadOutcome(Record.self, filename: "broken.v1.json", via: persistence)
+        if case .readError = outcome {
+            // expected
+        } else {
+            Issue.record("expected .readError for unreadable file path")
+        }
     }
 }

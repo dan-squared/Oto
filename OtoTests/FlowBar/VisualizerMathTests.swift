@@ -251,6 +251,25 @@ struct VisualizerMathTests {
         #expect(VisualizerMath.shineBaseAlpha == 0.45)
     }
 
+    @Test func messagePillWidthExpandsForLongNoticesAndFloorsAtDictation() {
+        // UI-02: short "Copied" stays at dictationWidth (80.85 pt) so it's a
+        // re-render with no resize; full error messages expand up to 320 pt.
+        let copiedW = VisualizerMath.messagePillWidth(
+            textWidth: VisualizerMath.measureWorkText("Copied")
+        )
+        #expect(copiedW == VisualizerMath.dictationWidth)
+
+        let errorText = "Audio capture failed — check the microphone"
+        let errorMeasured = VisualizerMath.measureWorkText(errorText)
+        let errorW = VisualizerMath.messagePillWidth(textWidth: errorMeasured)
+        #expect(errorW > VisualizerMath.dictationWidth)
+        #expect(errorW >= ceil(errorMeasured) + VisualizerMath.workPadding * 2)
+        #expect(errorW <= VisualizerMath.messageMaxWidth)
+
+        let hugeW = VisualizerMath.messagePillWidth(textWidth: 1000)
+        #expect(hugeW == VisualizerMath.messageMaxWidth)
+    }
+
     // MARK: - Helpers
 
     /// Linear RMS amplitude for a dBFS value: dB = 20 log10(rms).

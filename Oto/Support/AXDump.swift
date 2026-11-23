@@ -30,7 +30,9 @@ enum AXDump {
         guard let arg = arguments.first(where: {
             $0 == launchArgument || $0.hasPrefix(launchArgument + "=")
         }) else { return }
-        let spec = arg.contains("=") ? String(arg.split(separator: "=", maxSplits: 1)[1]) : ""
+        let spec = arg.hasPrefix(launchArgument + "=")
+            ? String(arg.dropFirst(launchArgument.count + 1))
+            : ""
         let pid = resolvePID(spec)
         emit("axdump trusted=\(AXIsProcessTrusted()) target=\(spec.isEmpty ? "frontmost" : spec) pid=\(pid)")
         if pid > 0 { dump(pid: pid) }
@@ -88,7 +90,8 @@ enum AXDump {
         guard visited < maxNodes, depth <= maxDepth else { return }
         visited += 1
         let indent = String(repeating: "  ", count: depth)
-        emit("\(indent)\(describe(node))")
+        let kids = childrenOf(node)
+        emit("\(indent)\(describe(node, childCount: kids.count))")
         // Which elements publish a verifiable caret? Text roles always do
         // (the attribute is required); anything else that answers here is a
         // web host exposing a range on a non-text role — exactly the case a
@@ -100,7 +103,6 @@ enum AXDump {
             emit("\(indent)  ▸ delivery sample=\(String(describing: sample))")
         }
         guard depth < maxDepth else { return }
-        let kids = childrenOf(node)
         for kid in kids.prefix(maxChildrenPerNode) {
             walk(kid, depth: depth + 1, visited: &visited)
         }
@@ -111,7 +113,7 @@ enum AXDump {
 
     /// One compact line per element: the fields that discriminate a caret
     /// host from a plain control.
-    nonisolated private static func describe(_ node: AXUIElement) -> String {
+    nonisolated private static func describe(_ node: AXUIElement, childCount: Int? = nil) -> String {
         var parts: [String] = []
         parts.append("role=\(stringAttr(node, kAXRoleAttribute) ?? "nil")")
         if let subrole = stringAttr(node, kAXSubroleAttribute) { parts.append("sub=\(subrole)") }
@@ -126,9 +128,14 @@ enum AXDump {
         }
         if let editable = boolAttr(node, kAXIsEditableAttribute) { parts.append("editable=\(editable)") }
         if let focused = boolAttr(node, kAXFocusedAttribute) { parts.append("focused=\(focused)") }
-        parts.append("selRange=\(elementAttr(node, kAXSelectedTextRangeAttribute) != nil)")
-        parts.append("kids=\(childrenOf(node).count)")
+        parts.append("selRange=\(hasAttr(node, kAXSelectedTextRangeAttribute))")
+        parts.append("kids=\(childCount ?? childrenOf(node).count)")
         return parts.joined(separator: " ")
+    }
+
+    nonisolated private static func hasAttr(_ node: AXUIElement, _ attribute: String) -> Bool {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(node, attribute as CFString, &value) == .success && value != nil
     }
 
     nonisolated private static func stringAttr(_ node: AXUIElement, _ attribute: String) -> String? {

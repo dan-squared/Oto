@@ -38,4 +38,20 @@ struct HistoryPageTests {
         #expect(HistoryPage.clampedPage(3, total: 10) == 1)
         #expect(HistoryPage.clampedPage(5, total: 0) == 1)
     }
+
+    @Test func visibleSlotsKeepTenPagesCompact() {
+        #expect(HistoryPage.visibleSlots(current: 1, totalPages: 3) == [.page(1), .page(2), .page(3)])
+        #expect(
+            HistoryPage.visibleSlots(current: 1, totalPages: 10)
+                == [.page(1), .page(2), .page(3), .page(4), .ellipsis, .page(10)]
+        )
+        #expect(
+            HistoryPage.visibleSlots(current: 5, totalPages: 10)
+                == [.page(1), .ellipsis, .page(4), .page(5), .page(6), .ellipsis, .page(10)]
+        )
+        #expect(
+            HistoryPage.visibleSlots(current: 10, totalPages: 10)
+                == [.page(1), .ellipsis, .page(7), .page(8), .page(9), .page(10)]
+        )
+    }
 }

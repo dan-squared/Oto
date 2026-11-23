@@ -12,14 +12,19 @@
 import Foundation
 import os
 
-enum IssueReporter {
+nonisolated enum IssueReporter {
     private static let log = Logger(subsystem: "app.Oto", category: "issues")
+    private static let maxReports = 10
+    private nonisolated(unsafe) static var previousHandler: (@convention(c) (NSException) -> Void)?
 
-    /// Install once, before any scene or probe work. The C handler is retained
-    /// by AppKit; the closure captures no instance state.
+    /// Install once, before any scene or probe work. Chains any prior
+    /// handler and runs nonisolated so background-thread NSExceptions never
+    /// trap on MainActor isolation checks before writing the report.
     static func install() {
+        previousHandler = NSGetUncaughtExceptionHandler()
         NSSetUncaughtExceptionHandler { exception in
-            Self.write(exception)
+            IssueReporter.write(exception)
+            IssueReporter.previousHandler?(exception)
         }
     }
 
@@ -55,14 +60,21 @@ enum IssueReporter {
             "Oto \(version) (\(build))",
             "Time: \(stamp)",
             "Exception: \(exception.name.rawValue)",
-            "Reason: \(exception.reason ?? "none")",
             "",
-            (exception.callStackSymbols ?? []).joined(separator: "\n"),
+            exception.callStackSymbols.joined(separator: "\n"),
         ].joined(separator: "\n")
         do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let fm = FileManager.default
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             let url = dir.appendingPathComponent("Crash-\(safeStamp).txt")
             try text.write(to: url, atomically: true, encoding: .utf8)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            let existing = (try? fm.contentsOfDirectory(atPath: dir.path))?
+                .filter { $0.hasPrefix("Crash-") && $0.hasSuffix(".txt") }
+                .sorted(by: >) ?? []
+            for stale in existing.dropFirst(maxReports) {
+                try? fm.removeItem(at: dir.appendingPathComponent(stale))
+            }
             log.error("wrote crash report \(url.lastPathComponent, privacy: .public)")
         } catch {
             log.error("could not write crash report")

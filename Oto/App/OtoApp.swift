@@ -118,29 +118,22 @@ struct OtoApp: App {
 
     init() {
         IssueReporter.install()
-        self.updater = AppUpdater()
 #if DEBUG
         // Dev-only AX tree dump (`--ax-dump[=<bundle>|pid]`): prints and
-        // exits before any scene exists. See AXDump.
+        // exits before any scene, updater, or migration work runs.
         AXDump.runIfRequested()
-#endif
-        // Crash backstop first: a kill mid-dictation leaves the duck flag
-        // set — put the user's volume back before anything else runs.
-        // One-shot migrations precede it (audit F7): Container-scoped
-        // state from the sandboxed era would otherwise be invisible.
-#if DEBUG
-        // Dev clean slate first of all (`-OtoCleanSlate`): wipes the domain
-        // + support dir and skips the sandbox migration (which would copy
-        // cleared data straight back).
+        // Dev clean slate before migrations/updater (`-OtoCleanSlate`): wipes
+        // defaults + support dir and skips sandbox migrations.
         let wipedClean = CleanSlate.wipeIfRequested()
 #else
         let wipedClean = false
 #endif
         if !wipedClean {
             LocalPersistence.migrateSandboxedStoreIfNeeded()
+            MediaDuck.migrateSandboxedFlagIfNeeded()
         }
-        MediaDuck.migrateSandboxedFlagIfNeeded()
         MediaDuck.restoreIfCrashed()
+        self.updater = AppUpdater()
         let relay = AudioBufferRelay()
         let levelBox = LevelFeedBox()
         let audio: any AudioCaptureServing
@@ -173,17 +166,17 @@ struct OtoApp: App {
         var insertionEvents = InsertionEvents.live
         insertionEvents.postPaste = {
             await InsertionEvents.postFullCommandV(
-                key: PasteKeycodeResolver.keyCode(for: "v"), source: xpSource
+                key: PasteKeycodeResolver.keyCode(for: "v"), step: experiment.keyStepNs, source: xpSource
             )
         }
         insertionEvents.postCopy = {
             await InsertionEvents.postFullCommandV(
-                key: PasteKeycodeResolver.keyCode(for: "c"), source: xpSource
+                key: PasteKeycodeResolver.keyCode(for: "c"), step: experiment.keyStepNs, source: xpSource
             )
         }
         insertionEvents.postUndo = {
             await InsertionEvents.postFullCommandV(
-                key: PasteKeycodeResolver.keyCode(for: "z"), source: xpSource
+                key: PasteKeycodeResolver.keyCode(for: "z"), step: experiment.keyStepNs, source: xpSource
             )
         }
         var insertionTimings = InsertionTimings()
@@ -227,7 +220,7 @@ struct OtoApp: App {
         let modalController = NoTargetModalController()
         let permissionController = PermissionModalController()
         let transformRunner = TransformRunner(
-            grabber: LiveSelectionGrabber(),
+            grabber: LiveSelectionGrabber(events: insertionEvents, timings: insertionTimings),
             inserter: inserter,
             targetService: RealTargetCapture(),
             polish: polishService

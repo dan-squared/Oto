@@ -45,7 +45,7 @@ enum ShortcutTransition: Equatable, Sendable {
     // Explicit: compared in transition tests from any domain (Swift 6).
     nonisolated static func == (lhs: ShortcutTransition, rhs: ShortcutTransition) -> Bool {
         switch (lhs, rhs) {
-        case (.begin, .begin), (.finish, .finish), (.ignore, .ignore), (.reset, .reset),
+        case (.begin, .begin), (.finish, .finish), (.toggle, .toggle), (.ignore, .ignore), (.reset, .reset),
              (.cancel, .cancel):
             return true
         default:
@@ -55,6 +55,9 @@ enum ShortcutTransition: Equatable, Sendable {
 
     case begin
     case finish
+    /// Stateless hands-free toggle: coordinator owns whether a session is
+    /// currently running, eliminating local pressed-state desync.
+    case toggle
     case ignore
     case reset
     /// Another key/mouse went down while this slot's bare modifier was held:
@@ -145,7 +148,7 @@ struct ShortcutTrigger: Equatable, Sendable, Codable {
 /// not user data: hold drives beginHold/finish, hands-free drives
 /// toggleHandsFree. Named `ShortcutSlot` (not `Slot`) to avoid the generic
 /// word colliding with future SwiftUI/container `Slot` types.
-enum ShortcutSlot: Equatable, Sendable, Codable, CaseIterable {
+nonisolated enum ShortcutSlot: Equatable, Sendable, Codable, CaseIterable {
     case hold
     case handsFree
 }
@@ -176,8 +179,8 @@ extension ShortcutTrigger.Kind {
             return a == b
         case (.functionKey(let a), .functionKey(let b)):
             return !a.isDisjoint(with: b)
-        case (.combo(_, let a), .combo(_, let b)):
-            return a == b
+        case (.combo(let am, let ak), .combo(let rm, let rk)):
+            return am == rm && ak == rk
         case (.modifierHold(let code), .combo(let modifiers, _)),
              (.combo(let modifiers, _), .modifierHold(let code)):
             return Self.holdCodeSharesComboFamily(holdCode: code, comboModifiers: modifiers)
@@ -404,6 +407,7 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
             config.handsFree = .unassignedHandsFree()
             Self.log.info("migrated hands-free fn to unassigned (hold-only rule)")
         }
+        config.save(to: defaults)
         return config
     }
 }
@@ -421,6 +425,9 @@ struct DualShortcutConfiguration: Equatable, Sendable, Codable {
 struct DoubleTapTracker: Equatable, Sendable {
     /// Press at-or-under this counts as a tap.
     nonisolated static let maxPressDuration: Duration = .milliseconds(250)
+    /// Minimum down-to-down gap to filter contact/event bounce (<35 ms) from a
+    /// genuine human double-tap.
+    nonisolated static let minGap: Duration = .milliseconds(35)
     /// Down-to-down gap at-or-under this confirms the pair.
     nonisolated static let maxGap: Duration = .milliseconds(350)
 
@@ -441,11 +448,12 @@ struct DoubleTapTracker: Equatable, Sendable {
             pendingDownAt = nil
             return false
         }
-        if let previous = pendingDownAt,
-           previous.duration(to: down) <= Self.maxGap
-        {
-            pendingDownAt = nil
-            return true
+        if let previous = pendingDownAt {
+            let gap = previous.duration(to: down)
+            if gap >= Self.minGap && gap <= Self.maxGap {
+                pendingDownAt = nil
+                return true
+            }
         }
         pendingDownAt = down
         return false
@@ -464,9 +472,10 @@ struct DoubleTapTracker: Equatable, Sendable {
 /// threshold confirms. Single source with the tap constant by construction
 /// (see threshold).
 struct FnHoldConfirm: Equatable, Sendable {
-    /// Confirmation threshold. Aliased to the tap constant deliberately:
-    /// one number separates system taps from Oto holds.
-    nonisolated static let threshold: Duration = DoubleTapTracker.maxPressDuration
+    /// Confirmation threshold when macOS owns quick fn taps (Emoji, Input
+    /// Source, Dictation). Short enough to feel responsive while cleanly
+    /// separating system taps from sustained holds.
+    nonisolated static let threshold: Duration = .milliseconds(200)
 
     /// Press outcome for release routing.
     enum UpResult: Equatable, Sendable {
@@ -499,6 +508,9 @@ struct FnHoldConfirm: Equatable, Sendable {
 
     /// True while a press is tracked (physical down, resolving or live).
     nonisolated var isDown: Bool { downAt != nil }
+
+    /// True once the tracked press has passed the threshold and routed begin.
+    nonisolated var isConfirmed: Bool { confirmed }
 
     /// Confirm check for the timer firing: same press, still held, past
     /// threshold. The caller re-validates config/liveness (reconfig and
@@ -660,18 +672,15 @@ struct TransformShortcuts: Equatable, Sendable, Codable {
     }
 
     nonisolated static func `default`() -> TransformShortcuts {
-        // Factory quartet (moved Opt+digits → Cmd+digits per explicit request:
-        // Opt+digits don't fire on the user's machine. Global Cmd-digit
-        // hotkeys preempt per-app Tab switching while Oto runs — stated
-        // cost, each re-recordable. Paired with the Right-Option hold
-        // (different families ⇒ Rule B clean). Cmd+4 preempts per-app
-        // Cmd+4 the same way; idle-until-instruction-written, so it never
-        // surprises.
-        TransformShortcuts(
-            polish: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_1)),
-            concise: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_2)),
-            professional: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_3)),
-            custom: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_4))
+        // Factory quartet: ⌃⇧1–⌃⇧4. Disjoint from the Right-Option hold
+        // family (Rule B clean) and never hijacks global ⌘1–⌘4 tab switching
+        // in browsers, Finder, Terminal, or editors.
+        let mods = UInt32(CarbonModifiers.control | CarbonModifiers.shift)
+        return TransformShortcuts(
+            polish: .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_1)),
+            concise: .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_2)),
+            professional: .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_3)),
+            custom: .combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_4))
         )
     }
 

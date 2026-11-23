@@ -45,22 +45,28 @@ final class SettingsUIState {
     var defaultInputUID: String?
     private let preparer: SpeechAssetPreparer
     private let permissions: PermissionsManager
-    private var loaded = false
+    private var speechRefreshTask: Task<Void, Never>?
 
     init(preparer: SpeechAssetPreparer, permissions: PermissionsManager) {
         self.preparer = preparer
         self.permissions = permissions
     }
 
-    /// Full refresh, once: permissions sync + devices + speech async.
-    /// Later window opens no-op (values survive); actions refresh after
-    /// acting. Never called per navigation — that was the flash.
+    /// Refreshes permissions, microphones, and speech readiness without
+    /// resetting existing values to `nil` (so revisiting never flashes
+    /// "Checking…" while reopened/activated windows stay live).
     func ensureLoaded() {
-        guard !loaded else { return }
-        loaded = true
         refreshPermissions()
         refreshMicrophones()
-        Task { await refreshSpeech() }
+        refreshSpeechInBackground()
+    }
+
+    func refreshSpeechInBackground() {
+        guard speechRefreshTask == nil else { return }
+        speechRefreshTask = Task {
+            defer { self.speechRefreshTask = nil }
+            await self.refreshSpeech()
+        }
     }
 
     func refreshPermissions() {
@@ -161,16 +167,20 @@ final class SettingsUIState {
         }
     }
 
-    /// The colour behind `micActionText`: green allowed, amber needs acting,
-    /// grey before the first read.
+    /// The colour behind `micActionText`: green allowed, amber denied,
+    /// grey when not yet read (`nil`) or not yet asked.
     var micTone: OtoStatus.Tone {
-        micAllowed ? .ok : (micPermission == .notDetermined ? .idle : .warn)
+        switch micPermission {
+        case .granted: .ok
+        case .notDetermined, nil: .idle
+        case .denied: .warn
+        }
     }
 
     var micDeniedGuidance: String? {
-        micAllowed || micPermission == .notDetermined
-            ? nil
-            : "Allow it in System Settings → Privacy & Security → Microphone."
+        micPermission == .denied
+            ? "Allow it in System Settings → Privacy & Security → Microphone."
+            : nil
     }
 
     /// Typed end-to-end: no dependency on Apple wording (the old compare

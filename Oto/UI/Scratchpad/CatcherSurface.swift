@@ -65,9 +65,17 @@ final class CatcherSurfaceView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.masksToBounds = false
         reveal.fillColor = NSColor.black.cgColor
-        fill.backgroundColor = NSColor.clear.cgColor
+        fill.backgroundColor = CatcherPalette.current(effectiveAppearance).cardColor
         layer?.addSublayer(fill)
         layer?.mask = reveal
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.backgroundColor = CatcherPalette.current(effectiveAppearance).cardColor
+        CATransaction.commit()
     }
 
     @available(*, unavailable)
@@ -177,10 +185,14 @@ final class CatcherSurfaceView: NSView {
 
     override func layout() {
         super.layout()
-        fill.frame = bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if fill.frame != bounds { fill.frame = bounds }
         if reveal.frame != bounds { reveal.frame = bounds }
-        guard !isMorphing else { return }
-        let path = MorphGeometry.path(bounds, radius: cardRadius)
-        if reveal.path != path { reveal.path = path }
+        if !isMorphing {
+            let path = MorphGeometry.path(bounds, radius: cardRadius)
+            if reveal.path != path { reveal.path = path }
+        }
+        CATransaction.commit()
     }
 }

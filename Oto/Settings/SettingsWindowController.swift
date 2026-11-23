@@ -6,8 +6,11 @@ import SwiftUI
 /// traffic lights just as it does in Firstlight.
 @MainActor
 final class OtoSettingsWindowController: NSObject, NSWindowDelegate {
+    private static let frameAutosaveName = NSWindow.FrameAutosaveName("OtoSettingsWindow")
+
     private let rootView: SettingsRoot
     private(set) var window: NSWindow?
+    private var lastFrame: NSRect?
 
     init(rootView: SettingsRoot) {
         self.rootView = rootView
@@ -17,10 +20,14 @@ final class OtoSettingsWindowController: NSObject, NSWindowDelegate {
         if window == nil { makeWindow() }
         guard let window else { return }
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 
     func close() {
+        if let window {
+            lastFrame = window.frame
+            window.saveFrame(usingName: Self.frameAutosaveName)
+        }
         window?.close()
         window = nil
     }
@@ -58,12 +65,16 @@ final class OtoSettingsWindowController: NSObject, NSWindowDelegate {
         window.delegate = self
         // The host installs SwiftUI's own toolbar (back/forward). Assigning a
         // replacement NSToolbar here would drop those items. Reapply the
-        // measured content size last, as the Firstlight controller does, or
-        // AppKit can retain a transient zero width from the outer SwiftUI
-        // host during the first layout pass.
+        // measured content size last, then restore any saved frame so closing
+        // and reopening preserves the user's window position and height.
         window.setContentSize(NSSize(width: SettingsRoot.width, height: SettingsRoot.height))
         window.contentView?.layoutSubtreeIfNeeded()
-        window.center()
+        window.setFrameAutosaveName(Self.frameAutosaveName)
+        if let lastFrame {
+            window.setFrame(lastFrame, display: false)
+        } else if !window.setFrameUsingName(Self.frameAutosaveName) {
+            window.center()
+        }
         self.window = window
     }
 
@@ -75,6 +86,8 @@ final class OtoSettingsWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let closing = notification.object as? NSWindow, closing === window else { return }
+        lastFrame = closing.frame
+        closing.saveFrame(usingName: Self.frameAutosaveName)
         window = nil
     }
 }

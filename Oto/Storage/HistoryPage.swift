@@ -36,4 +36,33 @@ struct HistoryPage: Sendable {
         guard start < end else { return [] }
         return Array(items[start..<end])
     }
+
+    nonisolated enum PageSlot: Equatable, Sendable {
+        case page(Int)
+        case ellipsis
+    }
+
+    /// Compact window of page buttons (at most 5 numbered slots plus ellipses)
+    /// so pagination never overflows the 580 pt Settings detail column.
+    nonisolated static func visibleSlots(current: Int, totalPages: Int) -> [PageSlot] {
+        guard totalPages > 0 else { return [] }
+        if totalPages <= 5 {
+            return (1...totalPages).map { .page($0) }
+        }
+        let clamped = min(max(current, 1), totalPages)
+        var slots: [PageSlot] = [.page(1)]
+        let windowStart = max(2, min(clamped - 1, totalPages - 3))
+        let windowEnd = min(totalPages - 1, max(clamped + 1, 4))
+        if windowStart > 2 {
+            slots.append(.ellipsis)
+        }
+        for page in windowStart...windowEnd {
+            slots.append(.page(page))
+        }
+        if windowEnd < totalPages - 1 {
+            slots.append(.ellipsis)
+        }
+        slots.append(.page(totalPages))
+        return slots
+    }
 }

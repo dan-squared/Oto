@@ -12,7 +12,7 @@ import AppKit
 import Foundation
 
 /// One app that can be chosen as a scope.
-struct InstalledApp: Sendable, Hashable, Identifiable {
+nonisolated struct InstalledApp: Sendable, Hashable, Identifiable {
     let bundleID: String
     let name: String
     /// Absolute bundle path, used for the app's icon. Empty for a legacy
@@ -24,13 +24,56 @@ struct InstalledApp: Sendable, Hashable, Identifiable {
 
 @MainActor
 enum InstalledApps {
-    /// Cached scan. Lazy: Settings only pays for it the first time a scope
-    /// picker opens, never at launch.
-    static let all: [InstalledApp] = scan()
+    /// Cached scan, populated asynchronously off `@MainActor` by `load()`.
+    private(set) static var cached: [InstalledApp] = []
+    private static var hasScanned = false
+    private static var inFlightScan: Task<[InstalledApp], Never>?
+    private static var iconCache: [String: NSImage] = [:]
+
+    /// Async refreshable discovery: runs filesystem scanning off `@MainActor`
+    /// so opening the scope picker never stalls the UI thread.
+    static func load(forceRefresh: Bool = false) async -> [InstalledApp] {
+        if hasScanned, !forceRefresh {
+            return cached
+        }
+        if let existing = inFlightScan {
+            return await existing.value
+        }
+        let running = runningRegularApps()
+        let task = Task.detached(priority: .utility) {
+            Self.scanFilesystem(runningApps: running)
+        }
+        inFlightScan = task
+        let result = await task.value
+        cached = result
+        hasScanned = true
+        inFlightScan = nil
+        return result
+    }
+
+    /// Cached icon lookup by bundle path so scrolling `LazyVStack` never
+    /// repeatedly queries LaunchServices icon services on redraws.
+    static func icon(forPath path: String) -> NSImage {
+        if let existing = iconCache[path] {
+            return existing
+        }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        if iconCache.count >= 256 {
+            iconCache.removeAll(keepingCapacity: true)
+        }
+        iconCache[path] = image
+        return image
+    }
 
     /// Human name for a bundle ID, or nil when this Mac has no such app.
+    /// O(1) via LaunchServices (`AppNames.displayName`) after checking the
+    /// in-memory cache — never blocks `@MainActor` with a `/Applications` scan.
     static func name(forBundleID bundleID: String) -> String? {
-        all.first { $0.bundleID == bundleID }?.name
+        if let hit = cached.first(where: { $0.bundleID == bundleID }) {
+            return hit.name
+        }
+        let resolved = AppNames.displayName(forBundleID: bundleID)
+        return resolved == bundleID ? nil : resolved
     }
 
     /// One line for a row: names, not IDs. Unknown IDs fall back to
@@ -41,7 +84,25 @@ enum InstalledApps {
             .joined(separator: ", ")
     }
 
-    private static func scan() -> [InstalledApp] {
+    private static func runningRegularApps() -> [InstalledApp] {
+        var result: [InstalledApp] = []
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.activationPolicy == .regular,
+                  let bundleID = app.bundleIdentifier, !bundleID.isEmpty,
+                  let url = app.bundleURL,
+                  let bundle = Bundle(url: url),
+                  isUserFacingApp(bundle, path: url.path)
+            else { continue }
+            result.append(InstalledApp(
+                bundleID: bundleID,
+                name: app.localizedName ?? bundleID,
+                path: url.path
+            ))
+        }
+        return result
+    }
+
+    nonisolated private static func scanFilesystem(runningApps: [InstalledApp]) -> [InstalledApp] {
         let roots = [
             "/Applications",
             "/Applications/Utilities",
@@ -69,23 +130,9 @@ enum InstalledApps {
             }
         }
 
-        // Running apps cover anything launched outside the folders above. The
-        // activation policy is the line: `.regular` apps own a Dock tile and
-        // windows; agents, daemons and widgets do not, and naming one as a
-        // scope would only confuse the list.
-        for app in NSWorkspace.shared.runningApplications {
-            guard app.activationPolicy == .regular,
-                  let bundleID = app.bundleIdentifier, !bundleID.isEmpty,
-                  let url = app.bundleURL,
-                  let bundle = Bundle(url: url),
-                  isUserFacingApp(bundle, path: url.path),
-                  seen.insert(bundleID).inserted
-            else { continue }
-            apps.append(InstalledApp(
-                bundleID: bundleID,
-                name: app.localizedName ?? bundleID,
-                path: url.path
-            ))
+        // Running apps cover anything launched outside the folders above.
+        for app in runningApps where seen.insert(app.bundleID).inserted {
+            apps.append(app)
         }
 
         return apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -94,7 +141,7 @@ enum InstalledApps {
     /// Apps only: no background agents, daemons, widgets, or app extensions.
     /// Those carry the same icon and a plausible name, which is exactly why
     /// they must never reach the picker.
-    private static func isUserFacingApp(_ bundle: Bundle, path: String) -> Bool {
+    nonisolated private static func isUserFacingApp(_ bundle: Bundle, path: String) -> Bool {
         let info = bundle.infoDictionary ?? [:]
         guard (info["CFBundlePackageType"] as? String) == "APPL" else { return false }
         // Extensions, widget providers and Quick Look plugins.
@@ -106,7 +153,7 @@ enum InstalledApps {
         return true
     }
 
-    private static func flag(_ info: [String: Any], _ key: String) -> Bool {
+    nonisolated private static func flag(_ info: [String: Any], _ key: String) -> Bool {
         if let value = info[key] as? Bool { return value }
         if let value = info[key] as? NSNumber { return value.boolValue }
         if let value = info[key] as? String {

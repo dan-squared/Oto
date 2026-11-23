@@ -10,7 +10,6 @@
 //
 
 import AppKit
-import Combine
 import SwiftUI
 
 /// What is still missing before the last chapter can finish. The order is
@@ -21,21 +20,25 @@ enum OnboardingPermissionBlocker: Equatable, Sendable {
     case microphone
 }
 
-@MainActor
-final class OnboardingFlow: ObservableObject {
+@Observable @MainActor
+final class OnboardingFlow {
     let dispatch: ShortcutDispatch
     let uiState: SettingsUIState
     let onFinish: () -> Void
 
     // Hold-key label state: mirrors the live config, so the hands-free chapter
     // can name the key the person actually taps.
-    @Published private(set) var holdKind: ShortcutTrigger.Kind
-    /// Published so the Continue pill relabels the moment a grant lands;
+    private(set) var holdKind: ShortcutTrigger.Kind
+    /// Observed so the Continue pill relabels the moment a grant lands;
     /// the typed state still lives in `uiState` (one source of truth).
-    @Published private(set) var permissionBlocker: OnboardingPermissionBlocker?
+    private(set) var permissionBlocker: OnboardingPermissionBlocker?
 
-    /// One-shot per walk: returning to the last chapter never re-prompts.
-    private var dictationPrepared = false
+    /// One-shot flags per walk: returning to the last chapter never re-prompts.
+    private var speechPrepared = false
+    private var axPrompted = false
+    private var micPrompted = false
+    private var preparationTask: Task<Void, Never>?
+    private var micPromptTask: Task<Void, Never>?
 
     /// Pure gate table, pinned by test. `nil` mic is "Checking…" — never a
     /// grant, so Finish cannot complete before the first permission read.
@@ -48,7 +51,7 @@ final class OnboardingFlow: ObservableObject {
         return nil
     }
 
-    /// Re-read the shared typed state into the published gate. Called on
+    /// Re-read the shared typed state into the observed gate. Called on
     /// load, on every grant attempt, and when the window comes back from
     /// System Settings.
     func refreshPermissionGate() {
@@ -115,10 +118,19 @@ final class OnboardingFlow: ObservableObject {
                 self.uiState.refreshPermissions()
                 self.refreshPermissionGate()
             case .microphone:
-                Task {
-                    _ = await self.uiState.ensureMicrophoneGrant()
-                    self.uiState.refreshPermissions()
+                self.uiState.refreshPermissions()
+                if self.uiState.micPermission == .denied {
+                    SettingsLinkOpener.open(MicSettingsLink.candidates())
                     self.refreshPermissionGate()
+                } else {
+                    self.micPromptTask?.cancel()
+                    self.micPromptTask = Task {
+                        _ = await self.uiState.ensureMicrophoneGrant()
+                        guard !Task.isCancelled else { return }
+                        self.uiState.refreshPermissions()
+                        self.refreshPermissionGate()
+                        self.dispatch.refreshAvailability()
+                    }
                 }
             case nil:
                 self.finish()
@@ -129,6 +141,7 @@ final class OnboardingFlow: ObservableObject {
     }
 
     func back() {
+        self.cancelPendingPrompts()
         switch self.stage.step {
         case .welcome:
             break
@@ -149,6 +162,9 @@ final class OnboardingFlow: ObservableObject {
 
     func jump(to step: OnboardingStage.Step) {
         guard step.isChapter else { return }
+        if step != OnboardingStage.Step.chapters.last {
+            self.cancelPendingPrompts()
+        }
         self.stage.advance(to: step)
     }
 
@@ -172,53 +188,85 @@ final class OnboardingFlow: ObservableObject {
     /// Nothing of the flow is listening; dispatch is live again. Called when
     /// the window goes and when the recorder closes.
     func disarm() {
+        self.cancelPendingPrompts()
         self.dispatch.setSuspended(false)
     }
 
     // MARK: - The last chapter
 
+    /// Schedules last-chapter preparation after the step transition spring
+    /// settles, cancelling any prior pending arrival or prompt task if the
+    /// reader navigated away.
+    func scheduleLastChapterPreparation() {
+        self.cancelPendingPrompts()
+        guard self.isLastChapter else { return }
+        self.preparationTask = Task {
+            await OnboardingStage.arrival()
+            guard !Task.isCancelled, self.isLastChapter else { return }
+            self.prepareDictation()
+        }
+    }
+
     /// The last chapter is where dictation becomes real, so this is where the
-    /// system asks for what it needs — in the order the product needs it:
-    /// Accessibility first (the hold key is a global event tap, and insertion
-    /// is refused without it), then the microphone (the only other grant
-    /// SpeechAnalyzer requires; a fresh Mac reaches this chapter before the
-    /// model exists, so the download starts here too). No custom UI: Apple's
-    /// own dialogs carry both asks. Idempotent per walk — Back → Continue
-    /// never re-prompts.
+    /// system asks for what it needs — sequentially, in the order the product
+    /// needs it: Accessibility first, then the microphone once Accessibility is
+    /// granted (never racing a microphone dialog on top of an open AX dialog).
+    /// Idempotent per walk — Back → Continue never re-prompts.
     func prepareDictation() {
+        guard self.isLastChapter else { return }
+        self.uiState.refreshPermissions()
         self.refreshPermissionGate()
-        guard !self.dictationPrepared else { return }
-        self.dictationPrepared = true
-        self.prepareSpeechInBackground()
+        if !self.speechPrepared {
+            self.speechPrepared = true
+            self.prepareSpeechInBackground()
+        }
         guard !Self.suppressesNativePrompts else { return }
         if !self.uiState.axTrusted {
-            self.uiState.requestAccessibilityPrompt()
+            if !self.axPrompted {
+                self.axPrompted = true
+                self.uiState.requestAccessibilityPrompt()
+            }
+            self.dispatch.refreshAvailability()
+            return
         }
-        // A grant already made (or made on a previous launch) starts the tap
-        // here; the window's didBecomeActive pass heals it after System
-        // Settings.
+        // Accessibility is trusted: start the tap now, and only prompt the
+        // microphone if undetermined (never racing an open AX modal).
         self.dispatch.refreshAvailability()
-        Task {
-            // The Accessibility alert is modal to the app; the microphone
-            // dialog must not race it. `ensureMicrophoneGrant()` only asks
-            // when the status is undetermined — a denial or a grant is
-            // already an answer.
-            try? await Task.sleep(for: .milliseconds(900))
+        guard !self.micPrompted, self.uiState.micPermission == .notDetermined else { return }
+        self.micPrompted = true
+        self.micPromptTask?.cancel()
+        self.micPromptTask = Task {
+            guard !Task.isCancelled, self.isLastChapter else { return }
             _ = await self.uiState.ensureMicrophoneGrant()
+            guard !Task.isCancelled else { return }
             self.uiState.refreshPermissions()
             self.refreshPermissionGate()
             self.dispatch.refreshAvailability()
         }
     }
 
+    private func cancelPendingPrompts() {
+        self.preparationTask?.cancel()
+        self.preparationTask = nil
+        self.micPromptTask?.cancel()
+        self.micPromptTask = nil
+    }
+
     /// Screenshot probes, unit tests and the UI test must never hang behind a
-    /// TCC dialog. The UI test passes `-OtoUITest`; `OTO_SHOT` is the capture
-    /// probe; XCTest sets the configuration path.
+    /// TCC dialog. `XCTestConfigurationFilePath` stays active for unit tests;
+    /// `OTO_SHOT` and `-OtoUITest` are DEBUG-only so Release builds can never
+    /// bypass permission gates via environment or launch flags.
     private static var suppressesNativePrompts: Bool {
         let info = ProcessInfo.processInfo
+        if info.environment["XCTestConfigurationFilePath"] != nil {
+            return true
+        }
+        #if DEBUG
         return info.environment["OTO_SHOT"] != nil
-            || info.environment["XCTestConfigurationFilePath"] != nil
             || info.arguments.contains("-OtoUITest")
+        #else
+        return false
+        #endif
     }
 
     /// There is no speech chapter any more, so a fresh Mac can reach the last

@@ -13,14 +13,20 @@ import AppKit
 import Foundation
 
 enum AppNames {
-    /// Localized name of a running app, else the raw bundle ID, else
-    /// "Unknown app" when there is nothing to show.
+    /// Localized name of a running app, else an installed app via
+    /// LaunchServices, else the raw bundle ID, else "Unknown app".
     nonisolated static func displayName(forBundleID bundleID: String?) -> String {
         guard let bundleID, !bundleID.isEmpty else { return "Unknown app" }
         if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
            let name = app.localizedName, !name.isEmpty
         {
             return name
+        }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            let name = FileManager.default.displayName(atPath: url.path)
+            if !name.isEmpty {
+                return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+            }
         }
         return bundleID
     }

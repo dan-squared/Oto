@@ -309,7 +309,8 @@ final class PillContentView: NSView {
         ink.layer?.mask = inkMask
         glass.contentView = ink
 
-        bg.fillColor = PillPalette(color: colorProvider()).scrim
+        let initialPalette = PillPalette(color: colorProvider())
+        bg.fillColor = initialPalette.scrim
         bg.opacity = Float(PillChrome.scrimAlpha)
         // No self-drawn shadow: with masksToBounds (overflow clip) a
         // sublayer shadow would be clipped invisible — and a same-layer
@@ -328,12 +329,12 @@ final class PillContentView: NSView {
         tintGradient.type = .axial
         tintGradient.startPoint = CGPoint(x: 0.0, y: 0.5)
         tintGradient.endPoint = CGPoint(x: 1.0, y: 0.5)
-        tintGradient.colors = PillPalette(color: colorProvider()).bodyColors(opaque: false)
+        tintGradient.colors = initialPalette.bodyColors(opaque: false)
         tintGradient.locations = PillPalette.stops.map { NSNumber(value: Double($0)) }
         tintGradient.mask = capsuleMask
         capsuleMask.fillColor = NSColor.black.cgColor
         capsuleMask.strokeColor = nil
-        glass.tintColor = PillPalette(color: colorProvider()).tint
+        glass.tintColor = initialPalette.tint
 
         // The lit rim, v3: ONE feathered gradient instead of a rim stroke.
         // Bright at the top edge, a soft highlight just under it, nothing
@@ -379,7 +380,7 @@ final class PillContentView: NSView {
         ink.addSubview(spinner)
 
         label.textColor = .white
-        label.font = .systemFont(ofSize: 12)
+        label.font = VisualizerMath.workFont
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         ink.addSubview(label)
@@ -409,11 +410,16 @@ final class PillContentView: NSView {
         fatalError("PillContentView has no nib")
     }
 
-    // MARK: - Layout (width changes only — scrim path + positions)
+    // MARK: - Layout (single-source bounds sync — zero layer separation)
 
-    /// The glass and its ink follow the pill's bounds. Called from
-    /// `layout()` and from every width change so the capsule and the
-    /// window frame morph together.
+    /// Synchronizes EVERY layer in the pill (`glass`, `ink`, `bg`, `tintGradient`,
+    /// `sheen`, all three capsule masks, AND centered bar/dot/spinner geometry)
+    /// directly from `self.bounds` inside ONE `CATransaction.setDisableActions(true)`
+    /// block. Because `FlowBarPanel.setFrame(..., animated: true)` drives the
+    /// window frame smoothly and AppKit invokes `layout()` on every animation
+    /// frame, deriving every layer from `bounds` without a competing Core
+    /// Animation path transaction makes glass-vs-gradient layer separation and
+    /// resize flicker physically impossible.
     private func layoutChrome() {
         let m = Self.glassMargin
         let glassRect = CGRect(
@@ -423,29 +429,35 @@ final class PillContentView: NSView {
         let radius = glassRect.height / 2
         if glass.frame != glassRect { glass.frame = glassRect }
         if glass.cornerRadius != radius { glass.cornerRadius = radius }
-        // Snap the border-eraser mask in the SAME pass as the glass frame
-        // so the two never disagree even for one frame (a lagging mask
-        // would flash the glass's own border during width transitions).
-        syncGlassMask()
         if ink.frame != glass.bounds { ink.frame = glass.bounds }
-        // The glass stack fills the ink; its masks carry the silhouette.
+
         let inkBounds = ink.bounds
+        let w = inkBounds.width
+        let h = inkBounds.height
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // Cancel any lingering implicit animations on geometry/paths.
+        bg.removeAllAnimations()
+        capsuleMask.removeAllAnimations()
+        inkMask.removeAllAnimations()
+        glassMask.removeAllAnimations()
+
         for layer in [tintGradient, sheen] {
             if layer.frame != inkBounds { layer.frame = inkBounds }
         }
-        // First layout (the scrim has no path yet): snap every silhouette
-        // path. Later width changes animate them with the scrim below.
-        if bg.path == nil { syncChromePaths() }
+        syncChromePaths()
+        layoutVisualElements(forWidth: w, height: h)
+        CATransaction.commit()
     }
 
     /// Capsule silhouettes, one path source: the scrim (inset, so its dark
     /// edge can never land on the rim), the body ramp's mask, the ink's
-    /// cage mask, and the glass border-eraser mask. All four are the pill's
-    /// own outline, so they can never disagree with each other or with the
-    /// window frame.
+    /// cage mask, and the glass border-eraser mask. All four are built from
+    /// `glass.bounds` on the same frame so they can never disagree.
     private func syncChromePaths() {
         let w = glass.bounds.width
         let h = glass.bounds.height
+        guard w > 0, h > 0 else { return }
         let size = CGSize(width: w, height: h)
         let capsule = CGPath(
             roundedRect: CGRect(origin: .zero, size: size),
@@ -464,10 +476,6 @@ final class PillContentView: NSView {
         )
     }
 
-    /// Glass border-eraser path sync. Called from `layoutChrome` (snap:
-    /// must land on the same frame as the glass resize) AND from
-    /// `syncChromePaths` (animated width morph, inside the CATransaction).
-    /// Idempotent when glass.bounds hasn't changed between the two calls.
     private func syncGlassMask() {
         let w = glass.bounds.width
         let h = glass.bounds.height
@@ -481,49 +489,18 @@ final class PillContentView: NSView {
         )
     }
 
-    override func layout() {
-        super.layout()
-        layoutChrome()
-    }
-
-    func layout(width: CGFloat) {
-        guard width != currentWidth else { return }
-        currentWidth = width
-        let m = Self.glassMargin
-        setFrameSize(NSSize(width: width + 2 * m, height: VisualizerMath.pillHeight))
-        layoutChrome()
-        let h = VisualizerMath.pillHeight
-        let hadPath = bg.path != nil
-        if hadPath {
-            // Liquid chrome (v5 F4, v6 retime): the silhouette morphs over
-            // the same 0.15s easeOut as the window frame (FlowBarPanel.setFrame),
-            // so pill and window move as one. First layout snaps (no path yet).
-            // Element positions snap to the final geometry instantly — with
-            // the outgoing group already dead (shrink) or fading in (growth),
-            // the eye reads content-leading-chrome-following as liquid.
-            CATransaction.begin()
-            CATransaction.setAnimationDuration(0.15)
-            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-            // The scrim, the ramp mask and the ink cage ride the SAME
-            // transaction: a snapping mask over a gliding scrim would flash a
-            // rectangle of ramp past the old corner.
-            syncChromePaths()
-            CATransaction.commit()
-        } else {
-            syncChromePaths()
-        }
+    /// Centers bars, chase dots, spinner, and message label for the live pill
+    /// capsule width (`glass.bounds.width`). Called inside `layoutChrome()`
+    /// with implicit actions disabled so inner artwork glides smoothly centered
+    /// as the window frame expands or contracts.
+    private func layoutVisualElements(forWidth width: CGFloat, height h: CGFloat) {
         let midY = h / 2
-
-        // Recording block: the bar row, centred. No record dot (removed
-        // 2026-11-01) — the row IS the content, so it centres on the pill
-        // and the capsule width follows it (VisualizerMath.dictationWidth).
         let barsBlock = CGFloat(VisualizerMath.barCount) * VisualizerMath.barPitch
         let x = (width - barsBlock) / 2
         for (i, bar) in barLayers.enumerated() {
             bar.position = CGPoint(x: x + CGFloat(i) * VisualizerMath.barPitch + VisualizerMath.barPitch / 2, y: midY)
         }
 
-        // Chase block: dots (+ spinner), centered.
         let dotsBlock = CGFloat(VisualizerMath.dotCount - 1) * VisualizerMath.chasePitch + VisualizerMath.chaseDot
         var dotsX = (width - dotsBlock) / 2
         if currentVisual == .dotsSpinner {
@@ -532,20 +509,43 @@ final class PillContentView: NSView {
         for (i, dot) in chaseLayers.enumerated() {
             dot.position = CGPoint(x: dotsX + CGFloat(i) * VisualizerMath.chasePitch + VisualizerMath.chaseDot / 2, y: midY)
         }
-        // Work positions its own spinner in update() (text-measured geometry);
-        // the dots-block origin below never applies to it.
         if currentVisual != .work {
             spinner.setFrameOrigin(NSPoint(
                 x: dotsX + dotsBlock + 6.6,
                 y: midY - VisualizerMath.spinnerSize / 2
             ))
         }
+        if currentVisual != .work && currentVisual != .message {
+            label.frame = CGRect(
+                x: Self.padding, y: 0,
+                width: max(0, width - Self.padding * 2), height: h
+            )
+        }
+    }
 
-        // Message label fills between padding.
-        label.frame = CGRect(
-            x: Self.padding, y: 0,
-            width: max(0, width - Self.padding * 2), height: h
-        )
+    override func layout() {
+        super.layout()
+        layoutChrome()
+    }
+
+    func layout(width: CGFloat) {
+        let widthChanged = width != currentWidth
+        currentWidth = width
+        if window == nil {
+            // Headless unit tests construct PillContentView without an NSPanel:
+            // size the view directly so test assertions inspect the target width.
+            let m = Self.glassMargin
+            let targetSize = NSSize(width: width + 2 * m, height: VisualizerMath.pillHeight)
+            if frame.size != targetSize {
+                setFrameSize(targetSize)
+            }
+            layoutChrome()
+        } else if widthChanged {
+            // Live NSPanel: FlowBarPanel.setFrame owns window/view sizing.
+            // Never call setFrameSize here (that jumps ahead of the window
+            // animator and separates NSGlassEffectView from the inner gradient).
+            layoutChrome()
+        }
     }
 
     // MARK: - Render (cheap property sets; fades ride the render server)
@@ -588,9 +588,21 @@ final class PillContentView: NSView {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
         if newWindow == nil {
-            stopMotionAnimations()
-            removeShine()
+            suspendAnimations()
         }
+    }
+
+    /// Stops every off-screen render-server animation and spinner when the
+    /// panel orders out (`hide()` / `hideNow()`). Clearing `currentVisual`
+    /// guarantees the next show re-establishes visibility and motion cleanly.
+    func suspendAnimations() {
+        stopMotionAnimations()
+        barLayers.forEach { $0.removeAllAnimations() }
+        chaseLayers.forEach { $0.removeAllAnimations() }
+        removeShine()
+        spinner.stopAnimation(nil)
+        spinner.isHidden = true
+        currentVisual = nil
     }
 
     // MARK: - Render-server motion (v5: true GPU, zero per-frame CPU)
@@ -723,10 +735,10 @@ final class PillContentView: NSView {
     /// `stopMotionAnimations()`: that funnel also runs per-poll under
     /// Reduce Motion, which would restart the wave 6.7×/s.
     private func removeShine() {
+        shineLabel.isHidden = true
         guard shineOn else { return }
         shineMask.removeAnimation(forKey: Self.shineKey)
         shineLabel.layer?.mask = nil
-        shineLabel.isHidden = true
         label.textColor = .white
         shineOn = false
         shineInstalledWidth = 0
@@ -841,11 +853,12 @@ final class PillContentView: NSView {
         else { spinner.stopAnimation(nil) }
         spinner.isHidden = reduceMotion || (currentVisual != .dotsSpinner && currentVisual != .work)
         // Shine sweep on the work verb (render-server wave; idempotent
-        // across repolls — see installShine). Deliberately outside the
-        // Reduce Motion gate per product direction (2026-10-05): whenever
-        // the work visual is up, the verb shimmers.
-        if currentVisual == .work {
+        // across refreshes — see installShine). Gated on !reduceMotion so
+        // Reduce Motion stops all continuous animations across the pill.
+        if currentVisual == .work && !reduceMotion {
             installShine()
+        } else {
+            removeShine()
         }
     }
 
@@ -863,20 +876,19 @@ final class PillContentView: NSView {
         CATransaction.commit()
     }
 
-    /// Glass on, or the solid scrim when the user asked for reduced
-    /// transparency. Same silhouette, same bars either way.
+    /// Glass on, or opaque ramp + solid scrim when the user asked for reduced
+    /// transparency. Never hides `glass` because `ink` (all artwork) lives in
+    /// `glass.contentView` — hiding `glass` would hide the entire pill.
     private func applyChrome() {
         let reduceTransparency = reduceTransparencyProvider()
-        if glass.isHidden != reduceTransparency { glass.isHidden = reduceTransparency }
+        if glass.isHidden { glass.isHidden = false }
         let opacity: Float = reduceTransparency ? 1 : Float(PillChrome.scrimAlpha)
         if bg.opacity != opacity { bg.opacity = opacity }
 
         // Colour: the ramp, the veil and the frost tint all move together, so
-        // a palette change lands as one material change. Read every poll (the
-        // Settings key is written from another window); the guard makes a
-        // repoll free. Under Reduce Transparency the frost is gone, so the
-        // ramp alone has to carry the colour at full alpha — the fallback is
-        // *flat colour glass*, never grey.
+        // a palette change lands as one material change. Guard makes repeat
+        // calls free. Under Reduce Transparency the frost is covered by the
+        // opaque scrim + alpha-1 body ramp — flat colour glass, never grey.
         let color = colorProvider()
         guard activeColor != color || rampOpaque != reduceTransparency else { return }
         let firstInstall = activeColor == nil && rampOpaque == nil
@@ -911,7 +923,7 @@ final class PillContentView: NSView {
         let barsOn = visual == .bars
         barLayers.forEach { $0.opacity = barsOn ? 1 : 0 }
         let dotsOn = visual == .dots || visual == .dotsSpinner
-        chaseLayers.forEach { $0.opacity = dotsOn ? $0.opacity : 0 }
+        chaseLayers.forEach { $0.opacity = dotsOn ? 1 : 0 }
         CATransaction.commit()
         label.isHidden = visual != .message && visual != .work
         // Shine overlay tracks the base label's visibility exactly (the

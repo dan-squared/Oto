@@ -17,9 +17,8 @@ struct FnHoldConfirmTests {
         base + .milliseconds(ms)
     }
 
-    @Test func thresholdIsSingleSourcedWithTapConstant() {
-        #expect(FnHoldConfirm.threshold == DoubleTapTracker.maxPressDuration)
-        #expect(FnHoldConfirm.threshold == .milliseconds(250))
+    @Test func thresholdIs200ms() {
+        #expect(FnHoldConfirm.threshold == .milliseconds(200))
     }
 
     @Test func subThresholdReleaseDrops() {
@@ -33,10 +32,13 @@ struct FnHoldConfirmTests {
         var confirm = FnHoldConfirm()
         let t0 = ContinuousClock().now
         #expect(confirm.down(at: t0) == true)
-        #expect(confirm.shouldConfirm(at: at(249, from: t0)) == false)
-        #expect(confirm.shouldConfirm(at: at(250, from: t0)) == true)
+        #expect(confirm.shouldConfirm(at: at(199, from: t0)) == false)
+        #expect(confirm.shouldConfirm(at: at(200, from: t0)) == true)
+        #expect(confirm.isConfirmed == false)
         confirm.markConfirmed()
+        #expect(confirm.isConfirmed == true)
         #expect(confirm.up() == .finishedHold)
+        #expect(confirm.isConfirmed == false)
     }
 
     @Test func duplicateDownIgnored() {

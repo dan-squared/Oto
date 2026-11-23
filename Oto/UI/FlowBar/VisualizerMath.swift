@@ -120,6 +120,21 @@ enum VisualizerMath {
         return min(workMaxWidth, ceil(textWidth) + chrome)
     }
 
+    // MARK: - Message pill (Copied / transient failure notices)
+
+    /// Ceiling for transient message pills so long failure notices stay
+    /// readable without stretching across the display.
+    nonisolated static let messageMaxWidth: CGFloat = 320
+
+    /// Dynamic message-pill width: short notices like `"Copied"` stay at
+    /// `dictationWidth` (80.85 pt) so switching from dictation is a re-render
+    /// with no resize, while longer failure notices expand up to `320 pt` so
+    /// the full sentence is readable instead of truncating to ~8 characters.
+    nonisolated static func messagePillWidth(textWidth: CGFloat) -> CGFloat {
+        let chrome = workPadding * 2 + workTextSlack
+        return min(messageMaxWidth, max(dictationWidth, ceil(textWidth) + chrome))
+    }
+
     // MARK: - Work shimmer (traveling shine on the work verb)
 
     /// Base text dim while the shine sweeps (screenshot style): the word

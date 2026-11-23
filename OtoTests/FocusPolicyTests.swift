@@ -41,26 +41,33 @@ struct FocusPolicyTests {
         }
     }
 
-    @Test func contentRolesProceed() {
-        // Content roles cannot take a caret, but web-rendered editors report
-        // the caret's host as one of them — a WebKit markdown editor was
-        // measured answering `axerr=nil` with a non-text role. Diverting
-        // here is the false positive v6 exists to remove.
+    @Test func contentRolesDivertWithoutEditableSignalAndProceedWithOne() {
+        // Read-only static content cannot accept pasted text without a positive
+        // editability signal (AXEditableAncestor / settable AXSelectedText /
+        // AXInsertionPointLineNumber), even when static text is selected.
         for role in ["AXStaticText", "AXHeading", "AXImage", "AXLink"] {
-            #expect(EditableFocus.classify(role: role) == .unknown)
+            #expect(EditableFocus.classify(role: role, publishesCaret: false, hasEditableSignal: false) == .noField)
+            #expect(EditableFocus.classify(role: role, publishesCaret: true, hasEditableSignal: false) == .noField)
+            #expect(EditableFocus.classify(role: role, publishesCaret: false, hasEditableSignal: true) == .editable)
         }
+        // Web composers exposed with a non-text widget role (e.g. AXButton with
+        // AXEditableAncestor) still resolve to `.editable` via hasEditableSignal.
+        #expect(EditableFocus.classify(role: "AXButton", hasEditableSignal: true) == .editable)
     }
 
-    @Test func containersAndStrangersProceed() {
-        // The measured shapes: Muse answered with a container, and a web
-        // area is what a Chromium composer reports once its tree is awake.
-        // None of these is positive evidence that a caret cannot exist.
+    @Test func containersWithCaretOrOpaqueRolesProceed() {
+        // Containers with a live caret (publishesCaret == true) or positive
+        // editability signal proceed; opaque custom/GPU roles always proceed.
         for role in [
-            "AXGroup", "AXWebArea", "AXScrollArea", "AXLayoutArea", "AXLayoutItem",
+            "AXGroup", "AXWebArea", "AXScrollArea", "AXLayoutArea",
             "AXSplitGroup", "AXList", "AXOutline", "AXTable", "AXRow", "AXCell",
-            "AXWindow", "AXSheet", "AXUnknown", "AXWhateverAppleAddsNext",
+            "AXWindow", "AXSheet",
         ] {
-            #expect(EditableFocus.classify(role: role) == .unknown)
+            #expect(EditableFocus.classify(role: role, publishesCaret: true) == .unknown)
+            #expect(EditableFocus.classify(role: role, publishesCaret: false, hasEditableSignal: true) == .editable)
+        }
+        for opaqueRole in ["AXUnknown", "AXApplication", "AXLayoutItem", "AXWhateverAppleAddsNext"] {
+            #expect(EditableFocus.classify(role: opaqueRole, publishesCaret: false) == .unknown)
         }
         #expect(EditableFocus.classify(role: nil) == .unknown)
         // Focus owned by another app is the race guard's failure mode, not
@@ -69,26 +76,21 @@ struct FocusPolicyTests {
         #expect(EditableFocus.classify(role: "AXButton", pidMatches: false) == .unknown)
     }
 
-    @Test func caretlessContainerDivertsOnlyWithoutACaret() {
-        // v7: a window-family container that publishes no caret means nothing
-        // inside the app has focus (measured: Windscribe). Both facts are
-        // positive evidence, so it diverts before any paste is posted.
+    @Test func caretlessContainerDivertsOnlyWithoutACaretOrEditableSignal() {
+        // Window-furniture AND structural/web containers with neither a live
+        // caret nor an editable signal divert to `.noField` so the catcher
+        // fires on empty webpages, Finder lists, sidebars, and app backgrounds.
         for role in [
             "AXWindow", "AXSheet", "AXDrawer", "AXScrollArea",
             "AXSplitGroup", "AXToolbar", "AXTabGroup",
+            "AXGroup", "AXLayoutArea", "AXWebArea", "AXRootWebArea",
+            "AXBrowser", "AXTable", "AXOutline", "AXList", "AXRow", "AXCell",
         ] {
-            #expect(EditableFocus.classify(role: role, publishesCaret: false) == .noField)
-            // Same role with a caret publisher stays ambiguous — the
-            // container may be hosting a real editor.
-            #expect(EditableFocus.classify(role: role, publishesCaret: true) == .unknown)
-        }
-        // Containers measured to host an unpublished caret in web content
-        // never divert on this rule, caret or not.
-        for role in [
-            "AXGroup", "AXLayoutArea", "AXWebArea", "AXBrowser",
-            "AXTable", "AXList", "AXRow", "AXCell", "AXStaticText",
-        ] {
-            #expect(EditableFocus.classify(role: role, publishesCaret: false) == .unknown)
+            #expect(EditableFocus.classify(role: role, publishesCaret: false, hasEditableSignal: false) == .noField)
+            // Same role with a live caret stays ambiguous so custom editors proceed.
+            #expect(EditableFocus.classify(role: role, publishesCaret: true, hasEditableSignal: false) == .unknown)
+            // Same role with positive editability signal is editable.
+            #expect(EditableFocus.classify(role: role, publishesCaret: false, hasEditableSignal: true) == .editable)
         }
         // A text role wins over caret silence: the role is the stronger fact.
         #expect(EditableFocus.classify(role: "AXTextField", publishesCaret: false) == .editable)
@@ -96,18 +98,20 @@ struct FocusPolicyTests {
         // No role is still unknown, and another app's focus never diverts.
         #expect(EditableFocus.classify(role: nil, publishesCaret: false) == .unknown)
         #expect(EditableFocus.classify(role: "AXWindow", pidMatches: false, publishesCaret: false) == .unknown)
-        // An interactive widget diverts whether or not it has a caret.
+        // An interactive widget without an editable signal diverts whether or not it has a caret.
         #expect(EditableFocus.classify(role: "AXButton", publishesCaret: false) == .noField)
         #expect(EditableFocus.classify(role: "AXButton", publishesCaret: true) == .noField)
     }
 
-    @Test func noValueDivertsOnlyForDesktopShells() {
-        // Measured: Claude answers -25212 while a live composer holds the
-        // caret. "Did not answer" is not "nothing is here".
+    @Test func noValueDivertsForDesktopShellsAndLiveAXTreesWithoutFocus() {
+        // An asleep/opaque app answering .noValue without a live native AX tree stays .unknown.
         #expect(EditableFocus.verdictForFocusError(.noValue) == .unknown)
         #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "com.anthropic.claudefordesktop") == .unknown)
         #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "com.meta.endo") == .unknown)
-        // The desktop: the one place where "no field" is the truth.
+        // Any app whose AX tree IS live (zero windows or native window hierarchy)
+        // and reports .noValue diverts to .noField without needing a bundle allowlist.
+        #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "com.example.AnyApp", appHasLiveAXWithoutFocus: true) == .noField)
+        // The desktop shells also divert directly.
         #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "com.apple.finder") == .noField)
         #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "com.apple.dock") == .noField)
         #expect(EditableFocus.verdictForFocusError(.noValue, bundleID: "COM.APPLE.FINDER") == .noField)
@@ -116,7 +120,7 @@ struct FocusPolicyTests {
         for error in [
             AXError.failure, .invalidUIElement, .apiDisabled, .cannotComplete, .attributeUnsupported,
         ] {
-            #expect(EditableFocus.verdictForFocusError(error, bundleID: "com.apple.finder") == .unknown)
+            #expect(EditableFocus.verdictForFocusError(error, bundleID: "com.apple.finder", appHasLiveAXWithoutFocus: true) == .unknown)
         }
     }
 

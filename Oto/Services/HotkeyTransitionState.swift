@@ -61,15 +61,10 @@ struct HotkeyTransitionState: Equatable, Sendable {
                 return .begin
             case .handsFree:
                 guard !isRepeat else { return .ignore }
-                // Toggle: down while up begins; down while down finishes.
-                // (Key-up never reaches this machine in hands-free.)
-                if isDown {
-                    isDown = false
-                    return .finish
-                } else {
-                    isDown = true
-                    return .begin
-                }
+                // Stateless toggle: the coordinator owns whether a hands-free
+                // session is active, so local state can never desync after
+                // double-tap starts or Flow Bar / error stops.
+                return .toggle
             }
         case .event(.keyUp):
             switch mode {

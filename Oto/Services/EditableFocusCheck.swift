@@ -44,6 +44,7 @@ import ApplicationServices
 import AppKit
 import Foundation
 import os
+import Synchronization
 
 /// Verdict on whether keystrokes have somewhere to land.
 enum EditableFocus: Equatable, Sendable {
@@ -94,19 +95,44 @@ enum EditableFocus: Equatable, Sendable {
     /// `AXWindow`, and the only caret publisher in the tree is a scroll bar).
     /// Defaulted to `true` — "assume a caret exists" — so a caller that
     /// knows nothing about carets can never cause a divert.
+    /// Pure role + capability mapping (unit-tested).
+    ///
+    /// Positive editable signals (`textCapableRoles` or `hasEditableSignal`:
+    /// `AXEditableAncestor`, settable `AXSelectedText`, `AXInsertionPointLineNumber`,
+    /// or settable `AXValue` on a non-widget role) ALWAYS win and return `.editable`
+    /// (or `.secureField` for password fields).
+    ///
+    /// Without any positive editable signal:
+    /// - Known non-editable interactive controls (`nonEditableRoles`) divert to `.noField`.
+    /// - Read-only content roles (`readOnlyContentRoles`: `AXStaticText`, `AXHeading`,
+    ///   `AXImage`, `AXLink`) divert to `.noField` — even if static text is highlighted.
+    /// - Container roles (`caretlessContainerRoles` + structural/web containers like
+    ///   `AXWebArea`, `AXGroup`, `AXOutline`, `AXList`, `AXTable`, `AXRow`, `AXCell`,
+    ///   `AXBrowser`, `AXLayoutArea`) divert to `.noField` when `!publishesCaret`
+    ///   (no live `CFRange` from `AXSelectedTextRange`).
+    /// - Opaque custom/GPU roles (`AXUnknown`, `AXApplication`, unrecognised roles)
+    ///   stay `.unknown` so custom canvas/terminal surfaces still paste.
     nonisolated static func classify(
-        role: String?, subrole: String? = nil, pidMatches: Bool = true,
-        publishesCaret: Bool = true
+        role: String?,
+        subrole: String? = nil,
+        pidMatches: Bool = true,
+        publishesCaret: Bool = true,
+        hasEditableSignal: Bool = false
     ) -> EditableFocus {
         guard pidMatches else { return .unknown }
         guard let role else { return .unknown }
         if textCapableRoles.contains(role) {
             return subrole == kAXSecureTextFieldSubrole as String ? .secureField : .editable
         }
+        if hasEditableSignal {
+            return .editable
+        }
         if nonEditableRoles.contains(role) { return .noField }
-        // A caret-less container: the role cannot host a caret AND the
-        // element publishes none. Positive evidence on both counts.
-        if caretlessContainerRoles.contains(role), !publishesCaret { return .noField }
+        if readOnlyContentRoles.contains(role) { return .noField }
+        // A container with no positive editability signal and no live caret
+        // means nothing editable is focused here (e.g. empty web page, Finder
+        // list, sidebar, app window background).
+        if nonEditableContainerRoles.contains(role), !publishesCaret { return .noField }
         return .unknown
     }
 
@@ -121,20 +147,9 @@ enum EditableFocus: Equatable, Sendable {
         kAXTimeFieldRole as String,
     ]
 
-    /// Roles that positively say "this focus is not a text input". Kept
-    /// narrow on purpose, and deliberately **interactive controls only**:
-    ///
-    /// - Containers (group, web area, scroll/layout area, tables, lists,
-    ///   rows, cells, windows) are absent because a caret can live inside
-    ///   them.
-    /// - Content roles (`AXStaticText`, `AXHeading`, `AXImage`, `AXLink`)
-    ///   are also absent. They cannot take a caret, but web-rendered editors
-    ///   routinely report the caret's host as one of them — the AX tree is
-    ///   least reliable exactly where the content is. A false divert is the
-    ///   bug being fixed, and these are the roles that produced it.
-    ///
-    /// What is left is the set of native controls where the AX answer is
-    /// trustworthy and where typing is impossible by construction.
+    /// Roles that positively say "this focus is not a text input" unless the
+    /// element itself carries an explicit editable signal (`AXEditableAncestor`,
+    /// settable `AXSelectedText`, or `AXInsertionPointLineNumber`).
     nonisolated static let nonEditableRoles: Set<String> = [
         kAXButtonRole as String,
         kAXCheckBoxRole as String,
@@ -165,13 +180,18 @@ enum EditableFocus: Equatable, Sendable {
         kAXValueIndicatorRole as String,
     ]
 
-    /// Container roles that **cannot** take a caret, used only together with
-    /// "publishes no caret". Deliberately excludes the shapes measured to
-    /// host a caret without publishing one — `AXGroup`, `AXLayoutArea`,
-    /// `AXWebArea`, `AXBrowser`, `AXTable`, `AXList`, `AXRow`, `AXCell` —
-    /// where a false divert would break a real editor. Native window
-    /// furniture is safe: a caret never lives in a window, sheet, drawer,
-    /// scroll area, split group, toolbar or tab group itself.
+    /// Read-only content roles. Inside a `contenteditable` editor WebKit and
+    /// Chromium attach `AXEditableAncestor` / settable `AXSelectedText` (caught
+    /// above by `hasEditableSignal`); without those signals, these are static
+    /// read-only elements and cannot receive pasted text.
+    nonisolated static let readOnlyContentRoles: Set<String> = [
+        kAXStaticTextRole as String,
+        "AXHeading",
+        kAXImageRole as String,
+        "AXLink",
+    ]
+
+    /// Window-furniture container roles (kept for clarity and tests).
     nonisolated static let caretlessContainerRoles: Set<String> = [
         kAXWindowRole as String,
         kAXSheetRole as String,
@@ -182,22 +202,41 @@ enum EditableFocus: Equatable, Sendable {
         kAXTabGroupRole as String,
     ]
 
-    /// AX-error mapping (unit-tested). `noValue` means the app did not
-    /// answer — NOT that nothing is editable. It diverts only for desktop
-    /// shells, where "no field" is the true state. Every other error is
-    /// ambiguity and proceeds.
+    /// Structural and document container roles that divert to `.noField` when
+    /// they have neither a positive editability signal nor a live caret range.
+    /// Deliberately excludes `AXUnknown` and `AXApplication` so custom GPU
+    /// surfaces without semantic AX roles proceed safely.
+    nonisolated static let nonEditableContainerRoles: Set<String> = caretlessContainerRoles.union([
+        kAXGroupRole as String,
+        kAXOutlineRole as String,
+        kAXListRole as String,
+        kAXTableRole as String,
+        kAXRowRole as String,
+        kAXCellRole as String,
+        kAXBrowserRole as String,
+        kAXLayoutAreaRole as String,
+        "AXWebArea",
+        "AXRootWebArea",
+    ])
+
+    /// AX-error mapping (unit-tested). `noValue` diverts for desktop shells
+    /// AND when the app's AX tree is live (open native window or zero windows)
+    /// while reporting nothing focused (`appHasLiveAXWithoutFocus`). Every
+    /// other error (`.apiDisabled`, `.attributeUnsupported`, `.cannotComplete`)
+    /// stays `.unknown` so opaque apps proceed safely.
     nonisolated static func verdictForFocusError(
-        _ error: AXError, bundleID: String? = nil
+        _ error: AXError,
+        bundleID: String? = nil,
+        appHasLiveAXWithoutFocus: Bool = false
     ) -> EditableFocus {
-        guard error == .noValue, VoidShells.isVoidShell(bundleID: bundleID) else {
-            return .unknown
+        guard error == .noValue else { return .unknown }
+        if VoidShells.isVoidShell(bundleID: bundleID) || appHasLiveAXWithoutFocus {
+            return .noField
         }
-        return .noField
+        return .unknown
     }
 
-    /// Roles that mean "an HTML document is rendered here". AX roles below
-    /// one of these are the host's mapping of DOM semantics, not a native
-    /// control's own truth — measured: Muse's composer is `AXButton`.
+    /// Roles that mean "an HTML document is rendered here".
     nonisolated static let webContentRoles: Set<String> = ["AXWebArea", "AXBrowser"]
 
     nonisolated static func isWebContentRole(_ role: String?) -> Bool {
@@ -205,36 +244,163 @@ enum EditableFocus: Equatable, Sendable {
         return webContentRoles.contains(role)
     }
 
-    /// True when a non-editable role cannot be trusted as evidence:
+    /// Hard AX IPC timeout applied to every AXUIElement touched by focus checks.
+    nonisolated static let axTimeoutSeconds: Float = 0.25
+
+    /// True when the element itself has an explicit `AXEditableAncestor`
+    /// (published by WebKit and Chromium on nodes inside `contenteditable`
+    /// editors). Unlike earlier versions, merely living under an `AXWebArea`
+    /// does NOT suppress `.noField` — clicking an empty webpage or a web
+    /// button must trigger the catcher.
+    /// True when:
+    /// 1. `element` has an explicit `AXEditableAncestor` or `AXHighestEditableAncestor`,
+    /// 2. `element` reports `AXIsEditable == true`, or
+    /// 3. `element` is a child node (not the root `AXWebArea` itself and not static
+    ///    read-only text/image) nested inside an `AXWebArea` / `AXBrowser` ancestor
+    ///    (within 8 parent hops — covering WebKit/Electron composers like Muse that
+    ///    collapse a `contenteditable` composer into a leaf `AXButton` under `AXWebArea`).
     ///
-    /// - the element answers `AXEditableAncestor` (WebKit/Chromium publish
-    ///   this on nodes inside a contenteditable), or
-    /// - an ancestor is a web area / browser.
-    ///
-    /// Bounded (≤ 8 hops, read-only) and only reached on the divert path, so
-    /// the common `.editable` verdict pays nothing. A mistaken `true` costs
-    /// one silent no-insert; a mistaken `false` is the false catcher this
-    /// whole change exists to remove.
+    /// Because the parent walk only runs when `element` itself is NOT `AXWebArea` /
+    /// `AXRootWebArea`, clicking an empty webpage or background in Spotify, Chrome,
+    /// or Electron (where the root `AXWebArea` itself is focused) still returns
+    /// `false` and diverts to the catcher.
     nonisolated static func webContentHidesEditable(element: AXUIElement) -> Bool {
-        var ancestor: CFTypeRef?
+        AXUIElementSetMessagingTimeout(element, axTimeoutSeconds)
+        for attr in [kAXEditableAncestorAttribute as String, "AXHighestEditableAncestor"] {
+            var ancestor: CFTypeRef?
+            if AXUIElementCopyAttributeValue(
+                element, attr as CFString, &ancestor
+            ) == .success,
+                let raw = ancestor, CFGetTypeID(raw) == AXUIElementGetTypeID()
+            {
+                return true
+            }
+        }
+        var isEditableRaw: CFTypeRef?
         if AXUIElementCopyAttributeValue(
-            element, kAXEditableAncestorAttribute as CFString, &ancestor
+            element, "AXIsEditable" as CFString, &isEditableRaw
         ) == .success,
-            let raw = ancestor, CFGetTypeID(raw) == AXUIElementGetTypeID()
+            let number = isEditableRaw as? NSNumber,
+            number.boolValue
         {
             return true
         }
-        var cursor: AXUIElement? = element
+        let selfRole = role(of: element)
+        if let selfRole,
+           selfRole == "AXWebArea" || selfRole == "AXRootWebArea" || readOnlyContentRoles.contains(selfRole)
+        {
+            return false
+        }
+        var current = parent(of: element)
         var hops = 0
-        while let node = cursor, hops < 8 {
-            if isWebContentRole(role(of: node)) { return true }
-            cursor = parent(of: node)
+        while let node = current, hops < 8 {
+            if isWebContentRole(role(of: node)) {
+                return true
+            }
+            current = parent(of: node)
             hops += 1
         }
         return false
     }
 
-    nonisolated private static func role(of element: AXUIElement) -> String? {
+    /// Role descriptions used by web/custom text composers that expose a
+    /// generic container role (`AXGroup` / `AXWebArea`) rather than `AXTextArea`.
+    nonisolated private static let editableRoleDescriptions: Set<String> = [
+        "text entry area",
+        "text field",
+        "text area",
+        "search text field",
+    ]
+
+    /// Capability-based check: returns true when `element` publishes a positive
+    /// text-editing capability (`AXEditableAncestor`, `AXHighestEditableAncestor`,
+    /// settable `AXSelectedText`, settable `AXSelectedTextRange`, editable
+    /// `AXRoleDescription`, or settable `AXValue` on a non-widget role).
+    ///
+    /// Note: `kAXInsertionPointLineNumberAttribute` is deliberately excluded —
+    /// Finder's Desktop `AXGroup` returns `0` and Chromium's root `AXWebArea`
+    /// returns `NSNotFound` (`Int.max`) even when nothing editable is focused.
+    nonisolated static func hasPositiveEditableSignal(element: AXUIElement, role: String?) -> Bool {
+        AXUIElementSetMessagingTimeout(element, axTimeoutSeconds)
+        if webContentHidesEditable(element: element) {
+            return true
+        }
+        var selectedTextSettable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(
+            element, kAXSelectedTextAttribute as CFString, &selectedTextSettable
+        ) == .success, selectedTextSettable.boolValue {
+            return true
+        }
+        var selectedRangeSettable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(
+            element, kAXSelectedTextRangeAttribute as CFString, &selectedRangeSettable
+        ) == .success, selectedRangeSettable.boolValue {
+            return true
+        }
+        if let role, !nonEditableRoles.contains(role), !readOnlyContentRoles.contains(role) {
+            var valueSettable: DarwinBoolean = false
+            if AXUIElementIsAttributeSettable(
+                element, kAXValueAttribute as CFString, &valueSettable
+            ) == .success, valueSettable.boolValue {
+                return true
+            }
+            var descRaw: CFTypeRef?
+            if AXUIElementCopyAttributeValue(
+                element, kAXRoleDescriptionAttribute as CFString, &descRaw
+            ) == .success,
+               let desc = (descRaw as? String)?.lowercased(),
+               editableRoleDescriptions.contains(desc)
+            {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Capability check when `AXFocusedUIElement` still returns `.noValue`
+    /// after waking the window tree:
+    /// - If the app's AX server answers `kAXWindowsAttribute`:
+    ///   - 0 open windows (`windows.isEmpty`) → true (`.noField`).
+    ///   - No focused window (`kAXFocusedWindowAttribute != .success`, e.g.
+    ///     only a non-activating panel like `FlowBarPanel` or desktop background)
+    ///     → true (`.noField`).
+    /// - When a focused window DOES exist and `AXFocusedUIElement` is `.noValue`
+    ///   (the exact shape of Electron/WebKit apps like Claude, Conductor, and
+    ///   Codex when a composer is auto-focused on launch before the first key
+    ///   is typed), returns `false` so verdict stays `.unknown` and dictation
+    ///   pastes on the first try without requiring the user to type first.
+    nonisolated static func appHasLiveAXWithoutFocus(pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, axTimeoutSeconds)
+
+        var windowsRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            app, kAXWindowsAttribute as CFString, &windowsRaw
+        ) == .success,
+            let windows = windowsRaw as? [AXUIElement]
+        else { return false }
+
+        if windows.isEmpty {
+            return true
+        }
+
+        var focusedWindowRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            app, kAXFocusedWindowAttribute as CFString, &focusedWindowRaw
+        ) == .success,
+            let winRaw = focusedWindowRaw,
+            CFGetTypeID(winRaw) == AXUIElementGetTypeID()
+        else {
+            // The app's AX server is alive (`kAXWindowsAttribute` succeeded)
+            // and positively reports no focused window at all.
+            return true
+        }
+        return false
+    }
+
+    nonisolated fileprivate static func role(of element: AXUIElement) -> String? {
+        AXUIElementSetMessagingTimeout(element, axTimeoutSeconds)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, kAXRoleAttribute as CFString, &value
@@ -242,12 +408,14 @@ enum EditableFocus: Equatable, Sendable {
         return value as? String
     }
 
-    nonisolated private static func parent(of element: AXUIElement) -> AXUIElement? {
+    nonisolated fileprivate static func parent(of element: AXUIElement) -> AXUIElement? {
+        AXUIElementSetMessagingTimeout(element, axTimeoutSeconds)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, kAXParentAttribute as CFString, &value
         ) == .success,
-            let raw = value, CFGetTypeID(raw) == AXUIElementGetTypeID()
+            let raw = value,
+            CFGetTypeID(raw) == AXUIElementGetTypeID()
         else { return nil }
         return unsafeDowncast(raw, to: AXUIElement.self)
     }
@@ -332,13 +500,12 @@ struct LiveFocusCheck: FocusChecking {
 
     /// One-shot resume gate: the AX worker and the timeout race, and
     /// exactly one resumes the continuation (double-resume traps).
-    private final class ResumeGate: @unchecked Sendable {
-        private let lock = NSLock()
-        private nonisolated(unsafe) var claimed = false
+    private final class ResumeGate: Sendable {
+        private let claimed = Mutex(false)
         nonisolated func claim() -> Bool {
-            lock.withLock {
-                guard !claimed else { return false }
-                claimed = true
+            claimed.withLock { value in
+                guard !value else { return false }
+                value = true
                 return true
             }
         }
@@ -377,18 +544,13 @@ struct LiveFocusCheck: FocusChecking {
         // cooperative cancellation, so a structured group would await a
         // hung worker forever and the "timeout" would be a lie. The worker
         // runs OFF the cooperative pool (blocking C call), the timer on it;
-        // ResumeGate admits exactly one winner. A late loser still logs
-        // (truthful timestamped data) but cannot resume or touch state.
+        // ResumeGate admits exactly one winner, and the worker cancels the
+        // timeout task immediately upon completion.
         await withCheckedContinuation { continuation in
             let gate = ResumeGate()
             let reader = self.reader
             let bundleID = FocusBundle.bundleID(for: pid)
-            DispatchQueue.global(qos: .utility).async {
-                let read = reader(pid)
-                Self.logVerdict(pid: pid, read: read, timedOut: false, bundleID: bundleID)
-                if gate.claim() { continuation.resume(returning: read.verdict) }
-            }
-            Task {
+            let timeoutTask = Task {
                 try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
                 guard !Task.isCancelled else { return }
                 // Gate first: if the worker already won (and logged its
@@ -400,6 +562,12 @@ struct LiveFocusCheck: FocusChecking {
                     continuation.resume(returning: .unknown)
                 }
             }
+            DispatchQueue.global(qos: .utility).async {
+                let read = reader(pid)
+                timeoutTask.cancel()
+                Self.logVerdict(pid: pid, read: read, timedOut: false, bundleID: bundleID)
+                if gate.claim() { continuation.resume(returning: read.verdict) }
+            }
         }
     }
 
@@ -410,12 +578,16 @@ struct LiveFocusCheck: FocusChecking {
     /// weaker read can no longer veto a live field (Shape D).
     nonisolated static func liveRead(pid: pid_t) -> FocusRead {
         let bundle = FocusBundle.bundleID(for: pid)
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, EditableFocus.axTimeoutSeconds)
         let wide = readFocusedElement(
-            AXUIElementCreateSystemWide(), source: .systemWide, pid: pid, bundleID: bundle
+            systemWide, source: .systemWide, pid: pid, bundleID: bundle
         )
         if wide.verdict == .editable || wide.verdict == .secureField { return wide }
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, EditableFocus.axTimeoutSeconds)
         let app = readFocusedElement(
-            AXUIElementCreateApplication(pid), source: .app, pid: pid, bundleID: bundle
+            appElement, source: .app, pid: pid, bundleID: bundle
         )
         if app.verdict == .editable || app.verdict == .secureField { return app }
         // Shape D trail: the two reads disagreeing is the one thing that
@@ -424,6 +596,9 @@ struct LiveFocusCheck: FocusChecking {
         if app.verdict != wide.verdict || app.role != wide.role || app.axError != wide.axError {
             logAlternate(pid: pid, read: app, bundleID: bundle)
         }
+        // Never discard positive `.noField` evidence from the app element when
+        // the system-wide read returned `.unknown` (e.g. `.noValue`).
+        if wide.verdict == .unknown && app.verdict == .noField { return app }
         return wide
     }
 
@@ -433,13 +608,34 @@ struct LiveFocusCheck: FocusChecking {
     nonisolated static func readFocusedElement(
         _ root: AXUIElement, source: FocusSource, pid: pid_t, bundleID: String?
     ) -> FocusRead {
+        AXUIElementSetMessagingTimeout(root, EditableFocus.axTimeoutSeconds)
         var focused: CFTypeRef?
-        let focusError = AXUIElementCopyAttributeValue(
+        var focusError = AXUIElementCopyAttributeValue(
             root, kAXFocusedUIElementAttribute as CFString, &focused
         )
+        if focusError == .noValue, pid > 0, !VoidShells.isVoidShell(bundleID: bundleID) {
+            let appEl = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(appEl, EditableFocus.axTimeoutSeconds)
+            _ = AXUIElementSetAttributeValue(
+                appEl, AccessibilityPrewarm.manualAccessibility as CFString, kCFBooleanTrue
+            )
+            _ = AXUIElementSetAttributeValue(
+                appEl, AccessibilityPrewarm.enhancedUserInterface as CFString, kCFBooleanTrue
+            )
+            focusError = AXUIElementCopyAttributeValue(
+                root, kAXFocusedUIElementAttribute as CFString, &focused
+            )
+        }
         guard focusError == .success else {
+            let liveWithoutFocus = (focusError == .noValue && !VoidShells.isVoidShell(bundleID: bundleID))
+                ? EditableFocus.appHasLiveAXWithoutFocus(pid: pid)
+                : false
             return FocusRead(
-                verdict: EditableFocus.verdictForFocusError(focusError, bundleID: bundleID),
+                verdict: EditableFocus.verdictForFocusError(
+                    focusError,
+                    bundleID: bundleID,
+                    appHasLiveAXWithoutFocus: liveWithoutFocus
+                ),
                 axError: focusError,
                 source: source
             )
@@ -450,6 +646,7 @@ struct LiveFocusCheck: FocusChecking {
         // Safe: type ID verified above (conditional casts are trivially true
         // for CF types; unconditional `as` is unexpressible).
         let element = unsafeDowncast(raw, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(element, EditableFocus.axTimeoutSeconds)
         if source == .systemWide {
             var owner: pid_t = 0
             guard AXUIElementGetPid(element, &owner) == .success, owner == pid else {
@@ -458,10 +655,6 @@ struct LiveFocusCheck: FocusChecking {
                 return FocusRead(verdict: .unknown, source: source)
             }
         }
-        // One caret read for the whole verdict: the classifier needs it only
-        // for containers, the trail records it always. Read once here so the
-        // new rule costs zero extra AX round-trips.
-        let publishesCaret = selectedTextPresent(element: element)
         var roleRaw: CFTypeRef?
         let roleError = AXUIElementCopyAttributeValue(
             element, kAXRoleAttribute as CFString, &roleRaw
@@ -470,24 +663,37 @@ struct LiveFocusCheck: FocusChecking {
             return FocusRead(
                 verdict: .unknown,
                 axError: roleError,
-                hasSelectedText: publishesCaret,
+                hasSelectedText: selectedTextPresent(element: element),
                 source: source
             )
         }
         let role = roleRaw as? String
+        if let role, EditableFocus.textCapableRoles.contains(role) {
+            let verdict = EditableFocus.classify(
+                role: role,
+                subrole: secureSubrole(role: role, element: element),
+                pidMatches: true,
+                publishesCaret: true,
+                hasEditableSignal: true
+            )
+            return FocusRead(
+                verdict: verdict,
+                hasSelectedText: true,
+                role: role,
+                source: source
+            )
+        }
+        let editableSignal = EditableFocus.hasPositiveEditableSignal(element: element, role: role)
+        let publishesCaret = editableSignal || selectedTextPresent(element: element)
         var verdict = EditableFocus.classify(
             role: role,
-            subrole: secureSubrole(role: role, element: element),
+            subrole: nil,
             pidMatches: true,
-            publishesCaret: publishesCaret
+            publishesCaret: publishesCaret,
+            hasEditableSignal: editableSignal
         )
-        // A widget role is only trustworthy on native content. Web hosts map
-        // DOM semantics onto arbitrary AX roles — measured on Muse, whose
-        // message composer is a single AXButton whose title concatenates its
-        // placeholders — so a divert inside a web area is a guess, not
-        // evidence. Same for anything reporting an editable ancestor.
-        if verdict == .noField, EditableFocus.webContentHidesEditable(element: element) {
-            verdict = .unknown
+        if verdict == .unknown, VoidShells.isVoidShell(bundleID: bundleID) {
+            verdict = .noField
         }
         return FocusRead(
             verdict: verdict,
@@ -497,16 +703,41 @@ struct LiveFocusCheck: FocusChecking {
         )
     }
 
-    /// Selected-text presence (diagnostic only in v6): true when the focused
-    /// element answers `AXSelectedText` or `AXSelectedTextRange`. The value
-    /// is released unread (presence only — content never crosses); any
-    /// failure means "no signal", never error.
+    /// True ONLY when `element` publishes a live, editable `CFRange` via
+    /// `kAXSelectedTextRangeAttribute` (with settable `AXSelectedTextRange`
+    /// or `AXSelectedText`). Non-editable containers like Finder's `AXDesktop`
+    /// (`AXGroup`) and Chromium's root `AXWebArea` return a read-only dummy
+    /// `CFRange(0, 0)` when nothing is focused; requiring settability prevents
+    /// dummy container ranges from suppressing the catcher.
     nonisolated static func selectedTextPresent(element: AXUIElement) -> Bool {
-        for attribute in [kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute] {
-            var value: CFTypeRef?
-            let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-            _ = value
-            if error == .success { return true }
+        AXUIElementSetMessagingTimeout(element, EditableFocus.axTimeoutSeconds)
+        var rangeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &rangeValue
+        ) == .success,
+            let raw = rangeValue,
+            CFGetTypeID(raw) == AXValueGetTypeID()
+        else {
+            return false
+        }
+        var range = CFRange()
+        guard AXValueGetValue(unsafeDowncast(raw, to: AXValue.self), .cfRange, &range),
+              range.location >= 0,
+              range.location != kCFNotFound
+        else {
+            return false
+        }
+        var rangeSettable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(
+            element, kAXSelectedTextRangeAttribute as CFString, &rangeSettable
+        ) == .success, rangeSettable.boolValue {
+            return true
+        }
+        var textSettable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(
+            element, kAXSelectedTextAttribute as CFString, &textSettable
+        ) == .success, textSettable.boolValue {
+            return true
         }
         return false
     }
@@ -517,6 +748,7 @@ struct LiveFocusCheck: FocusChecking {
     /// ambiguity — plain text fields need not expose one.
     nonisolated static func secureSubrole(role: String?, element: AXUIElement) -> String? {
         guard let role, EditableFocus.textCapableRoles.contains(role) else { return nil }
+        AXUIElementSetMessagingTimeout(element, EditableFocus.axTimeoutSeconds)
         var subroleRaw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, kAXSubroleAttribute as CFString, &subroleRaw

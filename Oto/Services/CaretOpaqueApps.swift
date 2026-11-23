@@ -20,8 +20,8 @@
 import Foundation
 
 enum CaretOpaqueApps {
-    /// Terminal emulators and terminal hosts whose AX caret is not a
-    /// document-true insertion point.
+    /// Terminal emulators, terminal hosts, and custom-rendered editors whose
+    /// AX caret is not a document-true insertion point.
     nonisolated static let bundleIDs: Set<String> = [
         // Proven from the installed app and its source (see file header).
         "com.mitchellh.ghostty",
@@ -31,14 +31,30 @@ enum CaretOpaqueApps {
         // Installed on this Mac as "Rex Beta", bundle ID verified from
         // Contents/Info.plist (team AG92C3PT77).
         "com.superlogical.rex",
+        // Terminal emulators & GPU/custom-surface editors that render text
+        // grids without a fresh document-true AXSelectedTextRange / count.
+        "com.googlecode.iterm2",
+        "dev.warp.warp-stable",
+        "org.alacritty",
+        "net.kovidgoyal.kitty",
+        "com.github.wez.wezterm",
+        "dev.zed.zed",
+        "org.gnu.emacs",
+    ]
+
+    /// Bundle-ID prefixes for multi-product suites (JetBrains IDEs) whose
+    /// custom editor surfaces do not publish a verifiable AX caret.
+    nonisolated static let bundleIDPrefixes: [String] = [
+        "com.jetbrains.",
     ]
 
     /// Nil, empty and unknown bundle IDs stay verifiable: only a known
-    /// terminal loses the post-paste proof.
+    /// caret-opaque app loses the post-paste proof.
     nonisolated static func isOpaque(_ bundleID: String?) -> Bool {
         guard let bundleID else { return false }
         let key = bundleID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !key.isEmpty else { return false }
-        return self.bundleIDs.contains(key)
+        if self.bundleIDs.contains(key) { return true }
+        return self.bundleIDPrefixes.contains { key.hasPrefix($0) }
     }
 }

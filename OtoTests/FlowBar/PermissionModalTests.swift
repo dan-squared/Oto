@@ -7,7 +7,9 @@
 //  branching tested without touching TCC, and prewarm builds headless.
 //
 
+import AppKit
 import Foundation
+import QuartzCore
 import Testing
 @testable import Oto
 
@@ -113,5 +115,41 @@ struct PermissionModalTests {
         modal.prewarm()
         #expect(modal.hasPanel)
         modal.hide()
+    }
+
+    @Test func morphUsesMaskRevealWithoutMutatingAnchorPointAndHonorsReduceMotion() {
+        // Smooth mask-reveal morph: animates the CAShapeLayer mask path rather
+        // than scaling NSGlassEffectView, never mutates layer.anchorPoint, and
+        // settles immediately when Reduce Motion is enabled.
+        let card = PermissionCardView(onGrant: nil)
+        let originalAnchor = card.layer?.anchorPoint
+        let pill = NSRect(x: 100, y: 100, width: VisualizerMath.dictationWidth, height: VisualizerMath.pillHeight)
+        let target = NSRect(x: 0, y: 100, width: card.contentWidth(), height: PermissionCardView.height)
+
+        card.morph(from: pill, card: target, position: .top, reduceMotion: false)
+        #expect(card.layer?.anchorPoint == originalAnchor)
+        #expect(card.hasActiveMorphAnimation())
+
+        card.morph(from: pill, card: target, position: .bottom, reduceMotion: true)
+        #expect(card.layer?.anchorPoint == originalAnchor)
+        #expect(!card.hasActiveMorphAnimation())
+
+        // Verify pure transform helper still pins top-center / bottom-center.
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 44)
+        let topT = PermissionCardView.morphTransform(
+            bounds: bounds, anchorPoint: .zero, position: .top, sx: 0.25, sy: 0.5
+        )
+        let topCenterX = topT.m11 * bounds.midX + topT.m41
+        let topCenterY = topT.m22 * bounds.maxY + topT.m42
+        #expect(abs(topCenterX - bounds.midX) < 0.001)
+        #expect(abs(topCenterY - bounds.maxY) < 0.001)
+
+        let bottomT = PermissionCardView.morphTransform(
+            bounds: bounds, anchorPoint: .zero, position: .bottom, sx: 0.25, sy: 0.5
+        )
+        let bottomCenterX = bottomT.m11 * bounds.midX + bottomT.m41
+        let bottomCenterY = bottomT.m22 * bounds.minY + bottomT.m42
+        #expect(abs(bottomCenterX - bounds.midX) < 0.001)
+        #expect(abs(bottomCenterY - bounds.minY) < 0.001)
     }
 }

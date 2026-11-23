@@ -25,12 +25,19 @@ final class FakeHAL: MediaVolumeHAL, @unchecked Sendable {
     private nonisolated(unsafe) var _noVolume = false
     private nonisolated(unsafe) var _setCalls: [(volume: Float32, device: AudioObjectID)] = []
     private nonisolated(unsafe) var _getCalls = 0
+    private nonisolated(unsafe) var _uids: [AudioObjectID: String] = [:]
 
-    func stub(volume: Float32, device: AudioObjectID, controlled: Set<AudioObjectID>) {
+    func stub(
+        volume: Float32,
+        device: AudioObjectID,
+        controlled: Set<AudioObjectID>,
+        uids: [AudioObjectID: String] = [:]
+    ) {
         lock.withLock {
             _volume = volume
             _device = device
             _controlled = controlled
+            _uids = uids
             _noVolume = false
         }
     }
@@ -68,6 +75,14 @@ final class FakeHAL: MediaVolumeHAL, @unchecked Sendable {
             _volume = volume
             return true
         }
+    }
+
+    nonisolated func deviceUID(for device: AudioObjectID) -> String? {
+        lock.withLock { _uids[device] }
+    }
+
+    nonisolated func deviceID(forUID uid: String) -> AudioObjectID? {
+        lock.withLock { _uids.first(where: { $0.value == uid })?.key }
     }
 }
 
@@ -380,6 +395,69 @@ struct MediaDuckTests {
         await duck.restore(sessionID: id)
         #expect(hal.setCalls.last?.volume == 0.5)
         #expect(hal.setCalls.last?.device == 70)
+        #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
+    }
+
+    @Test func skipsDuckWhenVolumeAlreadySilent() async {
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        hal.stub(volume: 0.0005, device: 70, controlled: [70])
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        await duck.duck(sessionID: UUID())
+        #expect(hal.setCalls.isEmpty)
+        #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
+    }
+
+    @Test func restoreDoesNotClobberUserVolumeIncrease() async {
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        let id = UUID()
+        await duck.duck(sessionID: id)
+        #expect(hal.setCalls.count == 1)
+        // User manually turned volume up to 0.35 while recording.
+        hal.stub(volume: 0.35, device: 70, controlled: [70])
+        await duck.restore(sessionID: id)
+        #expect(hal.setCalls.count == 1)
+        #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
+    }
+
+    @Test func disabledToggleHealsStrandedSlot() async {
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        let a = UUID()
+        await duck.duck(sessionID: a)
+        hal.stubNoVolumeControl()
+        await duck.restore(sessionID: a)
+        #expect(defaults.bool(forKey: MediaDuckSettings.crashedKey))
+
+        // User turns MediaDuck off; device recovers; next duck heals stranded slot.
+        defaults.set(false, forKey: MediaDuckSettings.key)
+        hal.stub(volume: 0.0, device: 70, controlled: [70])
+        await duck.duck(sessionID: UUID())
+        #expect(hal.setCalls.last?.volume == 0.5)
+        #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
+    }
+
+    @Test func crashRecoveryPrefersStableDeviceUID() async {
+        let defaults = freshDefaults()
+        let hal = FakeHAL()
+        hal.stub(volume: 0.6, device: 70, controlled: [70], uids: [70: "uid-speakers"])
+        let duck = MediaDuck(defaults: defaults, hal: hal)
+        await duck.duck(sessionID: UUID())
+        #expect(defaults.string(forKey: MediaDuckSettings.savedDeviceUIDKey) == "uid-speakers")
+
+        // Simulate reboot: device 70 is now something else, speakers moved to ID 99.
+        hal.stub(
+            volume: 0.0,
+            device: 99,
+            controlled: [70, 99],
+            uids: [70: "uid-hdmi", 99: "uid-speakers"]
+        )
+        MediaDuck.restoreIfCrashed(defaults: defaults, hal: hal)
+        #expect(hal.setCalls.last?.device == 99)
+        #expect(hal.setCalls.last?.volume == 0.6)
         #expect(!defaults.bool(forKey: MediaDuckSettings.crashedKey))
     }
 }

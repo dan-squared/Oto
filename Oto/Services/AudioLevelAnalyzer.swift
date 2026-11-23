@@ -22,99 +22,160 @@
 import Accelerate
 import AVFoundation
 import Foundation
+import Synchronization
 
-/// Realtime-safe latest-slot for the analyzer. Drop-on-full by
-/// construction (overwrite, never grow, never block). Unarmed (before
-/// `start`, after `stop`) `offer` returns immediately — zero cost outside
-/// recording. Conversion happens here on the audio thread: allocation per
-/// buffer at ~12 buffers/s is precedent-proven (AudioFeedBox does the
-/// same under its lock).
-final class LevelFeedBox: @unchecked Sendable {
-    nonisolated static let analysisSampleRate: Double = 16_000
+/// Realtime-safe latest-slot for the analyzer. Drop-on-full by construction
+/// (overwrite a single `Float?` RMS value, never allocate, never grow, never
+/// block). Broadband RMS is sample-rate invariant, so `offer` computes it
+/// directly from the incoming `AVAudioPCMBuffer` with zero allocations or
+/// `AVAudioConverter` overhead. Unarmed (before `start`, after `stop`) `offer`
+/// returns immediately — zero cost outside recording.
+nonisolated final class LevelFeedBox: Sendable {
+    static let analysisSampleRate: Double = 16_000
 
-    private let lock = NSLock()
-    private nonisolated(unsafe) var armed = false
-    private nonisolated(unsafe) var latest: AVAudioPCMBuffer?
-    private nonisolated(unsafe) var offerFailures = 0
-    private let converter = BufferConverter()
-    private nonisolated(unsafe) var format: AVAudioFormat?
-
-    init() {
-        format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Self.analysisSampleRate,
-            channels: 1, interleaved: false
-        )
+    private struct State {
+        var armed = false
+        var latestRMS: Float?
+        var offerFailures = 0
     }
 
-    nonisolated func setArmed(_ armed: Bool) {
-        lock.lock()
-        self.armed = armed
-        if !armed { latest = nil }
-        lock.unlock()
+    private let state = Mutex(State())
+
+    init() {}
+
+    func setArmed(_ armed: Bool) {
+        state.withLock { s in
+            s.armed = armed
+            if !armed { s.latestRMS = nil }
+        }
     }
 
-    nonisolated func offer(_ buffer: AVAudioPCMBuffer) {
-        lock.lock()
-        guard armed, let format else {
-            lock.unlock()
-            return
+    func offer(_ buffer: AVAudioPCMBuffer) {
+        guard state.withLock({ $0.armed }) else { return }
+        let rms = LevelEngine.rms(buffer)
+        state.withLock { s in
+            guard s.armed else { return }
+            s.latestRMS = rms
         }
-        let converted: AVAudioPCMBuffer?
-        do {
-            converted = try converter.convertBuffer(buffer, to: format)
-        } catch {
-            offerFailures += 1
-            converted = nil
-        }
-        if converted != nil { latest = converted }
-        lock.unlock()
     }
 
     /// Consume-once: the analyzer drains at ~60 Hz; anything not taken is
     /// stale by definition.
-    nonisolated func takeLatest() -> AVAudioPCMBuffer? {
-        lock.lock()
-        defer { lock.unlock() }
-        let buffer = latest
-        latest = nil
-        return buffer
+    func takeLatest() -> Float? {
+        state.withLock { s in
+            let rms = s.latestRMS
+            s.latestRMS = nil
+            return rms
+        }
     }
 
-    nonisolated func failureCount() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return offerFailures
+    func failureCount() -> Int {
+        state.withLock { $0.offerFailures }
     }
 }
 
-/// Whole converted buffer → RMS → display level 0…1. No FFT, no bands:
-/// loudness is the only quantity the wave needs. Confined to the analyzer
-/// actor (single-threaded by actor serialization); @unchecked Sendable
-/// names exactly that confinement.
-final class LevelEngine: @unchecked Sendable {
-    nonisolated init() {}
+/// Whole buffer → broadband RMS → display level 0…1. No FFT, no bands, no
+/// sample-rate conversion: loudness is sample-rate invariant and computed
+/// directly from Float32 (`vDSP_rmsqv`), Int16, or Int32 in interleaved or
+/// non-interleaved layouts with zero allocations.
+nonisolated final class LevelEngine: Sendable {
+    init() {}
 
-    /// RMS over the entire converted buffer (≈85 ms at 16 kHz). The buffer
-    /// cadence is the latency floor; a shorter window would not beat it.
-    /// Digital silence maps to 0, never NaN.
-    nonisolated func level(_ buffer: AVAudioPCMBuffer) -> Float {
-        guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else {
+    /// Broadband RMS over the entire buffer across all channels.
+    /// Digital silence and empty/unrecognized buffers map to 0, never NaN.
+    static func rms(_ buffer: AVAudioPCMBuffer) -> Float {
+        let frames = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frames > 0, channelCount > 0 else { return 0 }
+        let isInterleaved = buffer.format.isInterleaved
+
+        switch buffer.format.commonFormat {
+        case .pcmFormatFloat32:
+            guard let channels = buffer.floatChannelData else { return 0 }
+            if isInterleaved {
+                var value: Float = 0
+                vDSP_rmsqv(channels[0], 1, &value, vDSP_Length(frames * channelCount))
+                return value.isFinite ? value : 0
+            } else if channelCount == 1 {
+                var value: Float = 0
+                vDSP_rmsqv(channels[0], 1, &value, vDSP_Length(frames))
+                return value.isFinite ? value : 0
+            } else {
+                var meanSquareSum: Float = 0
+                for ch in 0..<channelCount {
+                    var channelMeanSquare: Float = 0
+                    vDSP_measqv(channels[ch], 1, &channelMeanSquare, vDSP_Length(frames))
+                    if channelMeanSquare.isFinite {
+                        meanSquareSum += channelMeanSquare
+                    }
+                }
+                let combined = (meanSquareSum / Float(channelCount)).squareRoot()
+                return combined.isFinite ? combined : 0
+            }
+
+        case .pcmFormatInt16:
+            guard let channels = buffer.int16ChannelData else { return 0 }
+            let scale = 1.0 / 32768.0
+            var sumSquares: Double = 0
+            let totalSamples = frames * channelCount
+            if isInterleaved {
+                let samples = channels[0]
+                for i in 0..<totalSamples {
+                    let s = Double(samples[i]) * scale
+                    sumSquares += s * s
+                }
+            } else {
+                for ch in 0..<channelCount {
+                    let samples = channels[ch]
+                    for f in 0..<frames {
+                        let s = Double(samples[f]) * scale
+                        sumSquares += s * s
+                    }
+                }
+            }
+            let value = Float((sumSquares / Double(totalSamples)).squareRoot())
+            return value.isFinite ? value : 0
+
+        case .pcmFormatInt32:
+            guard let channels = buffer.int32ChannelData else { return 0 }
+            let scale = 1.0 / 2_147_483_648.0
+            var sumSquares: Double = 0
+            let totalSamples = frames * channelCount
+            if isInterleaved {
+                let samples = channels[0]
+                for i in 0..<totalSamples {
+                    let s = Double(samples[i]) * scale
+                    sumSquares += s * s
+                }
+            } else {
+                for ch in 0..<channelCount {
+                    let samples = channels[ch]
+                    for f in 0..<frames {
+                        let s = Double(samples[f]) * scale
+                        sumSquares += s * s
+                    }
+                }
+            }
+            let value = Float((sumSquares / Double(totalSamples)).squareRoot())
+            return value.isFinite ? value : 0
+
+        default:
             return 0
         }
-        var rms: Float = 0
-        vDSP_rmsqv(channel, 1, &rms, vDSP_Length(buffer.frameLength))
-        return VisualizerMath.level(rms: rms)
+    }
+
+    /// RMS over the entire buffer → display level 0…1. Digital silence maps
+    /// to 0, never NaN.
+    func level(_ buffer: AVAudioPCMBuffer) -> Float {
+        VisualizerMath.level(rms: Self.rms(buffer))
     }
 }
 
 /// Owns the analyzer loop. `start` arms the box + spawns the ~60 Hz drain
 /// (16 ms: vsync-grade loudness for the display-link render path);
 /// `stop` cancels, awaits termination, disarms, and publishes silence —
-/// post-stop reads are silent, guaranteed (tested). Zero changes to the
-/// tap/relay/debounce/speech paths.
+/// post-stop reads are silent, guaranteed (tested).
 actor AudioLevelAnalyzer {
-    private let engine = LevelEngine()
     private var task: Task<Void, Never>?
     private var box: LevelFeedBox?
     private var model: FlowBarModel?
@@ -142,9 +203,9 @@ actor AudioLevelAnalyzer {
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled else { break }
             guard let box, let model else { continue }
-            guard let buffer = box.takeLatest() else { continue }
+            guard let rms = box.takeLatest() else { continue }
             tick += 1
-            let level = engine.level(buffer)
+            let level = VisualizerMath.level(rms: rms)
             await model.ingestLevel(level, tick: tick)
         }
     }

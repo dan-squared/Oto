@@ -38,6 +38,7 @@ enum MediaDuckSettings {
     nonisolated static let crashedKey = "app.Oto.mediaDuckedByOto"
     nonisolated static let savedVolumeKey = "app.Oto.mediaDuckSavedVolume"
     nonisolated static let savedDeviceKey = "app.Oto.mediaDuckSavedDevice"
+    nonisolated static let savedDeviceUIDKey = "app.Oto.mediaDuckSavedDeviceUID"
 
     nonisolated static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.object(forKey: key) != nil else { return true }
@@ -56,16 +57,31 @@ protocol MediaVolumeHAL: Sendable {
     nonisolated func deviceHasVolumeControl(_ device: AudioObjectID) -> Bool
     /// Set 'vmvc' on the given device. False on any failure.
     nonisolated func setVolume(_ volume: Float32, onDevice device: AudioObjectID) -> Bool
+    /// Stable device UID (`kAudioDevicePropertyDeviceUID`) for crash recovery.
+    nonisolated func deviceUID(for device: AudioObjectID) -> String?
+    /// Resolves a persisted device UID back to a live `AudioObjectID`.
+    nonisolated func deviceID(forUID uid: String) -> AudioObjectID?
+    /// Current 'vmvc' volume for a specific device, if readable.
+    nonisolated func volume(onDevice device: AudioObjectID) -> Float32?
+}
+
+extension MediaVolumeHAL {
+    nonisolated func deviceUID(for device: AudioObjectID) -> String? { nil }
+    nonisolated func deviceID(forUID uid: String) -> AudioObjectID? { nil }
+    nonisolated func volume(onDevice device: AudioObjectID) -> Float32? {
+        guard let current = currentVolume(), current.device == device else { return nil }
+        return current.volume
+    }
 }
 
 struct LiveMediaVolumeHAL: MediaVolumeHAL {
-    private nonisolated(unsafe) static let vmvc = AudioObjectPropertyAddress(
+    private nonisolated static let vmvc = AudioObjectPropertyAddress(
         mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
         mScope: kAudioDevicePropertyScopeOutput,
         mElement: kAudioObjectPropertyElementMain)
 
     private nonisolated func defaultOutputDevice() -> AudioObjectID? {
-        var device = AudioObjectID(0)
+        var device = AudioObjectID(kAudioObjectUnknown)
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -73,33 +89,74 @@ struct LiveMediaVolumeHAL: MediaVolumeHAL {
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         let status = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &device)
-        return status == 0 ? device : nil
+        return status == noErr && device != AudioObjectID(kAudioObjectUnknown) ? device : nil
     }
 
     nonisolated func currentVolume() -> (device: AudioObjectID, volume: Float32)? {
-        guard let device = defaultOutputDevice(), deviceHasVolumeControl(device) else { return nil }
+        guard let device = defaultOutputDevice(), deviceHasVolumeControl(device),
+              let volume = volume(onDevice: device)
+        else { return nil }
+        return (device, volume)
+    }
+
+    nonisolated func volume(onDevice device: AudioObjectID) -> Float32? {
+        guard device != AudioObjectID(kAudioObjectUnknown) else { return nil }
         var volume: Float32 = 0
         var size = UInt32(MemoryLayout<Float32>.size)
         var addr = Self.vmvc
         let status = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &volume)
-        return status == 0 ? (device, volume) : nil
+        return status == noErr ? volume : nil
     }
 
     nonisolated func deviceHasVolumeControl(_ device: AudioObjectID) -> Bool {
+        guard device != AudioObjectID(kAudioObjectUnknown) else { return false }
         var addr = Self.vmvc
         guard AudioObjectHasProperty(device, &addr) else { return false }
         // Presence ≠ settability: a read-only `vmvc` must not be chosen
         // (restore would fail where the fallback succeeds).
         var settable: DarwinBoolean = false
-        guard AudioObjectIsPropertySettable(device, &addr, &settable) == 0 else { return false }
+        guard AudioObjectIsPropertySettable(device, &addr, &settable) == noErr else { return false }
         return settable.boolValue
     }
 
     nonisolated func setVolume(_ volume: Float32, onDevice device: AudioObjectID) -> Bool {
+        guard device != AudioObjectID(kAudioObjectUnknown) else { return false }
         var addr = Self.vmvc
         var value = volume
         let size = UInt32(MemoryLayout<Float32>.size)
-        return AudioObjectSetPropertyData(device, &addr, 0, nil, size, &value) == 0
+        return AudioObjectSetPropertyData(device, &addr, 0, nil, size, &value) == noErr
+    }
+
+    nonisolated func deviceUID(for device: AudioObjectID) -> String? {
+        guard device != AudioObjectID(kAudioObjectUnknown) else { return nil }
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size = UInt32(MemoryLayout<UnsafeRawPointer>.size)
+        var raw: UnsafeRawPointer?
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &raw) == noErr,
+              let raw
+        else { return nil }
+        return Unmanaged<CFString>.fromOpaque(raw).takeRetainedValue() as String
+    }
+
+    nonisolated func deviceID(forUID uid: String) -> AudioObjectID? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size
+        ) == noErr, size > 0 else { return nil }
+        let count = Int(size) / MemoryLayout<AudioObjectID>.size
+        var ids = [AudioObjectID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids
+        ) == noErr else { return nil }
+        let actualCount = min(count, Int(size) / MemoryLayout<AudioObjectID>.size)
+        return ids.prefix(actualCount).first { deviceUID(for: $0) == uid }
     }
 }
 
@@ -152,7 +209,14 @@ final class MediaDuck: MediaDucking {
     }
 
     func duck(sessionID: UUID) async {
-        guard isEnabled else { return }
+        guard isEnabled else {
+            // Heal any stranded slot left behind by a prior failed restore
+            // even if the user subsequently toggled MediaDuck off.
+            if let stranded = duckedSessionID {
+                await finishRestore(sessionID: stranded)
+            }
+            return
+        }
         // Idempotent per session: a second duck for the same session is
         // a no-op (one session at a time is the coordinator invariant;
         // an already-ducked slot from another session is left alone and
@@ -174,6 +238,10 @@ final class MediaDuck: MediaDucking {
             log.info("duck skipped — no vmvc control on default output")
             return
         }
+        guard current.volume > 0.001 else {
+            log.info("duck skipped — output already silent")
+            return
+        }
         guard hal.setVolume(0.0, onDevice: current.device) else {
             log.error("duck set failed — leaving volume untouched")
             return
@@ -184,6 +252,11 @@ final class MediaDuck: MediaDucking {
         defaults.set(true, forKey: MediaDuckSettings.crashedKey)
         defaults.set(current.volume, forKey: MediaDuckSettings.savedVolumeKey)
         defaults.set(Int(current.device), forKey: MediaDuckSettings.savedDeviceKey)
+        if let uid = hal.deviceUID(for: current.device) {
+            defaults.set(uid, forKey: MediaDuckSettings.savedDeviceUIDKey)
+        } else {
+            defaults.removeObject(forKey: MediaDuckSettings.savedDeviceUIDKey)
+        }
         log.info("ducked \(sessionID.uuidString.prefix(8), privacy: .public)")
     }
 
@@ -218,18 +291,30 @@ final class MediaDuck: MediaDucking {
             log.error("restore failed — no controllable output; launch-restore flag kept")
             return
         }
+        // If the user manually raised volume during dictation, honor their
+        // adjustment instead of clobbering it with the pre-duck level.
+        if let liveVolume = hal.volume(onDevice: target), liveVolume > 0.05 {
+            clearDuckSlot()
+            log.info("restore skipped — user raised volume to \(liveVolume, privacy: .public)")
+            return
+        }
         if hal.setVolume(volume, onDevice: target) {
             // Clear ONLY on verified success: a transient set failure
             // keeps slot + flag, so the next restore (or relaunch)
             // retries instead of stranding the user muted.
-            duckedSessionID = nil
-            savedVolume = nil
-            savedDevice = nil
-            defaults.set(false, forKey: MediaDuckSettings.crashedKey)
+            clearDuckSlot()
             log.info("restored \(sessionID.uuidString.prefix(8), privacy: .public)")
         } else {
             log.error("restore set failed — launch-restore flag kept")
         }
+    }
+
+    private func clearDuckSlot() {
+        duckedSessionID = nil
+        savedVolume = nil
+        savedDevice = nil
+        defaults.set(false, forKey: MediaDuckSettings.crashedKey)
+        defaults.removeObject(forKey: MediaDuckSettings.savedDeviceUIDKey)
     }
 
     /// One-shot sandbox→unsandboxed migration (audit F7): the crash flag
@@ -246,7 +331,12 @@ final class MediaDuck: MediaDucking {
               let source,
               (source[MediaDuckSettings.crashedKey] as? Bool) == true
         else { return }
-        for key in [MediaDuckSettings.crashedKey, MediaDuckSettings.savedVolumeKey, MediaDuckSettings.savedDeviceKey] {
+        for key in [
+            MediaDuckSettings.crashedKey,
+            MediaDuckSettings.savedVolumeKey,
+            MediaDuckSettings.savedDeviceKey,
+            MediaDuckSettings.savedDeviceUIDKey,
+        ] {
             if let value = source[key] { defaults.set(value, forKey: key) }
         }
     }
@@ -270,17 +360,34 @@ final class MediaDuck: MediaDucking {
     ) {
         guard defaults.bool(forKey: MediaDuckSettings.crashedKey) else { return }
         let volume = defaults.float(forKey: MediaDuckSettings.savedVolumeKey)
+        let savedUID = defaults.string(forKey: MediaDuckSettings.savedDeviceUIDKey)
         let savedDevice = AudioObjectID(defaults.integer(forKey: MediaDuckSettings.savedDeviceKey))
+
         let target: AudioObjectID
-        if hal.deviceHasVolumeControl(savedDevice) {
+        if let savedUID,
+           let resolved = hal.deviceID(forUID: savedUID),
+           hal.deviceHasVolumeControl(resolved)
+        {
+            target = resolved
+        } else if savedUID == nil,
+                  savedDevice != AudioObjectID(kAudioObjectUnknown),
+                  hal.deviceHasVolumeControl(savedDevice)
+        {
             target = savedDevice
         } else if let current = hal.currentVolume() {
             target = current.device
         } else {
             return
         }
+
+        if let liveVolume = hal.volume(onDevice: target), liveVolume > 0.05 {
+            defaults.set(false, forKey: MediaDuckSettings.crashedKey)
+            defaults.removeObject(forKey: MediaDuckSettings.savedDeviceUIDKey)
+            return
+        }
         if hal.setVolume(volume, onDevice: target) {
             defaults.set(false, forKey: MediaDuckSettings.crashedKey)
+            defaults.removeObject(forKey: MediaDuckSettings.savedDeviceUIDKey)
         }
     }
 }

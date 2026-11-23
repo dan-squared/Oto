@@ -10,12 +10,11 @@
 //  one button keeps its place while only its label changes.
 //
 
-import Combine
 import Foundation
 import SwiftUI
 
-@MainActor
-final class OnboardingStage: ObservableObject {
+@Observable @MainActor
+final class OnboardingStage {
     enum Step: Int, Equatable, Comparable, CaseIterable {
         /// The intro and the one button: the state the window opens in.
         case welcome
@@ -97,12 +96,12 @@ final class OnboardingStage: ObservableObject {
     static let stepDuration = 0.34
     static let stepAnimation: Animation = .spring(duration: stepDuration, bounce: 0)
 
-    @Published var step: Step = .welcome
+    var step: Step = .welcome
     /// Which way the last move went, for the transition of what it brought in.
-    @Published private(set) var movingForward = true
+    private(set) var movingForward = true
     /// The header mark has left for the menu bar: the window draws neither it
     /// nor the word, since the flying copy is the only one there is.
-    @Published var markInFlight = false
+    var markInFlight = false
 
     var isWelcome: Bool { self.step == .welcome }
 
@@ -179,7 +178,7 @@ final class OnboardingStage: ObservableObject {
 
 /// A fade that also softens: the arrival vocabulary Firstlight's steps use
 /// for content replaced inside a frame that stays.
-struct BlurTransitionModifier: AnimatableModifier {
+struct BlurTransitionModifier: ViewModifier, Animatable {
     init(radius: Double = 0) { self.animatableData = radius }
 
     var animatableData: Double

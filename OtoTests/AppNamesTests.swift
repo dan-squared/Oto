@@ -23,6 +23,10 @@ struct AppNamesTests {
         let name = AppNames.displayName(forBundleID: "com.apple.finder")
         #expect(name != "com.apple.finder")
         #expect(!name.isEmpty)
+        // Installed system app resolves via LaunchServices even when not running.
+        let textEdit = AppNames.displayName(forBundleID: "com.apple.TextEdit")
+        #expect(textEdit != "com.apple.TextEdit")
+        #expect(!textEdit.isEmpty)
     }
 
     @Test func mismatchGateNeedsBothSidesKnownAndDifferent() {

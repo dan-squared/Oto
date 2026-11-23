@@ -107,10 +107,14 @@ enum FeedbackSoundSettings {
     }
 
     nonisolated static var directoryOverride: URL? {
+        #if DEBUG
         guard let path = ProcessInfo.processInfo.environment[directoryOverrideKey],
               !path.isEmpty
         else { return nil }
         return URL(fileURLWithPath: path, isDirectory: true)
+        #else
+        return nil
+        #endif
     }
 }
 
@@ -136,11 +140,10 @@ final class FeedbackSoundPlayer: FeedbackSounding {
                 Self.log.notice("cue missing: \(cue.asset.rawValue, privacy: .public)")
                 continue
             }
+            urls[cue] = url
             var voices: [AVAudioPlayer] = []
             for _ in 0 ..< Self.voicesPerCue {
-                guard let voice = try? AVAudioPlayer(contentsOf: url) else { break }
-                voice.volume = 1
-                _ = voice.prepareToPlay()
+                guard let voice = Self.makeVoice(url: url) else { break }
                 voices.append(voice)
             }
             guard !voices.isEmpty else {
@@ -151,22 +154,48 @@ final class FeedbackSoundPlayer: FeedbackSounding {
         }
     }
 
-    /// Synchronous on purpose: the press path must not hop or allocate.
+    /// Synchronous on purpose: the press path must not hop or allocate on the
+    /// happy path. If `AVAudioPlayer.play()` returns false (e.g., after an
+    /// output device switch or `coreaudiod` restart), re-prepares or reloads
+    /// the player from its resolved URL once.
     func play(_ cue: DictationCue) {
         guard FeedbackSoundSettings.isEnabled() else { return }
-        guard let voices = pool[cue], !voices.isEmpty else { return }
-        let voice: AVAudioPlayer
-        if let idle = voices.first(where: { !$0.isPlaying }) {
-            voice = idle
+        guard var voices = pool[cue], !voices.isEmpty else { return }
+        let index: Int
+        if let idleIndex = voices.firstIndex(where: { !$0.isPlaying }) {
+            index = idleIndex
         } else {
             // Both voices still ringing: take the next one round-robin.
             let next = ((cursor[cue] ?? -1) + 1) % voices.count
             cursor[cue] = next
-            voice = voices[next]
-            voice.stop()
+            index = next
+            voices[index].stop()
         }
+        let voice = voices[index]
         voice.currentTime = 0
-        _ = voice.play()
+        if voice.play() {
+            return
+        }
+        // Output switch or coreaudiod restart invalidated the prepared voice.
+        if voice.prepareToPlay(), voice.play() {
+            return
+        }
+        guard let url = urls[cue], let fresh = Self.makeVoice(url: url) else {
+            Self.log.error("cue play failed and could not reload: \(cue.asset.rawValue, privacy: .public)")
+            return
+        }
+        voices[index] = fresh
+        pool[cue] = voices
+        if !fresh.play() {
+            Self.log.error("cue play failed after reload: \(cue.asset.rawValue, privacy: .public)")
+        }
+    }
+
+    private static func makeVoice(url: URL) -> AVAudioPlayer? {
+        guard let voice = try? AVAudioPlayer(contentsOf: url) else { return nil }
+        voice.volume = 1
+        _ = voice.prepareToPlay()
+        return voice
     }
 
     /// Test seam: which cues resolved to real files. A cue missing from this
@@ -184,6 +213,7 @@ final class FeedbackSoundPlayer: FeedbackSounding {
     }
 
     private var pool: [DictationCue: [AVAudioPlayer]] = [:]
+    private var urls: [DictationCue: URL] = [:]
     private var cursor: [DictationCue: Int] = [:]
     private static let log = Logger(subsystem: "app.Oto", category: "feedbackSound")
 }

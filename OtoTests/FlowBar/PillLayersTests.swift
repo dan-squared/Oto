@@ -201,19 +201,65 @@ struct PillLayersTests {
     }
 
     @Test func reduceTransparencyFallsBackToSolidScrim() {
-        // Same silhouette, same bars: the glass hides, the scrim goes solid.
+        // UI-01: `glass` stays visible because `ink` (all artwork) lives inside
+        // `glass.contentView`. Under Reduce Transparency the scrim goes solid
+        // and the body ramp goes fully opaque (alpha 1), matching PermissionCardView.
         let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: VisualizerMath.dictationWidth, height: 26.4))
         pill.reduceTransparencyProvider = { true }
         pill.show(visual: .bars)
         pill.layout(width: VisualizerMath.dictationWidth)
         pill.update(level: 0.5, time: 0.3, text: nil, centerText: false, reduceMotion: false)
-        #expect(!pill.glassVisible())
+        #expect(pill.glassVisible())
+        #expect(pill.artworkIsInsideInk())
         #expect(abs(pill.scrimOpacity() - 1) < 0.001)
-        // …and flips back live when the setting changes between polls.
+        #expect(abs(pill.rampWaistAlpha() - 1) < 0.001)
+        // …and flips back live when the setting changes.
         pill.reduceTransparencyProvider = { false }
         pill.update(level: 0.5, time: 0.6, text: nil, centerText: false, reduceMotion: false)
         #expect(pill.glassVisible())
         #expect(abs(pill.scrimOpacity() - Float(PillChrome.scrimAlpha)) < 0.001)
+        #expect(abs(pill.rampWaistAlpha() - PillPalette.waistAlpha) < 0.001)
+    }
+
+    @Test func suspendAnimationsStopsAllMotionAndSpinner() {
+        // UI-04: hiding the panel suspends chase, shine, and spinner so no
+        // off-screen animations keep burning GPU/CPU between sessions.
+        let text = "Formalizing"
+        let width = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(text))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: 26.4))
+        pill.show(visual: .dotsSpinner)
+        pill.layout(width: 95.7)
+        pill.update(level: 0, time: 0.3, text: nil, centerText: false, reduceMotion: false)
+        #expect(pill.chaseHasAnimation())
+        #expect(!pill.spinnerHidden())
+
+        pill.suspendAnimations()
+        #expect(!pill.chaseHasAnimation())
+        #expect(pill.spinnerHidden())
+
+        pill.show(visual: .work)
+        pill.layout(width: width)
+        pill.update(level: 0, time: 0.6, text: text, centerText: false, reduceMotion: false)
+        #expect(pill.shineHasAnimation())
+        #expect(!pill.spinnerHidden())
+
+        pill.suspendAnimations()
+        #expect(!pill.shineHasAnimation())
+        #expect(pill.shineOverlayHidden())
+        #expect(pill.spinnerHidden())
+    }
+
+    @Test func reduceMotionSuppressesWorkShine() {
+        // UI-12: work shimmer honors Reduce Motion and leaves base text full white.
+        let text = "Polishing"
+        let width = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(text))
+        let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: 26.4))
+        pill.show(visual: .work)
+        pill.layout(width: width)
+        pill.update(level: 0, time: 0.3, text: text, centerText: false, reduceMotion: true)
+        #expect(!pill.shineHasAnimation())
+        #expect(pill.shineOverlayHidden())
+        #expect(abs(pill.shineBaseAlpha() - 1.0) < 0.001)
     }
 
     @Test func colourChoiceReachesTheRampAndFrost() {

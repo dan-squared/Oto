@@ -576,28 +576,38 @@ struct ShortcutDispatchDualTests {
         )
     }
 
-    @Test func fnTapCreatesNothing() async {
-        // Sub-threshold tap: the system's (emoji or nothing). No session,
-        // no insert, no calibration trace — and nothing late either.
+    @Test func fnPressBeginsImmediatelyLikeOtherModifiers() async {
+        // Bare fn behaves identically to every other hold key (0 ms start, no
+        // 200 ms confirmation lag) so it feels snappy and consistent.
         let (coordinator, inserter) = makeCoordinator()
-        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator,
+            configuration: fnHoldConfig(),
+            systemFnUsageProvider: { .emoji }
+        )
         let t0 = ContinuousClock().now
 
         dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
         dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(100))
-        // Past the confirmation threshold: a late begin would land here.
-        try? await Task.sleep(for: .milliseconds(400))
-        guard case .idle = await coordinator.state else {
-            Issue.record("fn tap created a session: \(await coordinator.state)")
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+
+        guard case .completed(let context) = await coordinator.state else {
+            Issue.record("expected completed, got \(await coordinator.state)")
             return
         }
-        #expect(await inserter.calls.count == 0)
-        #expect(dispatch.calibrationHold == .untested)
+        #expect(context.interaction == .holdToTalk)
+        #expect(await inserter.calls.count == 1)
+        #expect(dispatch.calibrationHold == .ready)
     }
 
     @Test func fnSustainedHoldRecordsNormally() async {
         let (coordinator, inserter) = makeCoordinator()
-        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator,
+            configuration: fnHoldConfig(),
+            systemFnUsageProvider: { .emoji }
+        )
         let t0 = ContinuousClock().now
 
         dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
@@ -614,38 +624,144 @@ struct ShortcutDispatchDualTests {
         #expect(dispatch.calibrationHold == .ready)
     }
 
-    @Test func fnDoubleTapNeverConverts() async {
-        // fn taps belong to macOS (emoji/dictation): converting them would
-        // double-fire against the system.
-        let (coordinator, inserter) = makeCoordinator()
-        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+    @Test func fnDoubleTapConvertsToHandsFree() async {
+        // Bare fn shares the exact same instant hold + double-tap-to-hands-free
+        // UX as every other hold modifier key.
+        let (coordinator, _) = makeCoordinator()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator,
+            configuration: fnHoldConfig(),
+            systemFnUsageProvider: { .emoji }
+        )
         let t0 = ContinuousClock().now
 
         tap(dispatch, from: t0, downMs: 0, upMs: 100)
         tap(dispatch, from: t0, downMs: 250, upMs: 330)
-        // Past every window: neither a convert nor a late begin may land.
-        try? await Task.sleep(for: .milliseconds(500))
-        guard case .idle = await coordinator.state else {
-            Issue.record("fn double-tap converted: \(await coordinator.state)")
+        // Wait for the double-tap conversion (cancel + handsFree begin) to settle.
+        for _ in 0..<40 {
+            if case .recording(let ctx) = await coordinator.state, ctx.interaction == .handsFree {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        guard case .recording(let context) = await coordinator.state else {
+            Issue.record("expected hands-free recording, got \(await coordinator.state)")
             return
         }
-        #expect(await inserter.calls.count == 0)
+        #expect(context.interaction == .handsFree)
+
+        // Single click (tap) of fn stops hands-free cleanly without requiring a hold,
+        // and any duplicate echo pulse within 400ms is absorbed without restarting hands-free.
+        tap(dispatch, from: t0, downMs: 800, upMs: 830)
+        tap(dispatch, from: t0, downMs: 860, upMs: 890)
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        guard case .completed(let doneCtx) = await coordinator.state else {
+            Issue.record("expected completed after single click of fn, got \(await coordinator.state)")
+            return
+        }
+        #expect(doneCtx.interaction == .handsFree)
     }
 
-    @Test func reconfigDropsFnPending() async {
+    @Test func reconfigCancelsActiveFnSession() async {
         let (coordinator, _) = makeCoordinator()
-        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: fnHoldConfig())
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator,
+            configuration: fnHoldConfig(),
+            systemFnUsageProvider: { .emoji }
+        )
         defer { cleanDualKey() }
         let t0 = ContinuousClock().now
 
         dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
         _ = dispatch.updateHoldTrigger(.defaultHoldToTalk())
-        // The armed press belonged to the old trigger: nothing may begin.
-        try? await Task.sleep(for: .milliseconds(400))
-        guard case .idle = await coordinator.state else {
-            Issue.record("reconfig leaked a session: \(await coordinator.state)")
+        await waitFor(coordinator) { if case .cancelled = $0 { true } else { false } }
+        guard case .cancelled = await coordinator.state else {
+            Issue.record("reconfig left fn session running: \(await coordinator.state)")
             return
         }
+    }
+
+    @Test func fnCombinationAfterConfirmCancelsActiveSessionAndResetsState() async {
+        let (coordinator, inserter) = makeCoordinator()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator,
+            configuration: fnHoldConfig(),
+            systemFnUsageProvider: { .emoji }
+        )
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        // User presses fn+Arrow after confirmation: cancels cleanly and resets fnHold.
+        dispatch.receiveForTests(.combinationBegan, from: .hold)
+        await waitFor(coordinator) { if case .cancelled = $0 { true } else { false } }
+        #expect(await inserter.calls.isEmpty)
+
+        // Next fn hold confirms and records cleanly (no stranded fnHold.isDown).
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: ContinuousClock().now)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold)
+        await waitFor(coordinator) { if case .completed = $0 { true } else { false } }
+        #expect(await inserter.calls.count == 1)
+    }
+
+    @Test func fnWithSystemUsageNoneIsInstantAndSupportsDoubleTapAndHandsFree() async {
+        defer { cleanDualKey() }
+        let (coordinator, inserter, _) = makeGatedCoordinator()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator,
+            configuration: fnHoldConfig(),
+            systemFnUsageProvider: { .none }
+        )
+        let t0 = ContinuousClock().now
+
+        // Instant hold (zero 200ms confirmation wait): quick tap starts & inserts.
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(80))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(await inserter.calls.count == 1)
+
+        // Double-tap converts to hands-free when macOS is set to "Do Nothing".
+        tap(dispatch, from: t0, downMs: 220, upMs: 300)
+        _ = await waitForHandsFree(coordinator)
+        guard case .recording(let ctx) = await coordinator.state, ctx.interaction == .handsFree else {
+            Issue.record("expected hands-free recording for fn with usage .none")
+            return
+        }
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+
+        // Swap into hands-free is allowed when macOS does not own fn taps.
+        dispatch.swapHoldAndHandsFree()
+        #expect(dispatch.configuration.handsFree.kind == .modifierHold(keyCode: UInt16(kVK_Function)))
+    }
+
+    @Test func fnHandsFreeAndSwapBlockedWhenSystemOwnsFnTaps() {
+        defer { cleanDualKey() }
+        let (coordinator, _) = makeCoordinator()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator,
+            configuration: .default(),
+            systemFnUsageProvider: { .emoji }
+        )
+        let fnHandsFree = ShortcutTrigger(
+            kind: .modifierHold(keyCode: UInt16(kVK_Function)),
+            interaction: .handsFree
+        )
+        #expect(dispatch.updateHandsFreeTrigger(fnHandsFree) == .blocked)
+        #expect(dispatch.configuration.handsFree == .unassignedHandsFree())
+
+        // Put fn in hold, then attempt to swap it into hands-free: refused.
+        let fnHold = ShortcutTrigger(
+            kind: .modifierHold(keyCode: UInt16(kVK_Function)),
+            interaction: .holdToTalk
+        )
+        #expect(dispatch.updateHoldTrigger(fnHold) == .applied)
+        dispatch.swapHoldAndHandsFree()
+        #expect(dispatch.configuration.hold.kind == .modifierHold(keyCode: UInt16(kVK_Function)))
+        #expect(dispatch.configuration.handsFree == .unassignedHandsFree())
     }
 
     @Test func tapsDuringHandsFreeKeepTranscriptAndConvert() async {
@@ -722,5 +838,115 @@ struct ShortcutDispatchDualTests {
         dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold)
         dispatch.receiveForTests(.combinationBegan, from: .hold)
         #expect(sounds.cues == [.listening])
+    }
+
+    // MARK: - Serialization, hands-free stateless toggle, repeat guard & AX flag
+
+    @Test func immediateQuickTapFinishesWithoutDroppingAndImmediateEscapeCancels() async {
+        // Rapid down+up with zero sleep between them: FIFO action queue ensures
+        // finish waits for begin's activeSessionID instead of dropping it.
+        let (coordinator, inserter) = makeCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        let t0 = ContinuousClock().now
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(40))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        guard case .completed = await coordinator.state else {
+            Issue.record("expected completed after immediate down+up, got \(await coordinator.state)")
+            return
+        }
+        #expect(await inserter.calls.count == 1)
+
+        // Rapid down + Escape before begin settles: cancel still wins.
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0 + .milliseconds(2000))
+        dispatch.receiveEscapeForTests()
+        await waitFor(coordinator) { if case .cancelled = $0 { true } else { false } }
+        guard case .cancelled = await coordinator.state else {
+            Issue.record("expected cancelled after immediate down+Escape, got \(await coordinator.state)")
+            return
+        }
+        #expect(await inserter.calls.count == 1)
+    }
+
+    @Test func handsFreeStatelessToggleNeverDesyncsAfterDoubleTapStop() async {
+        let (coordinator, inserter, _) = makeGatedCoordinator()
+        let sounds = SpyFeedbackSounds()
+        let dispatch = ShortcutDispatch(
+            coordinator: coordinator, configuration: .default(), sounds: sounds
+        )
+        let t0 = ContinuousClock().now
+
+        // Start hands-free via double-tap (not the hands-free key).
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(80))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        tap(dispatch, from: t0, downMs: 200, upMs: 280)
+        _ = await waitForHandsFree(coordinator)
+        let cuesBeforeStop = sounds.cues.count
+
+        // Stop via hands-free press: stops cleanly WITHOUT playing a listening cue.
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+        #expect(sounds.cues.count == cuesBeforeStop)
+        #expect(await inserter.calls.count == 2)
+
+        // Next hands-free press immediately starts a new session (no desync!).
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .handsFree)
+        _ = await waitForHandsFree(coordinator)
+        #expect(sounds.cues.count == cuesBeforeStop + 1)
+    }
+
+    @Test func autoRepeatKeyDownDoesNotTriggerFalseDoubleTap() async {
+        let (coordinator, inserter, _) = makeGatedCoordinator()
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        let t0 = ContinuousClock().now
+
+        // Tap 1 (short), then held key with auto-repeat events, then release:
+        // repeats must not overwrite holdTap.downAt and manufacture a fake tap.
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0)
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(80))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+
+        dispatch.receiveForTests(.keyDown(isRepeat: false), from: .hold, at: t0 + .milliseconds(200))
+        await waitFor(coordinator) { if case .recording = $0 { true } else { false } }
+        dispatch.receiveForTests(.keyDown(isRepeat: true), from: .hold, at: t0 + .milliseconds(500))
+        dispatch.receiveForTests(.keyUp, from: .hold, at: t0 + .milliseconds(550))
+        await waitFor(coordinator) { $0.isTerminal && $0 != .idle }
+
+        guard case .completed(let ctx) = await coordinator.state else {
+            Issue.record("expected completed hold, got \(await coordinator.state)")
+            return
+        }
+        #expect(ctx.interaction == .holdToTalk)
+        #expect(await inserter.calls.count == 2)
+    }
+
+    @Test func requiresAccessibilityReflectsEnabledSlotKinds() {
+        let (coordinator, _) = makeCoordinator()
+        // Default: Right Option hold → requires Accessibility.
+        let dispatch = ShortcutDispatch(coordinator: coordinator, configuration: .default())
+        #expect(dispatch.requiresAccessibility == true)
+
+        // Combo-only configuration → does not require Accessibility.
+        let comboConfig = DualShortcutConfiguration(
+            hold: ShortcutTrigger(
+                kind: combo(kVK_ANSI_D, modifiers: CarbonModifiers.control | CarbonModifiers.shift),
+                interaction: .holdToTalk
+            ),
+            handsFree: .unassignedHandsFree(),
+            holdEnabled: true,
+            handsFreeEnabled: true
+        )
+        let comboDispatch = ShortcutDispatch(coordinator: coordinator, configuration: comboConfig)
+        #expect(comboDispatch.requiresAccessibility == false)
+
+        // Disabled hold + unassigned hands-free → does not require Accessibility.
+        var disabledConfig = DualShortcutConfiguration.default()
+        disabledConfig.holdEnabled = false
+        let disabledDispatch = ShortcutDispatch(coordinator: coordinator, configuration: disabledConfig)
+        #expect(disabledDispatch.requiresAccessibility == false)
     }
 }

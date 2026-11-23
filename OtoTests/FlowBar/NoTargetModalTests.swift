@@ -105,6 +105,14 @@ struct NoTargetModalTests {
             == NSRect(x: -32, y: 0, width: 464, height: 100))
         #expect(NoTargetModalController.morphEndFrameAtSlot(visible: tiny, position: .top, height: 100)
             == NSRect(x: -32, y: 0, width: 464, height: 100))
+        // UI-10: fullscreen notch safeTopInset shifts Top down while leaving Bottom alone.
+        let fullscreen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        #expect(NoTargetModalController.morphEndFrameAtSlot(
+            visible: fullscreen, position: .top, height: 168, safeTopInset: 38
+        ) == NSRect(x: 488, y: 720 - 38, width: 464, height: 168))
+        #expect(NoTargetModalController.morphEndFrameAtSlot(
+            visible: fullscreen, position: .bottom, height: 168, safeTopInset: 38
+        ) == NSRect(x: 488, y: 28, width: 464, height: 168))
     }
 
     @Test func contentMaskPathMatchesCard() {

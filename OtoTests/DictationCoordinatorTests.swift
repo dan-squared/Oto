@@ -387,6 +387,7 @@ struct DictationCoordinatorTests {
             return
         }
         #expect(await sut.speech.finishCalls == 0)
+        #expect(await sut.speech.cancelCalls == 1)
         #expect(await sut.inserter.calls.isEmpty)
     }
 
@@ -1018,5 +1019,106 @@ struct DictationCoordinatorTests {
             Issue.record("expected failed(speechPreparation), got \(terminal)")
             return
         }
+    }
+
+    // MARK: - Audit W1 regressions (CRD-02, CRD-03, stateChanges, contextualStrings)
+
+    @Test func finishDuringStartToneWithSlowFinalizeNeverDucks() async {
+        // CRD-02: finish moves state to .finalizing while keeping currentSessionID.
+        // If runPreparation wakes from startTone sleep while finalizing is still
+        // running, it must see state != .recording and skip mediaDuck.duck().
+        let audio = FakeAudioCapture(stubPeak: 1.0)
+        let speech = FakeSpeechService(finalText: "hello oto", finishGateOpen: false)
+        let target = FakeTargetCapture(stubTarget: Self.stubTarget)
+        let inserter = FakeTextInsertion(result: .inserted)
+        let duck = FakeMediaDuck()
+        let coordinator = DictationCoordinator(
+            audio: audio,
+            speech: speech,
+            targetService: target,
+            inserter: inserter,
+            history: nil,
+            microphoneAccessOverride: { true },
+            mediaDuck: duck,
+            startTone: .milliseconds(120)
+        )
+        guard let id = await coordinator.beginHold() else {
+            Issue.record("beginHold refused")
+            return
+        }
+        _ = await waitFor(coordinator, { if case .recording = $0 { return true }; return false })
+        let finishing = Task { await coordinator.finish(id) }
+        await waitForCondition { await speech.finishCalls == 1 }
+        // Let the start-tone sleep elapse while the session is still .finalizing.
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(duck.ducks.isEmpty)
+        await speech.openFinishGate()
+        await finishing.value
+        #expect(duck.ducks.isEmpty)
+    }
+
+    @Test func targetGonePreservesCleanedTranscript() async {
+        // CRD-03: .targetGone must save the post-cleanup `final` transcript,
+        // not the pre-cleanup `clean` text.
+        let audio = FakeAudioCapture(stubPeak: 1.0)
+        let speech = FakeSpeechService(finalText: "hello oto")
+        let target = FakeTargetCapture(stubTarget: Self.stubTarget)
+        await target.setCapturedTargetAlive(false)
+        let inserter = FakeTextInsertion(result: .inserted)
+        let polish = FakePolishService()
+        polish.availabilityResult = .available
+        polish.chunks = ["Hello, Oto!"]
+        let coordinator = DictationCoordinator(
+            audio: audio,
+            speech: speech,
+            targetService: target,
+            inserter: inserter,
+            history: nil,
+            microphoneAccessOverride: { true },
+            polish: polish,
+            behaviorProvider: { CleanupBehavior(enabled: true, level: .light) }
+        )
+        await runCompletedSession(coordinator)
+        guard case .failed(_, .targetGone) = await coordinator.state else {
+            Issue.record("expected failed(targetGone), got \(await coordinator.state)")
+            return
+        }
+        #expect(await coordinator.recoveryTranscript?.text == "Hello, Oto!")
+    }
+
+    @Test func stateChangesNotifiesMultipleSubscribers() async {
+        let sut = makeSUT()
+        let streamA = await sut.coordinator.stateChanges()
+        let streamB = await sut.coordinator.stateChanges()
+
+        let taskA = Task {
+            for await _ in streamA { return true }
+            return false
+        }
+        let taskB = Task {
+            for await _ in streamB { return true }
+            return false
+        }
+
+        guard let id = await sut.coordinator.beginHold() else {
+            Issue.record("beginHold refused")
+            return
+        }
+        #expect(await taskA.value)
+        #expect(await taskB.value)
+        await sut.coordinator.cancel(id)
+    }
+
+    @Test func setDictionaryRulesForwardsEnabledReplacementsToSpeech() async {
+        let sut = makeSUT()
+        let rules = [
+            DictionaryRule(spoken: "auto", replacement: "Oto", isEnabled: true),
+            DictionaryRule(spoken: "swift ui", replacement: "SwiftUI", isEnabled: true),
+            DictionaryRule(spoken: "duplicate", replacement: "Oto", isEnabled: true),
+            DictionaryRule(spoken: "off", replacement: "Ignored", isEnabled: false),
+        ]
+        await sut.coordinator.setDictionaryRules(rules)
+        let history = await sut.speech.contextualStringsHistory
+        #expect(history == [["Oto", "SwiftUI"]])
     }
 }

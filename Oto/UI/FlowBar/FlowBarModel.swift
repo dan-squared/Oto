@@ -35,10 +35,16 @@ final class FlowBarModel {
 
     init() {}
 
-    // MARK: - Poll inputs (controller only)
+    // MARK: - Controller inputs
 
     func update(projection: FlowBarProjection) {
+        guard projection != self.projection else { return }
         self.projection = projection
+    }
+
+    func setMotionFrozen(_ frozen: Bool) {
+        guard frozen != motionFrozen else { return }
+        motionFrozen = frozen
     }
 
     /// Analyzer target (buffer cadence, ~12 Hz). Frozen motion ignores input

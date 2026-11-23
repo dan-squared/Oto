@@ -76,12 +76,85 @@ struct TransformTests {
                 return true
             }),
             pasteboard: board,
-            focusCheck: StubGrabFocus(verdict: .editable)
+            focusCheck: StubGrabFocus(verdict: .editable),
+            axSelectionReader: { _ in .unavailable }
         )
         #expect(await grabber.grabSelection() == "selected words")
         // Read-only by contract: the user's clipboard comes back.
         #expect(board.string(forType: .string) == "mine")
         #expect(board.changeCount != before) // restore rewrites; content proves it
+    }
+
+    @Test func grabUsesAXSelectedTextWithoutTouchingClipboard() async {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let before = board.changeCount
+        let copyCalls = HookLog()
+        let grabber = LiveSelectionGrabber(
+            events: grabEvents(postCopy: { copyCalls.bump(); return true }),
+            pasteboard: board,
+            focusCheck: StubGrabFocus(verdict: .editable),
+            axSelectionReader: { _ in .selected("from AX") }
+        )
+        #expect(await grabber.grabSelection() == "from AX")
+        #expect(copyCalls.values().isEmpty)
+        #expect(board.changeCount == before)
+        #expect(board.string(forType: .string) == "mine")
+    }
+
+    @Test func grabAuthoritativeEmptyAXSkipsCmdC() async {
+        // Prevents VS Code / Cursor / Zed whole-line copy when selection is empty.
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let before = board.changeCount
+        let copyCalls = HookLog()
+        let grabber = LiveSelectionGrabber(
+            events: grabEvents(postCopy: { copyCalls.bump(); return true }),
+            pasteboard: board,
+            focusCheck: StubGrabFocus(verdict: .editable),
+            axSelectionReader: { _ in .empty }
+        )
+        #expect(await grabber.grabSelection() == nil)
+        #expect(copyCalls.values().isEmpty)
+        #expect(board.changeCount == before)
+    }
+
+    @Test func grabFallbackChecksPostingAuthorizedAndFocusChange() async {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("mine", forType: .string)
+        let copyCalls = HookLog()
+
+        var blockedEvents = grabEvents(postCopy: { copyCalls.bump(); return true })
+        blockedEvents.postingAuthorized = { false }
+        let blocked = LiveSelectionGrabber(
+            events: blockedEvents,
+            pasteboard: board,
+            focusCheck: StubGrabFocus(verdict: .editable),
+            axSelectionReader: { _ in .unavailable }
+        )
+        #expect(await blocked.grabSelection() == nil)
+        #expect(copyCalls.values().isEmpty)
+
+        // Frontmost changes between entry and Cmd+C fallback.
+        let pidCalls = HookLog()
+        let racedEvents = grabEvents(
+            frontmostPID: {
+                pidCalls.bump()
+                return pidCalls.values().count == 1 ? 99999 : 11111
+            },
+            postCopy: { copyCalls.bump(); return true }
+        )
+        let raced = LiveSelectionGrabber(
+            events: racedEvents,
+            pasteboard: board,
+            focusCheck: StubGrabFocus(verdict: .editable),
+            axSelectionReader: { _ in .unavailable }
+        )
+        #expect(await raced.grabSelection() == nil)
+        #expect(copyCalls.values().isEmpty)
     }
 
     @Test func grabRefusalsReturnNilUntouched() async {
@@ -241,7 +314,7 @@ struct TransformTests {
         #expect(offGrab.grabs == 0)
         #expect(offPolish.prompts.isEmpty)
         // Unavailable model.
-        let (na, _, naPolish, naGrab, _) = await makeRunner(available: .unavailable(copy: "x"))
+        let (na, _, _, naGrab, _) = await makeRunner(available: .unavailable(copy: "x"))
         await na.execute(preset: .polish)
         try? await Task.sleep(for: .milliseconds(100))
         #expect(naGrab.grabs == 0)
@@ -275,11 +348,18 @@ struct TransformTests {
     private func makeDispatch(
         selection: String? = "helo wrld",
         chunks: [String] = ["Hello world."],
+        shortcuts: TransformShortcuts = TransformShortcuts(
+            polish: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_1)),
+            concise: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_2)),
+            professional: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_3)),
+            custom: .combo(modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_4))
+        ),
         dictationLive: @escaping @Sendable () async -> Bool = { false },
         cancelLog: HookLog? = nil,
         suspendLog: HookLog? = nil,
         liveFlag: LiveFlag? = nil,
-        cancelReturns: Bool = true
+        cancelReturns: Bool = true,
+        enabled: Bool = true
     ) -> (TransformDispatch, FakeTextInsertion, FakePolishService, FakeSelectionGrabber) {
         let grabber = FakeSelectionGrabber()
         grabber.selection = selection
@@ -289,14 +369,16 @@ struct TransformTests {
         ))
         let polish = FakePolishService()
         polish.chunks = chunks
+        let behavior = CleanupBehavior(enabled: enabled, level: .light)
         let runner = TransformRunner(
             grabber: grabber, inserter: inserter, targetService: target,
             polish: polish,
-            behaviorProvider: { CleanupBehavior(enabled: true, level: .light) }
+            behaviorProvider: { behavior }
         )
         let holdOpt = ShortcutTrigger.Kind.modifierHold(keyCode: UInt16(kVK_RightOption))
         let dispatch = TransformDispatch(
             runner: runner,
+            shortcuts: shortcuts,
             dictationLive: dictationLive,
             dictationKinds: { (holdOpt, .unassigned) },
             cancelHoldForCombination: {
@@ -305,7 +387,8 @@ struct TransformTests {
                 await liveFlag?.set(false)
                 return true
             },
-            setDictationSuspended: { suspended in suspendLog?.record(suspended) }
+            setDictationSuspended: { suspended in suspendLog?.record(suspended) },
+            behaviorProvider: { behavior }
         )
         return (dispatch, inserter, polish, grabber)
     }
@@ -332,8 +415,9 @@ struct TransformTests {
     }
 
     @Test func liveDictationVetoesTransform() async {
-        // Cross-family live session: the hold is not cancelled (returns
-        // false), so the live check vetoes before anything runs.
+        // Cross-family live session (Cmd+1 while holding Right Option):
+        // cancelHoldForCombination must NOT be called for an unrelated family,
+        // and the live check vetoes before anything runs.
         let cancels = HookLog()
         let (dispatch, _, polish, grabber) = makeDispatch(
             dictationLive: { true }, cancelLog: cancels, cancelReturns: false
@@ -342,16 +426,23 @@ struct TransformTests {
         try? await Task.sleep(for: .milliseconds(300))
         #expect(grabber.grabs == 0)
         #expect(polish.prompts.isEmpty)
-        #expect(cancels.values().count == 1)
+        #expect(cancels.values().isEmpty)
     }
 
     @Test func sameFamilyChordCancelsHoldAndTransformProceeds() async {
-        // The combination proves the hold lost, so the cancel is
-        // deterministic at any age: once it returns, the live veto must not
-        // fire (no more "both actions lost" race).
+        // Option-family combo against an Option hold: shares the modifier
+        // family, so cancelHoldForCombination fires, clears live state, and
+        // the transform proceeds cleanly.
         let flag = LiveFlag(true)
         let cancels = HookLog()
+        let optShortcuts = TransformShortcuts(
+            polish: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_1)),
+            concise: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_2)),
+            professional: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_3)),
+            custom: .combo(modifiers: UInt32(CarbonModifiers.option), keyCode: UInt32(kVK_ANSI_4))
+        )
         let (dispatch, inserter, _, _) = makeDispatch(
+            shortcuts: optShortcuts,
             dictationLive: { await flag.value },
             cancelLog: cancels,
             liveFlag: flag
@@ -361,6 +452,70 @@ struct TransformTests {
         #expect(await waitForReplaces(inserter, count: 1))
         #expect(cancels.values().count == 1)
         #expect(await flag.value == false)
+    }
+
+    @Test func secondPressReturningEarlyNeverLeaksDictationSuspension() async {
+        // KEY-05 regression: run 1 suspends dictation and parks; run 2 cancels
+        // run 1 and returns early because dictation became live. Dictation
+        // must end unsuspended (last == false).
+        let flag = LiveFlag(false)
+        let suspends = HookLog()
+        let (dispatch, _, polish, _) = makeDispatch(
+            dictationLive: { await flag.value },
+            suspendLog: suspends
+        )
+        await polish.streamGate.setOpen(false)
+        dispatch.fireForTests(.polish)
+        try? await Task.sleep(for: .milliseconds(250))
+        #expect(suspends.values().last == true)
+        await flag.set(true)
+        dispatch.fireForTests(.concise)
+        await polish.streamGate.setOpen(true)
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(suspends.values().last == false)
+    }
+
+    @Test func stopCancelsInFlightTransformAndUnsuspendsDictation() async {
+        let suspends = HookLog()
+        let (dispatch, inserter, polish, _) = makeDispatch(suspendLog: suspends)
+        await polish.streamGate.setOpen(false)
+        dispatch.fireForTests(.polish)
+        try? await Task.sleep(for: .milliseconds(250))
+        #expect(suspends.values().last == true)
+        dispatch.stop()
+        #expect(suspends.values().last == false)
+        await polish.streamGate.setOpen(true)
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(await inserter.replaceSelectionCalls.count == 0)
+    }
+
+    @Test func disabledBehaviorSkipsHotkeyRegistration() {
+        let (dispatch, _, _, _) = makeDispatch(enabled: false)
+        dispatch.start()
+        for preset in TransformPreset.allCases {
+            #expect(!dispatch.isLive(preset))
+        }
+        dispatch.stop()
+    }
+
+    @Test func workChangesStreamNotifiesOnStartAndFinish() async {
+        let (runner, _, polish, _, _) = await makeRunner()
+        await polish.streamGate.setOpen(false)
+        let stream = await runner.workChanges()
+        let changeCount = HookLog()
+        let observer = Task {
+            for await _ in stream {
+                changeCount.bump()
+                if changeCount.values().count >= 2 { break }
+            }
+        }
+        let runTask = Task { await runner.execute(preset: .polish) }
+        try? await Task.sleep(for: .milliseconds(50))
+        await polish.streamGate.setOpen(true)
+        await runTask.value
+        try? await Task.sleep(for: .milliseconds(50))
+        observer.cancel()
+        #expect(changeCount.values().count >= 2)
     }
 
     // MARK: - Save gate

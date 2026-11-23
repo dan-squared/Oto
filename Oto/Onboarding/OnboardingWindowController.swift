@@ -66,7 +66,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                 if window.isMiniaturized { window.deminiaturize(nil) }
                 self.bringForward(window)
             } else {
-                NSApp.activate(ignoringOtherApps: true)
+                NSApp.activate()
             }
             return
         }
@@ -128,7 +128,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
 
         self.bringForward(window)
         if activating {
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
         }
     }
 
@@ -173,7 +173,8 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                 image: image, from: start, to: target,
                 reduceMotion: reduceMotion
             ) { [weak self] in
-                self?.complete()
+                guard let self, self.generation == ticket else { return }
+                self.complete()
             }
         }
     }
@@ -246,7 +247,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     }
 
     private func bringForward(_ window: NSWindow) {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         if NSApp.isActive {
             window.makeKeyAndOrderFront(nil)
         } else {
@@ -263,6 +264,9 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private func tearDown(closeNative: Bool) {
         self.isPresented = false
         self.generation = UUID() // Invalidate queued handoff callbacks.
+        OnboardingHandoff.cancelIfNeeded()
+        OnboardingStage.shared.markInFlight = false
+        self.flow?.disarm()
         self.window?.delegate = nil
         if closeNative { self.window?.close() }
         self.window = nil

@@ -16,6 +16,7 @@ struct OtoAppScopePicker: View {
 
     @State private var isChoosing = false
     @State private var query = ""
+    @State private var installedApps: [InstalledApp] = InstalledApps.cached
 
     var body: some View {
         OtoSegmented(
@@ -61,10 +62,10 @@ struct OtoAppScopePicker: View {
     /// Installed apps plus any stored scope this Mac no longer has, so a
     /// legacy bundle ID can always be seen and unchecked.
     private var apps: [InstalledApp] {
-        var list = InstalledApps.all
+        var list = installedApps
         let known = Set(list.map(\.bundleID))
         for id in bundleIDs where !known.contains(id) {
-            list.append(InstalledApp(bundleID: id, name: id, path: ""))
+            list.append(InstalledApp(bundleID: id, name: InstalledApps.name(forBundleID: id) ?? id, path: ""))
         }
         return list
     }
@@ -136,6 +137,9 @@ struct OtoAppScopePicker: View {
             .frame(height: 30)
         }
         .frame(width: 264, height: 300)
+        .task {
+            installedApps = await InstalledApps.load(forceRefresh: true)
+        }
     }
 
     @ViewBuilder
@@ -144,7 +148,7 @@ struct OtoAppScopePicker: View {
             Image(systemName: "app")
                 .frame(width: 16, height: 16)
         } else {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: app.path))
+            Image(nsImage: InstalledApps.icon(forPath: app.path))
                 .resizable()
                 .frame(width: 16, height: 16)
         }

@@ -16,6 +16,16 @@ struct CaretOpaqueAppsTests {
         #expect(CaretOpaqueApps.isOpaque("com.mitchellh.ghostty"))
         #expect(CaretOpaqueApps.isOpaque("com.apple.Terminal"))
         #expect(CaretOpaqueApps.isOpaque("com.superlogical.rex"))
+        #expect(CaretOpaqueApps.isOpaque("com.googlecode.iterm2"))
+        #expect(CaretOpaqueApps.isOpaque("dev.warp.Warp-Stable"))
+        #expect(CaretOpaqueApps.isOpaque("org.alacritty"))
+        #expect(CaretOpaqueApps.isOpaque("net.kovidgoyal.kitty"))
+        #expect(CaretOpaqueApps.isOpaque("com.github.wez.wezterm"))
+        #expect(CaretOpaqueApps.isOpaque("dev.zed.Zed"))
+        #expect(CaretOpaqueApps.isOpaque("org.gnu.Emacs"))
+        #expect(CaretOpaqueApps.isOpaque("com.jetbrains.intellij"))
+        #expect(CaretOpaqueApps.isOpaque("com.jetbrains.pycharm"))
+        #expect(CaretOpaqueApps.isOpaque("COM.JETBRAINS.WebStorm"))
     }
 
     @Test func matchingIsNormalized() {

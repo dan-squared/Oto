@@ -13,7 +13,7 @@ import os
 /// in the codebase — enforce with the `downloadAndInstall` grep gate.
 /// The shortcut/dictation path (`AppleSpeechService.prepare()`) inspects
 /// readiness only and never downloads.
-struct SpeechAssetPreparer: Sendable {
+nonisolated struct SpeechAssetPreparer: Sendable {
     private let log = Logger(subsystem: "app.Oto", category: "assets")
     private let permissions = PermissionsManager()
 
@@ -25,20 +25,29 @@ struct SpeechAssetPreparer: Sendable {
     /// Apple calls make this device-verified; the mapping itself is
     /// unit-tested via `SpeechReadinessMapper`.
     func status(locale: Locale = .current) async -> (resolved: Locale?, readiness: SpeechReadiness) {
+        let micGranted: Bool
+        if case .granted = permissions.microphoneStatus() {
+            micGranted = true
+        } else {
+            micGranted = false
+        }
+        guard SpeechTranscriber.isAvailable else {
+            return (nil, micGranted ? .unsupportedLocale : .microphoneDenied)
+        }
         let supported = await SpeechTranscriber.supportedLocales
         guard let resolved = SpeechLocaleMatching.bestMatch(for: locale, in: supported) else {
-            return (nil, .unsupportedLocale)
+            return (nil, micGranted ? .unsupportedLocale : .microphoneDenied)
         }
         let probe = SpeechTranscriber(
             locale: resolved,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
-            attributeOptions: [.audioTimeRange]
+            reportingOptions: [],
+            attributeOptions: []
         )
         let installed = await SpeechTranscriber.installedLocales
         let assetStatus = await AssetInventory.status(forModules: [probe])
         let readiness = SpeechReadinessMapper.map(
-            microphoneGranted: permissions.microphoneStatus() == .granted,
+            microphoneGranted: micGranted,
             resolvedLocale: resolved,
             installedLocales: installed,
             assetStatus: assetStatus
@@ -53,6 +62,9 @@ struct SpeechAssetPreparer: Sendable {
     }
 
     func prepare(locale: Locale) async -> String {
+        guard SpeechTranscriber.isAvailable else {
+            return "Unsupported language — unavailable offline."
+        }
         let supported = await SpeechTranscriber.supportedLocales
         guard let resolved = SpeechLocaleMatching.bestMatch(for: locale, in: supported) else {
             return "Unsupported language — unavailable offline."
@@ -62,17 +74,16 @@ struct SpeechAssetPreparer: Sendable {
         let probe = SpeechTranscriber(
             locale: resolved,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
-            attributeOptions: [.audioTimeRange]
+            reportingOptions: [],
+            attributeOptions: []
         )
         let installed = Set((await SpeechTranscriber.installedLocales).map { $0.identifier(.bcp47) })
         if installed.contains(tag) {
-            let reserved = await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) }
-            if !reserved.contains(tag) {
-                do { _ = try await AssetInventory.reserve(locale: resolved) } catch {
-                    log.error("reserve failed after installed check")
-                    return "Installed but could not be reserved: \(error.localizedDescription)"
-                }
+            do {
+                try await reserveLocale(resolved)
+            } catch {
+                log.error("reserve failed after installed check")
+                return "Installed but could not be reserved: \(error.localizedDescription)"
             }
             log.info("already prepared")
             return "Already prepared (\(tag))."
@@ -82,12 +93,30 @@ struct SpeechAssetPreparer: Sendable {
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [probe]) {
                 try await request.downloadAndInstall()
             }
-            _ = try await AssetInventory.reserve(locale: resolved)
+            try await reserveLocale(resolved)
             log.info("prepared language assets")
             return "Prepared (\(tag))."
         } catch {
             log.error("preparation failed")
             return "Preparation failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Reserves `locale` in `AssetInventory`, evicting excess previously
+    /// reserved locales if `AssetInventory.maximumReservedLocales` is reached.
+    private func reserveLocale(_ locale: Locale) async throws {
+        let tag = locale.identifier(.bcp47)
+        let reserved = await AssetInventory.reservedLocales
+        if reserved.contains(where: { $0.identifier(.bcp47) == tag }) {
+            return
+        }
+        let maxReserved = AssetInventory.maximumReservedLocales
+        if maxReserved > 0, reserved.count >= maxReserved {
+            let excess = reserved.count - maxReserved + 1
+            for candidate in reserved.prefix(excess) {
+                _ = await AssetInventory.release(reservedLocale: candidate)
+            }
+        }
+        _ = try await AssetInventory.reserve(locale: locale)
     }
 }

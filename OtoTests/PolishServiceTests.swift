@@ -17,6 +17,8 @@ import Testing
 struct PolishServiceTests {
     @Test func availableMapsToAvailable() {
         #expect(LivePolishService.map(.available) == .available)
+        #expect(LivePolishService.map(.available, supportsLocale: false) ==
+            .unavailable(copy: "Apple Intelligence doesn't support this language yet."))
     }
 
     @Test func eachReasonMapsToItsCopy() {
@@ -161,10 +163,41 @@ struct PolishServiceTests {
     }
 
     @Test func tokenCapScalesWithInput() {
-        // Short entries finish sooner; long ones keep full headroom.
-        #expect(LivePolishService.options(for: String(repeating: "a", count: 200)).maximumResponseTokens == 164)
-        #expect(LivePolishService.options(for: String(repeating: "a", count: 20)).maximumResponseTokens == 128)
-        #expect(LivePolishService.options(for: String(repeating: "a", count: 5000)).maximumResponseTokens == 512)
+        // Dynamic scaling without the old 512-token truncation ceiling, using
+        // greedy sampling for deterministic lower-latency cleanup.
+        let short = LivePolishService.options(for: String(repeating: "a", count: 20))
+        #expect(short.maximumResponseTokens == 266)
+        #expect(short.samplingMode == .greedy)
+
+        let medium = LivePolishService.options(for: String(repeating: "a", count: 200))
+        #expect(medium.maximumResponseTokens == 356)
+
+        // Long dictations (>350 words) must scale well past 512 tokens.
+        let long = LivePolishService.options(for: String(repeating: "a", count: 3000), contextSize: 4096)
+        #expect((long.maximumResponseTokens ?? 0) > 1024)
+        #expect(long.maximumResponseTokens == 1756)
+
+        // Bounded by half of contextSize.
+        let huge = LivePolishService.options(for: String(repeating: "a", count: 10_000), contextSize: 4096)
+        #expect(huge.maximumResponseTokens == 2048)
+    }
+
+    @Test func promptWrappersMatchJobAndUseDelimiters() {
+        let cleanup = LivePolishService.prompt(for: "um hello world", job: .cleanup(.light))
+        #expect(cleanup.contains("dictation transcript"))
+        #expect(cleanup.contains("<text>\num hello world\n</text>"))
+
+        let transform = LivePolishService.prompt(for: "hello world", job: .transform(.custom))
+        #expect(!transform.contains("dictation transcript"))
+        #expect(transform.contains("system instructions"))
+        #expect(transform.contains("<text>\nhello world\n</text>"))
+    }
+
+    @Test func exceedsSafeContextFailsOpenOnHugeInput() {
+        let instr = LivePolishService.lightInstructions
+        #expect(!LivePolishService.exceedsSafeContext(text: "hello world", instructions: instr, contextSize: 4096))
+        let huge = String(repeating: "a", count: 12_000)
+        #expect(LivePolishService.exceedsSafeContext(text: huge, instructions: instr, contextSize: 4096))
     }
 
     @Test func customPromptNeverReachesLogs() throws {

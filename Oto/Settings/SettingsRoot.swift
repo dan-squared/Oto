@@ -105,35 +105,9 @@ private struct OtoSettingsList: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             let pane = parent.items[row]
-            let cell = OtoSettingsCell()
-            let well = OtoSettingsIconWell()
-            let image = NSImageView()
-            image.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
-            image.contentTintColor = .labelColor
-            image.setAccessibilityElement(false)
-
-            let label = cell.titleField
-            label.stringValue = pane.title
-            cell.setSelected(parent.selection == pane)
-            label.lineBreakMode = .byTruncatingTail
-            for view in [well, image, label] {
-                view.translatesAutoresizingMaskIntoConstraints = false
-                cell.addSubview(view)
-            }
-            NSLayoutConstraint.activate([
-                well.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
-                well.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                well.widthAnchor.constraint(equalToConstant: 20),
-                well.heightAnchor.constraint(equalToConstant: 20),
-                image.centerXAnchor.constraint(equalTo: well.centerXAnchor),
-                image.centerYAnchor.constraint(equalTo: well.centerYAnchor),
-                image.widthAnchor.constraint(equalToConstant: 14),
-                image.heightAnchor.constraint(equalToConstant: 14),
-                label.leadingAnchor.constraint(equalTo: well.trailingAnchor, constant: 8),
-                label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -12),
-            ])
+            let cell = (tableView.makeView(withIdentifier: OtoSettingsCell.identifier, owner: self) as? OtoSettingsCell)
+                ?? OtoSettingsCell()
+            cell.configure(pane: pane, selected: parent.selection == pane)
             return cell
         }
 
@@ -201,7 +175,46 @@ private struct OtoSettingsList: NSViewRepresentable {
 }
 
 private final class OtoSettingsCell: NSTableCellView {
+    static let identifier = NSUserInterfaceItemIdentifier("OtoSettingsCell")
+
+    private let iconWell = OtoSettingsIconWell()
+    private let iconView = NSImageView()
     let titleField = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        identifier = Self.identifier
+        iconView.contentTintColor = .labelColor
+        iconView.setAccessibilityElement(false)
+        titleField.lineBreakMode = .byTruncatingTail
+        for view in [iconWell, iconView, titleField] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            iconWell.leadingAnchor.constraint(equalTo: leadingAnchor),
+            iconWell.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconWell.widthAnchor.constraint(equalToConstant: 20),
+            iconWell.heightAnchor.constraint(equalToConstant: 20),
+            iconView.centerXAnchor.constraint(equalTo: iconWell.centerXAnchor),
+            iconView.centerYAnchor.constraint(equalTo: iconWell.centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 14),
+            iconView.heightAnchor.constraint(equalToConstant: 14),
+            titleField.leadingAnchor.constraint(equalTo: iconWell.trailingAnchor, constant: 8),
+            titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(pane: SettingsPane, selected: Bool) {
+        iconView.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        titleField.stringValue = pane.title
+        setSelected(selected)
+    }
 
     func setSelected(_ selected: Bool) {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: selected ? .semibold : .regular)
@@ -305,10 +318,14 @@ struct SettingsRoot: View {
     /// Probe-only entry point: `OTO_SETTINGS_PANE=intelligence` opens that
     /// pane so the screenshot probe can capture it. Absent in normal use.
     private static var initialPane: SettingsPane {
-        guard let raw = ProcessInfo.processInfo.environment["OTO_SETTINGS_PANE"],
-              let pane = SettingsPane(rawValue: raw)
-        else { return .dictation }
-        return pane
+#if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["OTO_SETTINGS_PANE"],
+           let pane = SettingsPane(rawValue: raw)
+        {
+            return pane
+        }
+#endif
+        return .dictation
     }
 
     /// One selection path for every entry point (sidebar, search, history):
@@ -401,10 +418,9 @@ struct SettingsRoot: View {
         }
 #endif
         // Granting happens in System Settings, so coming back must refresh
-        // the rows: a permission granted there has to turn the pill green
-        // without closing and reopening Settings.
+        // permissions, audio devices, and speech readiness without flashing.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            uiState.refreshPermissions()
+            uiState.ensureLoaded()
         }
     }
 
@@ -451,7 +467,7 @@ struct SettingsRoot: View {
             }
             .onChange(of: filteredPanes) { _, panes in
                 guard let first = panes.first, !panes.contains(selection) else { return }
-                navigate(to: first)
+                select(first, recordHistory: false)
             }
             .animation(.easeOut(duration: 0.2).delay(filteredPanes.isEmpty ? 0.18 : 0), value: filteredPanes.isEmpty)
         }
@@ -602,13 +618,14 @@ struct SettingsRoot: View {
         self.select(destination)
     }
 
-    /// The only place `selection` changes for a user-initiated move: clears
-    /// the old pane's accessory, then records the visit so back/forward see
-    /// sidebar clicks too (they used to be invisible to the history stack).
-    private func select(_ destination: SettingsPane) {
+    /// The only place `selection` changes for a move: clears the old pane's
+    /// accessory, and records the visit for user-initiated moves so back/forward
+    /// see sidebar clicks without recording transient search auto-selections.
+    private func select(_ destination: SettingsPane, recordHistory: Bool = true) {
         guard destination != self.selection else { return }
         self.chrome.publish(nil)
         self.selection = destination
+        guard recordHistory else { return }
 
         if self.historyIndex < self.visitedPanes.count - 1 {
             self.visitedPanes.removeSubrange((self.historyIndex + 1) ..< self.visitedPanes.count)
@@ -645,33 +662,65 @@ private struct OtoToolbarSwitch: NSViewRepresentable {
     let help: String
     let set: (Bool) -> Void
 
-    func makeNSView(context: Context) -> NSHostingView<AnyView> {
-        let host = NSHostingView(rootView: self.toggle)
-        self.pin(host)
-        return host
+    final class ContainerView: NSView {
+        let host: NSHostingView<AnyView>
+
+        init(rootView: AnyView) {
+            self.host = NSHostingView(rootView: rootView)
+            super.init(frame: .zero)
+            host.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(host)
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: trailingAnchor),
+                host.topAnchor.constraint(equalTo: topAnchor),
+                host.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+            syncPinnedAppearance()
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        override var intrinsicContentSize: NSSize { host.intrinsicContentSize }
+        override var fittingSize: NSSize { host.fittingSize }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            syncPinnedAppearance()
+        }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            syncPinnedAppearance()
+        }
+
+        func syncPinnedAppearance() {
+            let source = window?.effectiveAppearance ?? effectiveAppearance
+            let dark = source.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let name: NSAppearance.Name = dark ? .darkAqua : .aqua
+            if host.appearance?.name != name {
+                host.appearance = NSAppearance(named: name)
+            }
+        }
     }
 
-    func updateNSView(_ host: NSHostingView<AnyView>, context: Context) {
-        host.rootView = self.toggle
-        self.pin(host)
+    func makeNSView(context: Context) -> ContainerView {
+        ContainerView(rootView: self.toggle)
+    }
+
+    func updateNSView(_ view: ContainerView, context: Context) {
+        view.host.rootView = self.toggle
+        view.syncPinnedAppearance()
     }
 
     private var toggle: AnyView {
         AnyView(
-            Toggle(self.help, isOn: Binding(get: { self.isOn }, set: self.set))
+            Toggle(self.help, isOn: Binding(get: { self.isOn }, set: { self.set($0) }))
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .help(self.help)
         )
-    }
-
-    private func pin(_ host: NSHostingView<AnyView>) {
-        let source = host.window?.effectiveAppearance ?? NSApp.effectiveAppearance
-        let dark = source.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let name: NSAppearance.Name = dark ? .darkAqua : .aqua
-        if host.appearance?.name != name {
-            host.appearance = NSAppearance(named: name)
-        }
     }
 }

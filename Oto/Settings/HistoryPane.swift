@@ -22,12 +22,13 @@ struct HistoryPane: View {
     @State private var showClearConfirm = false
     @State private var showDisableConfirm = false
     @State private var feedback: String?
+    @State private var feedbackTask: Task<Void, Never>?
     @State private var historyPage = 1
     @State private var infoEntryID: UUID?
     @State private var copyFlash = OtoCopyFlash()
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if history.saveFailed { SaveFailureNote() }
             if !historyEnabled {
                 OtoPaneCanvas {
@@ -57,6 +58,10 @@ struct HistoryPane: View {
         }
         .onAppear {
             publishAccessory()
+        }
+        .onDisappear {
+            feedbackTask?.cancel()
+            feedbackTask = nil
         }
         .onChange(of: historyEnabled) { _, new in
             history.setEnabled(new)
@@ -134,15 +139,24 @@ struct HistoryPane: View {
                     Spacer(minLength: 0)
                 }
                 if pageCount > 1 {
-                    HStack(spacing: 8) {
+                    let slots = HistoryPage.visibleSlots(current: historyPage, totalPages: pageCount)
+                    HStack(spacing: 6) {
                         Button("Previous") {
                             if historyPage > 1 { historyPage -= 1 }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(historyPage <= 1)
-                        ForEach(1...pageCount, id: \.self) { number in
-                            self.pageButton(number: number, isCurrent: number == historyPage)
+                        ForEach(Array(slots.enumerated()), id: \.offset) { _, slot in
+                            switch slot {
+                            case .page(let number):
+                                self.pageButton(number: number, isCurrent: number == historyPage)
+                            case .ellipsis:
+                                Text("…")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 2)
+                            }
                         }
                         Button("Next") {
                             if historyPage < pageCount { historyPage += 1 }
@@ -269,20 +283,22 @@ struct HistoryPane: View {
     private func copyEntry(_ entry: HistoryEntry) {
         // Copy is an explicit command: it writes straight through (no
         // overwrite confirm — removed 2026-10-31). History keeps the text.
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(entry.finalText, forType: .string)
+        ClipboardWrite.text(entry.finalText)
         // The row's own glyph becomes the tick — no status line underneath.
         self.copyFlash.flash(entry.id)
     }
 
     /// Undo AI edit (E1): restores the raw wording on a cleaned entry.
     private func undoCleanup(_ entry: HistoryEntry) {
-        Task {
+        feedbackTask?.cancel()
+        feedbackTask = Task {
             await history.undoCleanup(id: entry.id)
+            guard !Task.isCancelled else { return }
             self.feedback = "Original wording restored."
             // Nothing else owns this line: let it leave on its own instead of
             // lingering as chrome under the list.
             try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
             if self.feedback == "Original wording restored." { self.feedback = nil }
         }
     }

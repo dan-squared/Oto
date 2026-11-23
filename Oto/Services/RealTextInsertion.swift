@@ -61,9 +61,11 @@ struct InsertionTimings: Equatable, Sendable {
     /// post ahead of an invisible write (how stale content gets pasted).
     var verifyBudget: UInt64 = 300_000_000
     var verifyPoll: UInt64 = 5_000_000
-    /// Transcript linger before the old clipboard is restored. Short enough
-    /// to shrink the double-paste window, long enough for async readers.
-    var restoreDelay: UInt64 = 100_000_000
+    /// Transcript linger before the old clipboard is restored for unverifiable
+    /// async readers (Chromium/Electron/web editors). 500 ms matches Hex's
+    /// battle-tested window so slow pasteboard readers never paste stale data.
+    /// Native apps whose `AXNumberOfCharacters` grows still restore immediately.
+    var restoreDelay: UInt64 = 500_000_000
     /// Cap for the held-modifier drain (our default trigger IS a modifier).
     var modifierTimeout: UInt64 = 600_000_000
     var modifierPoll: UInt64 = 15_000_000
@@ -101,6 +103,9 @@ struct InsertionEvents: Sendable {
     /// no activation loop — those failed as policy, not timing). Never gates
     /// the common path on its own; see `insert()`.
     var frontmostPID: @Sendable () -> pid_t?
+    /// Bundle ID of the currently frontmost app (used by `retryPostToFrontmost`
+    /// to check caret-opacity without bypassing injected test seams).
+    var frontmostBundleID: @Sendable () -> String? = { nil }
     /// Whether Oto itself owns focus (menu/Settings open). Disambiguates the
     /// fail-closed reasons: "close Oto UI + Retry" vs "switch back + Retry".
     var otoFrontmost: @Sendable () -> Bool
@@ -117,6 +122,19 @@ struct InsertionEvents: Sendable {
     /// Same fail-closed contract as `postPaste`. The caller guarantees the
     /// strict window (seconds after its own paste, zero intervening input).
     var postUndo: @Sendable () async -> Bool
+    /// Optional Unicode burst typing route (borrowed from Hex): used when a
+    /// target app dynamically matches Chromium 155–156 (whose pasteboard
+    /// observer races synthetic Cmd-V) so dictation still lands without
+    /// hardcoding browser bundle IDs. Nil on scripted test fakes unless wired.
+    var typeText: (@Sendable (String) async -> Bool)? = nil
+    /// Resolves whether `pid` requires direct Unicode typing instead of
+    /// clipboard paste (default false in scripted tests; `.live` inspects the
+    /// running bundle's embedded Chromium framework dynamically).
+    var prefersDirectTyping: @Sendable (pid_t) -> Bool = { _ in false }
+    /// Character immediately before the focused field's insertion point, for
+    /// Hex-style Smart Spacing. Default nil in scripted tests; `.live` reads
+    /// via `SmartSpacing.charBeforeCaret(pid:)` when `SmartSpacing.isEnabled()`.
+    var charBeforeCaret: @Sendable (pid_t) -> Character? = { _ in nil }
     var sleep: @Sendable (UInt64) async -> Void
 
     static var live: InsertionEvents {
@@ -128,8 +146,11 @@ struct InsertionEvents: Sendable {
                 guard !app.isActive else { return true }
                 return app.activate()
             },
-            currentModifiers: { NSEvent.modifierFlags },
+            currentModifiers: {
+                Self.modifierFlags(from: CGEventSource.flagsState(.combinedSessionState))
+            },
             frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+            frontmostBundleID: { NSWorkspace.shared.frontmostApplication?.bundleIdentifier },
             otoFrontmost: {
                 NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                     == Bundle.main.bundleIdentifier
@@ -137,24 +158,39 @@ struct InsertionEvents: Sendable {
             postPaste: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "v")) },
             postCopy: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "c")) },
             postUndo: { await Self.postFullCommandV(key: PasteKeycodeResolver.keyCode(for: "z")) },
+            typeText: { text in DirectTextTyping.postBurst(text) },
+            prefersDirectTyping: { pid in ChromiumRaceDetector.shouldTypeInsteadOfPaste(pid: pid) },
+            charBeforeCaret: { pid in
+                guard SmartSpacing.isEnabled() else { return nil }
+                return SmartSpacing.charBeforeCaret(pid: pid)
+            },
             sleep: { try? await Task.sleep(nanoseconds: $0) }
         )
     }
 
-    /// Full Command-letter as four events (Command down, key down/up,
-    /// Command up) on a private source. V by default; Z powers the guarded
-    /// undo step of `replaceLast`. A lone letter with `.maskCommand` works
-    /// natively, but Chromium rebuilds modifier state from the raw stream and needs a
-    /// genuine Command keyDown or the paste silently does nothing. The HID
-    /// tap is where hardware events enter, so Chromium reads the sequence
-    /// as genuine typing. Pattern follows Yap (MIT) as Oto-owned code.
-    /// `NX_DEVICELCMDKEYMASK` — "left command physically down": Qt/Java apps
-    /// read the device-dependent bits and ignore a bare command flag.
-    /// `source` selects the event source (private-state today; the
-    /// experiment can switch to system-default/null, the Hex shape).
-    /// Every event carries the Oto synthetic marker
-    /// (`kCGEventSourceUserData`) so device trails distinguish Oto
-    /// keystrokes from hardware in logs.
+    /// Converts live WindowServer modifier state (`CGEventSource.flagsState`)
+    /// into `NSEvent.ModifierFlags` so held-modifier draining sees real
+    /// hardware state even when Oto is not the active app.
+    nonisolated static func modifierFlags(from cgFlags: CGEventFlags) -> NSEvent.ModifierFlags {
+        var result: NSEvent.ModifierFlags = []
+        if cgFlags.contains(.maskCommand) { result.insert(.command) }
+        if cgFlags.contains(.maskShift) { result.insert(.shift) }
+        if cgFlags.contains(.maskAlternate) { result.insert(.option) }
+        if cgFlags.contains(.maskControl) { result.insert(.control) }
+        if cgFlags.contains(.maskSecondaryFn) { result.insert(.function) }
+        return result
+    }
+
+    /// Full Command-letter as four events (Command `.flagsChanged` down, key
+    /// down/up, Command `.flagsChanged` up) on a private source. V by default;
+    /// Z powers the guarded undo step of `replaceLast`. A lone letter with
+    /// `.maskCommand` works natively, but Chromium rebuilds modifier state from
+    /// the raw stream and needs genuine Command flag transitions or the paste
+    /// silently does nothing. If cancelled mid-sequence after Command down, any
+    /// remaining letter press is skipped and Command up is still posted so
+    /// Command can never stick.
+    /// Every event carries the Oto synthetic marker (`kCGEventSourceUserData`)
+    /// so device trails and the HID tap distinguish Oto keystrokes from hardware.
     nonisolated static let syntheticMarker: Int64 = 0x4F54_4F // "OTO"
     static func postFullCommandV(
         key: CGKeyCode = CGKeyCode(kVK_ANSI_V),
@@ -178,25 +214,55 @@ struct InsertionEvents: Sendable {
         )
         let commandKey = CGKeyCode(kVK_Command)
         let vKey = key
-        var posted = true
-        func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) {
+
+        func postModifier(flags: CGEventFlags) -> Bool {
             guard let event = CGEvent(
-                keyboardEventSource: eventSource, virtualKey: key, keyDown: down
+                keyboardEventSource: eventSource, virtualKey: commandKey, keyDown: false
             ) else {
-                posted = false
-                return
+                return false
+            }
+            event.type = .flagsChanged
+            event.flags = flags
+            event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
+            event.post(tap: .cghidEventTap)
+            return true
+        }
+
+        func postKey(_ keyCode: CGKeyCode, down: Bool, flags: CGEventFlags) -> Bool {
+            guard let event = CGEvent(
+                keyboardEventSource: eventSource, virtualKey: keyCode, keyDown: down
+            ) else {
+                return false
             }
             event.flags = flags
             event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
             event.post(tap: .cghidEventTap)
+            return true
         }
-        post(commandKey, down: true, flags: commandFlags)
-        try? await Task.sleep(nanoseconds: step)
-        post(vKey, down: true, flags: commandFlags)
-        try? await Task.sleep(nanoseconds: step)
-        post(vKey, down: false, flags: commandFlags)
-        try? await Task.sleep(nanoseconds: step)
-        post(commandKey, down: false, flags: [])
+
+        guard postModifier(flags: commandFlags) else { return false }
+        var posted = true
+        var keyPressed = false
+        do {
+            if step > 0 { try await Task.sleep(nanoseconds: step) }
+            try Task.checkCancellation()
+            if postKey(vKey, down: true, flags: commandFlags) {
+                keyPressed = true
+            } else {
+                posted = false
+            }
+            if step > 0 { try await Task.sleep(nanoseconds: step) }
+            if !postKey(vKey, down: false, flags: commandFlags) { posted = false }
+            keyPressed = false
+            if step > 0 { try await Task.sleep(nanoseconds: step) }
+        } catch {
+            if keyPressed {
+                _ = postKey(vKey, down: false, flags: commandFlags)
+            }
+            _ = postModifier(flags: [])
+            return false
+        }
+        if !postModifier(flags: []) { posted = false }
         return posted
     }
 }
@@ -280,6 +346,10 @@ final class RealTextInsertion: TextInserting {
         self.deliveryCheck = deliveryCheck
     }
 
+    /// Minimum restore floor (50 ms) when delivery reported `.landed` via caret
+    /// movement alone without positive `AXNumberOfCharacters` growth.
+    nonisolated static let caretOnlyRestoreFloorNs: UInt64 = 50_000_000
+
     func insert(_ text: String, into target: TargetApplication) async -> InsertionResult {
         // Same gates, same tail, same words as always — now shared so
         // replaceLast cannot drift from the proven policy. Covered by the
@@ -288,10 +358,17 @@ final class RealTextInsertion: TextInserting {
         case .refused(let result):
             return result
         case .ready(let pid):
+            let formatted = SmartSpacing.apply(
+                to: text,
+                characterBeforeCaret: events.charBeforeCaret(pid)
+            )
+            if let direct = await postDirectIfPreferred(formatted, pid: pid, context: .insert) {
+                return direct
+            }
             let saved = PasteboardSnapshot.capture(pasteboard)
-            let receipt = placeOnClipboard(text)
+            let receipt = placeOnClipboard(formatted)
             return await postPlacedText(
-                text, pid: pid, saved: saved, receipt: receipt, context: .insert,
+                formatted, pid: pid, saved: saved, receipt: receipt, context: .insert,
                 caretOpaque: CaretOpaqueApps.isOpaque(target.bundleIdentifier)
             )
         }
@@ -308,6 +385,7 @@ final class RealTextInsertion: TextInserting {
         case .refused(let result):
             return result
         case .ready(let pid):
+            PasteKeycodeResolver.warmLayoutCacheOnMainThread()
             guard await events.postUndo() else {
                 log.error("replace: no undo keystroke created, clipboard untouched")
                 return .recoverableFailure(reason:
@@ -315,6 +393,9 @@ final class RealTextInsertion: TextInserting {
                 )
             }
             await events.sleep(timings.reactivateSettle)
+            if let direct = await postDirectIfPreferred(text, pid: pid, context: .replace) {
+                return direct
+            }
             let saved = PasteboardSnapshot.capture(pasteboard)
             let receipt = placeOnClipboard(text)
             return await postPlacedText(
@@ -333,6 +414,9 @@ final class RealTextInsertion: TextInserting {
         case .refused(let result):
             return result
         case .ready(let pid):
+            if let direct = await postDirectIfPreferred(text, pid: pid, context: .replaceSelection) {
+                return direct
+            }
             let saved = PasteboardSnapshot.capture(pasteboard)
             let receipt = placeOnClipboard(text)
             return await postPlacedText(
@@ -340,6 +424,54 @@ final class RealTextInsertion: TextInserting {
                 caretOpaque: CaretOpaqueApps.isOpaque(target.bundleIdentifier)
             )
         }
+    }
+
+    /// Direct Unicode burst typing path (borrowed from Hex): bypasses clipboard
+    /// paste for targets dynamically detected as Chromium 155–156 (where
+    /// synthetic Cmd+V races Chromium's pasteboard change notification).
+    /// Runs the same frontmost + trust + posting-authorized guards as clipboard
+    /// paste, never touches the clipboard.
+    private func postDirectIfPreferred(
+        _ text: String,
+        pid: pid_t,
+        context: PostContext
+    ) async -> InsertionResult? {
+        guard events.prefersDirectTyping(pid), let typeText = events.typeText else {
+            return nil
+        }
+        guard events.frontmostPID() == pid else {
+            log.error("race: focus left target \(pid, privacy: .public) pre-type, failing closed")
+            switch context {
+            case .insert:
+                return .recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app lost focus just before pasting. Nothing was pasted — the transcript is kept for recovery."
+                ))
+            case .replace:
+                return .recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app lost focus just before pasting. The previous paste may have been undone — switch back and press ⌘⇧Z, or use Retry paste."
+                ))
+            case .replaceSelection:
+                return .recoverableFailure(reason: focusFailureReason(switchedReason:
+                    "The target app lost focus just before pasting. The replacement was not pasted — your text stands as it was."
+                ))
+            }
+        }
+        guard events.isTrusted() else {
+            return .recoverableFailure(reason:
+                "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
+            )
+        }
+        guard events.postingAuthorized() else {
+            return .recoverableFailure(reason: postingBlockedReason(context, undoAlreadyRan: context == .replace))
+        }
+        guard await typeText(text) else {
+            log.error("direct-type: failed to create unicode keystrokes for target \(pid, privacy: .public)")
+            return .recoverableFailure(reason:
+                "The keystroke could not be posted. Nothing was pasted — the transcript is kept for recovery."
+            )
+        }
+        log.info("posted direct Unicode burst for target \(pid, privacy: .public) chars=\(text.count, privacy: .public)")
+        return .inserted
     }
     /// Post context: identical posting policy, but failure words must be
     /// honest about what already happened. A failed insert pasted nothing;
@@ -472,7 +604,7 @@ final class RealTextInsertion: TextInserting {
 
         guard await waitForClipboard(text: text, marker: receipt.marker) else {
             log.error("verify: clipboard write never visible, failing closed")
-            PasteboardSnapshot.restore(saved, to: pasteboard)
+            restoreIfStillOwned(saved: saved, receipt: receipt)
             switch context {
             case .insert:
                 return .recoverableFailure(reason:
@@ -480,7 +612,7 @@ final class RealTextInsertion: TextInserting {
                 )
             case .replace:
                 return .recoverableFailure(reason:
-                    "The clipboard was unavailable. The replacement was not pasted — the original text stands."
+                    "The clipboard was unavailable. The previous paste may have been undone — press ⌘⇧Z to restore it, or use Retry paste."
                 )
             case .replaceSelection:
                 return .recoverableFailure(reason:
@@ -491,7 +623,7 @@ final class RealTextInsertion: TextInserting {
 
         guard events.frontmostPID() == pid else {
             log.error("race: focus left target \(pid, privacy: .public) pre-post, failing closed")
-            PasteboardSnapshot.restore(saved, to: pasteboard)
+            restoreIfStillOwned(saved: saved, receipt: receipt)
             switch context {
             case .insert:
                 return .recoverableFailure(reason: focusFailureReason(switchedReason:
@@ -499,7 +631,7 @@ final class RealTextInsertion: TextInserting {
                 ))
             case .replace:
                 return .recoverableFailure(reason: focusFailureReason(switchedReason:
-                    "The target app lost focus just before pasting. The replacement was not pasted — the original text stands."
+                    "The target app lost focus just before pasting. The previous paste may have been undone — switch back and press ⌘⇧Z, or use Retry paste."
                 ))
             case .replaceSelection:
                 return .recoverableFailure(reason: focusFailureReason(switchedReason:
@@ -510,7 +642,7 @@ final class RealTextInsertion: TextInserting {
 
         guard events.isTrusted() else {
             log.info("refused: accessibility revoked pre-post, clipboard restored")
-            PasteboardSnapshot.restore(saved, to: pasteboard)
+            restoreIfStillOwned(saved: saved, receipt: receipt)
             switch context {
             case .insert:
                 return .recoverableFailure(reason:
@@ -518,7 +650,7 @@ final class RealTextInsertion: TextInserting {
                 )
             case .replace:
                 return .recoverableFailure(reason:
-                    "Accessibility permission is required to replace text. The replacement was not pasted — the original text stands."
+                    "Accessibility permission is required to replace text. The previous paste may have been undone — press ⌘⇧Z to restore it, or use Retry paste."
                 )
             case .replaceSelection:
                 return .recoverableFailure(reason:
@@ -532,21 +664,22 @@ final class RealTextInsertion: TextInserting {
         // and a dropped post must never be reported as an insert.
         guard events.postingAuthorized() else {
             log.info("refused: synthetic posting blocked pre-post, clipboard restored")
-            PasteboardSnapshot.restore(saved, to: pasteboard)
-            return .recoverableFailure(reason: postingBlockedReason(context))
+            restoreIfStillOwned(saved: saved, receipt: receipt)
+            return .recoverableFailure(reason: postingBlockedReason(context, undoAlreadyRan: context == .replace))
         }
 
-        // Capture the caret BEFORE posting: the probe re-reads this same
-        // element afterwards, so a change cannot be another field's caret.
-        // Nil inside means the app publishes no verifiable signal. A
-        // caret-opaque terminal is skipped outright: its range is selection-
-        // only and its count is cached, so asking the question would only
-        // manufacture a false failure.
-        let probe: DeliveryProbe = caretOpaque ? .unavailable : deliveryCheck.probe(for: pid)
+        // Capture the caret BEFORE posting (off MainActor with a hard timeout):
+        // the probe re-reads this same element afterwards, so a change cannot
+        // be another field's caret. A caret-opaque terminal/IDE is skipped
+        // outright so stale samples never manufacture a false failure.
+        let probe: DeliveryProbe = caretOpaque
+            ? .unavailable
+            : await deliveryCheck.probeAsync(for: pid)
 
+        PasteKeycodeResolver.warmLayoutCacheOnMainThread()
         guard await events.postPaste() else {
             log.error("post: no keystroke created, failing closed")
-            PasteboardSnapshot.restore(saved, to: pasteboard)
+            restoreIfStillOwned(saved: saved, receipt: receipt)
             switch context {
             case .insert:
                 return .recoverableFailure(reason:
@@ -554,7 +687,7 @@ final class RealTextInsertion: TextInserting {
                 )
             case .replace:
                 return .recoverableFailure(reason:
-                    "The keystroke could not be posted. The replacement was not pasted — the original text stands."
+                    "The keystroke could not be posted. The previous paste may have been undone — press ⌘⇧Z to restore it, or use Retry paste."
                 )
             case .replaceSelection:
                 return .recoverableFailure(reason:
@@ -570,14 +703,23 @@ final class RealTextInsertion: TextInserting {
             cap: timings.deliveryBudgetCap,
             utf8Count: text.utf8.count
         )
-        let (outcome, elapsedMs) = await verifyDelivery(probe, budget: budget)
-        log.info("delivery=\(String(describing: outcome), privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms chars=\(text.count, privacy: .public) caretOpaque=\(caretOpaque, privacy: .public)")
+        let (delivery, elapsedMs) = await verifyDelivery(probe, budget: budget)
+        log.info("delivery=\(String(describing: delivery.outcome), privacy: .public) grew=\(delivery.characterCountGrew, privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms chars=\(text.count, privacy: .public) caretOpaque=\(caretOpaque, privacy: .public)")
 
-        // Restore follows the evidence, not a timer: a landed paste has
-        // already been read by the app, so the clipboard can go back at
-        // once; anything else keeps the existing short grace.
-        if outcome == .landed {
-            restoreNow(saved: saved, receipt: receipt)
+        // Restore follows the evidence: positive character-count growth proves
+        // the app already consumed the paste (restore immediately); caret-only
+        // movement keeps a short 50ms restore floor so async readers finish;
+        // anything else keeps the configured grace.
+        if delivery.outcome == .landed {
+            if delivery.characterCountGrew {
+                restoreNow(saved: saved, receipt: receipt)
+            } else {
+                scheduleRestore(
+                    saved: saved,
+                    receipt: receipt,
+                    delay: min(timings.restoreDelay, Self.caretOnlyRestoreFloorNs)
+                )
+            }
         } else {
             scheduleRestore(saved: saved, receipt: receipt)
         }
@@ -586,7 +728,7 @@ final class RealTextInsertion: TextInserting {
         // unverifiable app (web editor) keeps the pre-v7 behaviour, because
         // a catcher over text that is already in the document is the exact
         // failure v6 removed.
-        if outcome == .notLanded {
+        if delivery.outcome == .notLanded {
             return .recoverableFailure(reason: notDeliveredReason(context))
         }
         return .inserted
@@ -606,6 +748,7 @@ final class RealTextInsertion: TextInserting {
         case posted
         case refusedNoAccessibility
         case refusedPostingBlocked
+        case refusedOtoFrontmost
         case clipboardUnavailable
         case pasteFailed
         /// The post was delivered but the caret proved nothing moved.
@@ -615,6 +758,7 @@ final class RealTextInsertion: TextInserting {
             switch (lhs, rhs) {
             case (.posted, .posted), (.refusedNoAccessibility, .refusedNoAccessibility),
                  (.refusedPostingBlocked, .refusedPostingBlocked),
+                 (.refusedOtoFrontmost, .refusedOtoFrontmost),
                  (.clipboardUnavailable, .clipboardUnavailable), (.pasteFailed, .pasteFailed),
                  (.notDelivered, .notDelivered):
                 return true
@@ -633,22 +777,34 @@ final class RealTextInsertion: TextInserting {
             log.info("retry: refused, synthetic posting blocked")
             return .refusedPostingBlocked
         }
-        let front = NSWorkspace.shared.frontmostApplication
-        log.info("retry: posting to frontmost \(front?.bundleIdentifier ?? "?", privacy: .public) (\(front?.processIdentifier ?? -1, privacy: .public))")
+        guard !events.otoFrontmost() else {
+            log.info("retry: refused, Oto itself is frontmost")
+            return .refusedOtoFrontmost
+        }
+        await waitForModifiersToClear()
+        let frontPID = events.frontmostPID()
+        let frontBundleID = events.frontmostBundleID()
+        log.info("retry: posting to frontmost \(frontBundleID ?? "?", privacy: .public) (\(frontPID ?? -1, privacy: .public))")
         let saved = PasteboardSnapshot.capture(pasteboard)
         let receipt = placeOnClipboard(text)
         await events.sleep(timings.prePasteDelay)
         guard await waitForClipboard(text: text, marker: receipt.marker) else {
-            PasteboardSnapshot.restore(saved, to: pasteboard)
+            restoreIfStillOwned(saved: saved, receipt: receipt)
             return .clipboardUnavailable
         }
-        let caretOpaque = CaretOpaqueApps.isOpaque(front?.bundleIdentifier)
-        let probe: DeliveryProbe = caretOpaque
-            ? .unavailable
-            : front.map { deliveryCheck.probe(for: $0.processIdentifier) } ?? .unavailable
+        let caretOpaque = CaretOpaqueApps.isOpaque(frontBundleID)
+        let probe: DeliveryProbe
+        if caretOpaque {
+            probe = .unavailable
+        } else if let frontPID {
+            probe = await deliveryCheck.probeAsync(for: frontPID)
+        } else {
+            probe = .unavailable
+        }
+        PasteKeycodeResolver.warmLayoutCacheOnMainThread()
         guard await events.postPaste() else {
             log.info("retry: no keystroke created")
-            PasteboardSnapshot.restore(saved, to: pasteboard)
+            restoreIfStillOwned(saved: saved, receipt: receipt)
             return .pasteFailed
         }
         let budget = DeliveryVerification.budget(
@@ -657,26 +813,49 @@ final class RealTextInsertion: TextInserting {
             cap: timings.deliveryBudgetCap,
             utf8Count: text.utf8.count
         )
-        let (outcome, elapsedMs) = await verifyDelivery(probe, budget: budget)
-        log.info("retry: delivery=\(String(describing: outcome), privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms caretOpaque=\(caretOpaque, privacy: .public)")
-        if outcome == .landed {
-            restoreNow(saved: saved, receipt: receipt)
+        let (delivery, elapsedMs) = await verifyDelivery(probe, budget: budget)
+        log.info("retry: delivery=\(String(describing: delivery.outcome), privacy: .public) grew=\(delivery.characterCountGrew, privacy: .public) elapsed=\(elapsedMs, privacy: .public)ms caretOpaque=\(caretOpaque, privacy: .public)")
+        if delivery.outcome == .landed {
+            if delivery.characterCountGrew {
+                restoreNow(saved: saved, receipt: receipt)
+            } else {
+                scheduleRestore(
+                    saved: saved,
+                    receipt: receipt,
+                    delay: min(timings.restoreDelay, Self.caretOnlyRestoreFloorNs)
+                )
+            }
         } else {
             scheduleRestore(saved: saved, receipt: receipt)
         }
-        return outcome == .notLanded ? .notDelivered : .posted
+        return delivery.outcome == .notLanded ? .notDelivered : .posted
     }
 
     // MARK: - Private
 
-    /// Writes text + session marker; the returned receipt proves ownership.
-    /// The change count is read AFTER all writes (each write bumps it).
+    /// Writes text + session marker + NSPasteboard.org transient/auto-generated
+    /// tags atomically in a single item so clipboard managers ignore transient
+    /// dictation traffic. The change count is read AFTER the write.
     private func placeOnClipboard(_ text: String) -> PasteboardReceipt {
         let marker = UUID().uuidString
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        pasteboard.setString(marker, forType: PasteboardReceipt.markerType)
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setString(marker, forType: PasteboardReceipt.markerType)
+        item.setData(Data(), forType: PasteboardReceipt.transientType)
+        item.setData(Data(), forType: PasteboardReceipt.autoGeneratedType)
+        pasteboard.writeObjects([item])
         return PasteboardReceipt(marker: marker, changeCount: pasteboard.changeCount)
+    }
+
+    /// Guarded synchronous restore for early-failure paths: never clobbers a
+    /// concurrent user copy that landed before the failure triggered.
+    private func restoreIfStillOwned(
+        saved: [[NSPasteboard.PasteboardType: Data]],
+        receipt: PasteboardReceipt
+    ) {
+        guard receipt.stillOwned(by: pasteboard) else { return }
+        PasteboardSnapshot.restore(saved, to: pasteboard)
     }
 
     /// Bounded write-verify: the post must never run ahead of an invisible
@@ -704,23 +883,27 @@ final class RealTextInsertion: TextInserting {
         return "Oto itself is in front (menu or Settings open). Close it, switch back to the target app, and use Retry paste — the transcript is kept."
     }
 
-    static func pollForMatch(        budget: UInt64,
+    static func pollForMatch(
+        budget: UInt64,
         poll: UInt64,
         sleep: (UInt64) async -> Void,
         read: () -> Bool
     ) async -> Bool {
         if read() { return true }
-        let start = Date()
-        while Date().timeIntervalSince(start) * 1_000_000_000 < Double(budget) {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .nanoseconds(Int64(clamping: budget))
+        while clock.now < deadline {
             await sleep(poll)
             if read() { return true }
         }
         return read()
     }
 
-    private func waitForModifiersToClear() async {        let watched: NSEvent.ModifierFlags = [.command, .shift, .option, .control, .function]
-        let start = Date()
-        while Date().timeIntervalSince(start) * 1_000_000_000 < Double(timings.modifierTimeout) {
+    private func waitForModifiersToClear() async {
+        let watched: NSEvent.ModifierFlags = [.command, .shift, .option, .control, .function]
+        let clock = ContinuousClock()
+        let deadline = clock.now + .nanoseconds(Int64(clamping: timings.modifierTimeout))
+        while clock.now < deadline {
             if events.currentModifiers().intersection(watched).isEmpty { return }
             await events.sleep(timings.modifierPoll)
         }
@@ -735,9 +918,10 @@ final class RealTextInsertion: TextInserting {
     /// Advisory only — budget expiry still posts, and the pre-post frontmost
     /// guard owns refusal with its better message.
     private func waitForReadiness(pid: pid_t) async {
-        let started = Date()
+        let clock = ContinuousClock()
+        let started = clock.now
         while true {
-            let elapsed = UInt64(max(0, Date().timeIntervalSince(started)) * 1_000_000_000)
+            let elapsed = Self.nanoseconds(from: clock.now - started)
             let frontmost = events.frontmostPID() == pid
             if InsertionReadiness.shouldPost(
                 elapsedNanoseconds: elapsed,
@@ -757,25 +941,40 @@ final class RealTextInsertion: TextInserting {
     /// budget, so it needs no cancellation.
     private func verifyDelivery(
         _ probe: DeliveryProbe, budget: UInt64
-    ) async -> (DeliveryOutcome, Int) {
+    ) async -> (DeliveryResult, Int) {
         let poll = timings.deliveryPoll
         let sleep = events.sleep
-        let started = Date()
-        let outcome = await Task.detached(priority: .utility) {
-            await DeliveryVerification.verify(
+        let clock = ContinuousClock()
+        let started = clock.now
+        let result = await Task.detached(priority: .utility) {
+            await DeliveryVerification.verifyDetailed(
                 probe: probe, budget: budget, poll: poll, sleep: sleep
             )
         }.value
-        return (outcome, Int(Date().timeIntervalSince(started) * 1000))
+        let elapsedMs = Int(Self.nanoseconds(from: clock.now - started) / 1_000_000)
+        return (result, elapsedMs)
+    }
+
+    private nonisolated static func nanoseconds(from duration: Duration) -> UInt64 {
+        let (seconds, attoseconds) = duration.components
+        guard seconds >= 0 else { return 0 }
+        let secNs = UInt64(seconds).multipliedReportingOverflow(by: 1_000_000_000)
+        if secNs.overflow { return UInt64.max }
+        let subNs = UInt64(max(0, attoseconds) / 1_000_000_000)
+        let total = secNs.partialValue.addingReportingOverflow(subNs)
+        return total.overflow ? UInt64.max : total.partialValue
     }
 
     /// Refusal words for a blocked synthetic post. Names the permission the
     /// person can change; never claims the text went anywhere.
-    private func postingBlockedReason(_ context: PostContext) -> String {
+    private func postingBlockedReason(_ context: PostContext, undoAlreadyRan: Bool = false) -> String {
         switch context {
         case .insert:
             return "macOS is not delivering Oto's synthetic keystrokes, so nothing was pasted. The transcript is kept — check Accessibility for Oto in System Settings, then use Retry paste."
         case .replace:
+            if undoAlreadyRan {
+                return "macOS is not delivering Oto's synthetic keystrokes, so the replacement could not be pasted. The previous paste may have been undone — press ⌘⇧Z to restore it, or use Retry paste."
+            }
             return "macOS is not delivering Oto's synthetic keystrokes, so the replacement was not applied. The text is kept — check Accessibility for Oto in System Settings, then use Retry paste."
         case .replaceSelection:
             return "macOS is not delivering Oto's synthetic keystrokes, so the replacement was not applied. Your text stands as it was — the transcript is kept."
@@ -789,7 +988,7 @@ final class RealTextInsertion: TextInserting {
         case .insert:
             return "The text did not appear in the target app. It was posted once — the transcript is kept: copy it, or switch back and press Retry paste."
         case .replace:
-            return "The replacement did not appear in the target app. The text is kept — copy it, or switch back and press Retry paste."
+            return "The replacement did not appear in the target app. The previous paste may have been undone — press ⌘⇧Z to restore it, copy the text, or press Retry paste."
         case .replaceSelection:
             return "The replacement did not appear in the target app. Your text stands as it was — copy the transcript, or press Retry paste."
         }
@@ -823,5 +1022,263 @@ final class RealTextInsertion: TextInserting {
             ) else { return }
             PasteboardSnapshot.restore(saved, to: pasteboard)
         }
+    }
+}
+
+/// Dynamic Chromium 155–156 clipboard-race detector (borrowed from Hex).
+/// Chromium 155 and 156 on macOS can drop a synthetic Cmd+V that races its own
+/// pasteboard change notification (upstream CL 8217390, fixed by CL 8503629 in
+/// 157). Inspects `<bundle>/Contents/Frameworks/*Framework.framework/Versions/*`
+/// dynamically so every Chromium browser (Chrome, Brave, Arc, Edge, Helium,
+/// Dia, etc.) is covered without hardcoding browser bundle IDs.
+enum ChromiumRaceDetector: Sendable {
+    nonisolated static let affectedMajors: ClosedRange<Int> = 155...156
+
+    nonisolated static func shouldTypeInsteadOfPaste(pid: pid_t) -> Bool {
+        guard let bundleURL = NSRunningApplication(processIdentifier: pid)?.bundleURL else {
+            return false
+        }
+        return hasClipboardRace(bundleURL: bundleURL)
+    }
+
+    nonisolated static func hasClipboardRace(bundleURL: URL) -> Bool {
+        let frameworksDir = bundleURL.appendingPathComponent("Contents/Frameworks", isDirectory: true)
+        guard let frameworks = try? FileManager.default.contentsOfDirectory(
+            at: frameworksDir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        for framework in frameworks where framework.lastPathComponent.hasSuffix("Framework.framework") {
+            let versionsDir = framework.appendingPathComponent("Versions", isDirectory: true)
+            guard let versions = try? FileManager.default.contentsOfDirectory(
+                at: versionsDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for version in versions {
+                if let major = chromiumMajorVersion(version.lastPathComponent),
+                   affectedMajors.contains(major)
+                {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    nonisolated static func chromiumMajorVersion(_ name: String) -> Int? {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        let nums = parts.compactMap { Int($0) }
+        guard nums.count == 4 else { return nil }
+        return nums[0]
+    }
+}
+
+/// Synthesized Unicode burst typing (borrowed from Hex): chunks text into
+/// Quartz's 20-UTF-16-unit maximum without splitting surrogate pairs, and sends
+/// Shift+Return for line breaks so chat composers insert newlines instead of
+/// sending. Every event carries `InsertionEvents.syntheticMarker`.
+enum DirectTextTyping: Sendable {
+    nonisolated static let maxUTF16Units = 20
+
+    nonisolated enum Stroke: Equatable, Sendable {
+        case text([UInt16])
+        case lineBreak
+    }
+
+    nonisolated static func strokes(for text: String) -> [Stroke] {
+        var result: [Stroke] = []
+        var units: [UInt16] = []
+        var scalars = text.unicodeScalars.makeIterator()
+        var pending = scalars.next()
+
+        while let scalar = pending {
+            pending = scalars.next()
+            if scalar == "\r" || scalar == "\n" {
+                if scalar == "\r", pending == "\n" {
+                    pending = scalars.next()
+                }
+                if !units.isEmpty {
+                    result.append(.text(units))
+                    units.removeAll(keepingCapacity: true)
+                }
+                result.append(.lineBreak)
+                continue
+            }
+            let encoded = Array(scalar.utf16)
+            if units.count + encoded.count > maxUTF16Units, !units.isEmpty {
+                result.append(.text(units))
+                units.removeAll(keepingCapacity: true)
+            }
+            units.append(contentsOf: encoded)
+        }
+        if !units.isEmpty {
+            result.append(.text(units))
+        }
+        return result
+    }
+
+    nonisolated static func postBurst(_ text: String) -> Bool {
+        let source = CGEventSource(stateID: .privateState)
+        var events: [CGEvent] = []
+        for stroke in strokes(for: text) {
+            switch stroke {
+            case .text(let units):
+                for down in [true, false] {
+                    guard let ev = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else {
+                        return false
+                    }
+                    ev.flags = []
+                    units.withUnsafeBufferPointer { buf in
+                        if let base = buf.baseAddress {
+                            ev.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: base)
+                        }
+                    }
+                    ev.setIntegerValueField(.eventSourceUserData, value: InsertionEvents.syntheticMarker)
+                    events.append(ev)
+                }
+            case .lineBreak:
+                let shiftKey = CGKeyCode(kVK_Shift)
+                let returnKey = CGKeyCode(kVK_Return)
+                guard let shiftDown = CGEvent(keyboardEventSource: source, virtualKey: shiftKey, keyDown: false),
+                      let retDown = CGEvent(keyboardEventSource: source, virtualKey: returnKey, keyDown: true),
+                      let retUp = CGEvent(keyboardEventSource: source, virtualKey: returnKey, keyDown: false),
+                      let shiftUp = CGEvent(keyboardEventSource: source, virtualKey: shiftKey, keyDown: false)
+                else { return false }
+                shiftDown.type = .flagsChanged
+                shiftDown.flags = .maskShift
+                retDown.flags = .maskShift
+                retUp.flags = .maskShift
+                shiftUp.type = .flagsChanged
+                shiftUp.flags = []
+                for ev in [shiftDown, retDown, retUp, shiftUp] {
+                    ev.setIntegerValueField(.eventSourceUserData, value: InsertionEvents.syntheticMarker)
+                    events.append(ev)
+                }
+            }
+        }
+        for ev in events {
+            ev.post(tap: .cghidEventTap)
+        }
+        return true
+    }
+}
+
+/// Optional Smart Spacing (borrowed from Hex `with_smart_spacing` +
+/// `char_before_caret`): inspects the single character immediately before the
+/// focused element's insertion point via `AXSelectedTextRange` and
+/// `AXStringForRange`, prepending a single leading space when dictating right
+/// after a word, number, or sentence/closing punctuation mark.
+enum SmartSpacing: Sendable {
+    nonisolated static let defaultsKey = "app.Oto.smartSpacing"
+    nonisolated static let axTimeoutSeconds: Float = 0.20
+
+    nonisolated static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: defaultsKey) != nil else { return true }
+        return defaults.bool(forKey: defaultsKey)
+    }
+
+    nonisolated static func setEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: defaultsKey)
+    }
+
+    /// Pure spacing rule (ported from Hex `paste.rs:828-851`).
+    nonisolated static func apply(to text: String, characterBeforeCaret previous: Character?) -> String {
+        guard let previous, needsLeadingSpace(previous: previous, text: text) else {
+            return text
+        }
+        return " " + text
+    }
+
+    nonisolated static func needsLeadingSpace(previous: Character, text: String) -> Bool {
+        guard let first = text.first else { return false }
+        if first.isWhitespace || isClosingPunctuation(first) {
+            return false
+        }
+        if previous.isLetter || previous.isNumber {
+            return true
+        }
+        return leadingSpacePunctuation.contains(previous)
+    }
+
+    private nonisolated static let leadingSpacePunctuation: Set<Character> = [
+        ".", ",", ";", ":", "!", "?", "…", ")", "]", "}", "”", "’", "»",
+    ]
+
+    private nonisolated static let closingPunctuation: Set<Character> = [
+        ",", ".", "?", "!", ";", ":", ")", "]", "}",
+    ]
+
+    private nonisolated static func isClosingPunctuation(_ ch: Character) -> Bool {
+        closingPunctuation.contains(ch)
+    }
+
+    /// Reads the single character immediately before the insertion point of
+    /// `pid`'s focused text element (ported from Hex `accessibility.rs:514-529`).
+    /// Returns `nil` for Oto's own process, secure password fields, non-zero
+    /// selections, caret at index 0, or apps that do not expose `AXStringForRange`.
+    nonisolated static func charBeforeCaret(pid: pid_t) -> Character? {
+        guard pid > 0,
+              pid != ProcessInfo.processInfo.processIdentifier,
+              AXIsProcessTrusted()
+        else { return nil }
+
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, axTimeoutSeconds)
+
+        var focusedRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            app, kAXFocusedUIElementAttribute as CFString, &focusedRaw
+        ) == .success,
+            let raw = focusedRaw,
+            CFGetTypeID(raw) == AXUIElementGetTypeID()
+        else { return nil }
+
+        let focused = unsafeDowncast(raw, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(focused, axTimeoutSeconds)
+
+        // Never inspect secure password fields.
+        for attr in [kAXRoleAttribute as CFString, kAXSubroleAttribute as CFString] {
+            var val: CFTypeRef?
+            if AXUIElementCopyAttributeValue(focused, attr, &val) == .success,
+               (val as? String) == (kAXSecureTextFieldSubrole as String)
+            {
+                return nil
+            }
+        }
+
+        var rangeRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focused, kAXSelectedTextRangeAttribute as CFString, &rangeRaw
+        ) == .success,
+            let rangeVal = rangeRaw,
+            CFGetTypeID(rangeVal) == AXValueGetTypeID()
+        else { return nil }
+
+        var selection = CFRange()
+        guard AXValueGetValue(unsafeDowncast(rangeVal, to: AXValue.self), .cfRange, &selection),
+              selection.length == 0,
+              selection.location > 0
+        else { return nil }
+
+        let maxUnits = min(2, selection.location)
+        for units in 1...maxUnits {
+            var queryRange = CFRange(location: selection.location - units, length: units)
+            guard let param = AXValueCreate(.cfRange, &queryRange) else { continue }
+            var strRaw: CFTypeRef?
+            let status = AXUIElementCopyParameterizedAttributeValue(
+                focused,
+                kAXStringForRangeParameterizedAttribute as CFString,
+                param,
+                &strRaw
+            )
+            if status == .success, let str = strRaw as? String, let last = str.last {
+                return last
+            }
+        }
+        return nil
     }
 }

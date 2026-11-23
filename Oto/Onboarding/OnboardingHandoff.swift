@@ -140,9 +140,11 @@ enum OnboardingHandoff {
         CATransaction.begin()
         CATransaction.setCompletionBlock {
             Task { @MainActor in
+                let stillActive = self.inFlight === window
                 window.orderOut(nil)
                 window.close()
-                if self.inFlight === window { self.inFlight = nil }
+                if stillActive { self.inFlight = nil }
+                guard stillActive else { return }
                 // The tap is the tap of the landing, not of a window closing.
                 OtoHaptics.handoffLanded()
                 arrival()
@@ -166,6 +168,16 @@ enum OnboardingHandoff {
         group.isRemovedOnCompletion = false
         mark.add(group, forKey: "flight")
         CATransaction.commit()
+    }
+
+    /// Cancels any in-flight handoff animation so tearing down onboarding
+    /// immediately removes the carrier window and suppresses its arrival callback.
+    static func cancelIfNeeded() {
+        guard let window = self.inFlight else { return }
+        self.inFlight = nil
+        window.contentView?.layer?.sublayers?.forEach { $0.removeAllAnimations() }
+        window.orderOut(nil)
+        window.close()
     }
 
     private static var inFlight: NSWindow?

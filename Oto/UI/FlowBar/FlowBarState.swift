@@ -64,17 +64,17 @@ nonisolated func workPillText(_ work: WorkLabel) -> String {
 nonisolated func failurePillText(_ failure: DictationFailure) -> String? {
     switch failure {
     case .audioCapture:
-        return "Audio capture failed — check the microphone"
+        return "Microphone error"
     case .speechPreparation:
-        return "Speech couldn't start"
+        return "Speech unavailable"
     case .noAudioCaptured:
         return nil
     case .targetGone:
         return "Target app closed"
     case .noTextField:
-        return "No text field focused"
+        return "No text field"
     case .insertionFailed:
-        return "Insertion failed — transcript kept"
+        return "Couldn't paste — kept"
     case .microphoneDenied:
         return nil
     }

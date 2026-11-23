@@ -27,7 +27,7 @@ struct PermissionsManager: Sendable {
         case notDetermined
     }
 
-    func microphoneStatus() -> MicrophoneStatus {
+    nonisolated func microphoneStatus() -> MicrophoneStatus {
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
             return .granted
@@ -41,22 +41,15 @@ struct PermissionsManager: Sendable {
     }
 
     /// Asks only when the person attempts dictation or preparation — never
-    /// speculatively at launch (07 §5.1). Nonisolated: the system calls
-    /// the handler on a background TCC queue, and a MainActor-inherited
-    /// closure traps there on entry (Debug SIGTRAP) — the callback must
-    /// never inherit an executor. Resuming the continuation from any
-    /// thread is explicitly legal (it hops to the awaiting task).
+    /// speculatively at launch (07 §5.1). Uses AVFAudio's native async
+    /// `requestRecordPermission()` directly.
     nonisolated func requestMicrophone() async -> Bool {
-        await withCheckedContinuation { continuation in
-            AVAudioApplication.requestRecordPermission { granted in
-                continuation.resume(returning: granted)
-            }
-        }
+        await AVAudioApplication.requestRecordPermission()
     }
 
     /// Returns true when capture may proceed: already granted, or granted
     /// through a just-in-time prompt.
-    func ensureMicrophone() async -> Bool {
+    nonisolated func ensureMicrophone() async -> Bool {
         switch microphoneStatus() {
         case .granted:
             return true

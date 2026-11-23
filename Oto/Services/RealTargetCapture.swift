@@ -16,17 +16,22 @@ import Foundation
 /// the cursor is often on a display the person isn't looking at. Chain is
 /// focused-window → mouse → nil; every step is nil-tolerant.
 final class RealTargetCapture: TargetCapturing {
-    /// Synchronous snapshot read (NSWorkspace/AX/screen queries are all
-    /// nonisolated in the 27 SDK): `nonisolated` to satisfy the protocol
-    /// for the background coordinator (Swift 6).
+    /// Hard AX IPC timeout so a hung target never stalls session start.
+    nonisolated static let axTimeoutSeconds: Float = 0.25
+
+    /// Synchronous snapshot read: reads `NSWorkspace.shared.frontmostApplication`
+    /// ONCE so PID and display lookup never split across apps, and resolves
+    /// display geometry via thread-safe CoreGraphics (never touching AppKit
+    /// `NSScreen`/`NSEvent` off-main).
     nonisolated func capture() -> TargetApplication {
         let app = NSWorkspace.shared.frontmostApplication
-        let bundleID: String? = app?.bundleIdentifier ?? nil
+        let pid = app?.processIdentifier
+        let bundleID: String? = app?.bundleIdentifier
         return TargetApplication(
             bundleIdentifier: bundleID,
-            processIdentifier: app?.processIdentifier,
+            processIdentifier: pid,
             windowIdentifier: nil,
-            displayID: Self.screenDisplayID()
+            displayID: Self.screenDisplayID(pid: pid)
         )
     }
 
@@ -36,50 +41,67 @@ final class RealTargetCapture: TargetCapturing {
         return !app.isTerminated
     }
 
-    // MARK: - Screen (best-effort, nil-tolerant)
+    // MARK: - Screen (best-effort, nil-tolerant, thread-safe CoreGraphics)
 
-    // Synchronous snapshot reads: `nonisolated` for the background
-    // capture path (Swift 6); every SDK call inside is nonisolated.
-    nonisolated private static func screenDisplayID() -> CGDirectDisplayID? {
-        if let id = focusedWindowDisplayID() { return id }
-        let mouse = NSEvent.mouseLocation
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }),
-           let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-        {
-            return CGDirectDisplayID(truncating: number)
-        }
-        return nil
+    nonisolated private static func screenDisplayID(pid: pid_t?) -> CGDirectDisplayID? {
+        if let pid, let id = focusedWindowDisplayID(pid: pid) { return id }
+        return mouseDisplayID()
     }
 
-    nonisolated private static func focusedWindowDisplayID() -> CGDirectDisplayID? {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+    nonisolated private static func focusedWindowDisplayID(pid: pid_t) -> CGDirectDisplayID? {
         // Without AX trust every query below fails closed → nil. That is the
         // correct outcome: an unknown screen must never block dictation.
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, Self.axTimeoutSeconds)
         guard let window = copyElement(axApp, kAXFocusedWindowAttribute)
             ?? copyElement(axApp, kAXMainWindowAttribute),
             let position = copyPoint(window, kAXPositionAttribute),
             let size = copySize(window, kAXSizeAttribute),
             size.width > 0, size.height > 0
         else { return nil }
-        let center = CGPoint(x: position.x + size.width / 2, y: position.y + size.height / 2)
-        for screen in NSScreen.screens {
-            // AX reports a top-left origin, y growing down from the primary
-            // display's top; NSScreen uses bottom-left. Flip around the
-            // primary height to compare against frames.
-            guard let height = primaryScreenHeight() else { continue }
-            let flipped = CGPoint(x: center.x, y: height - center.y)
-            if screen.frame.contains(flipped),
-               let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            {
-                return CGDirectDisplayID(truncating: number)
-            }
-        }
-        return nil
+        // AX window origin/size are already in CoreGraphics global display
+        // coordinates (top-left origin, y growing down), matching
+        // `CGDisplayBounds` and `CGGetDisplaysWithRect`.
+        let windowRect = CGRect(origin: position, size: size)
+        return displayID(for: windowRect)
     }
 
-    nonisolated private static func primaryScreenHeight() -> CGFloat? {
-        (NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.main)?.frame.height
+    /// Picks the display with maximum intersection area against `rect`,
+    /// falling back to the display containing the rect's center point.
+    nonisolated private static func displayID(for rect: CGRect) -> CGDirectDisplayID? {
+        let maxDisplays: UInt32 = 16
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(maxDisplays))
+        var count: UInt32 = 0
+        if CGGetDisplaysWithRect(rect, maxDisplays, &displays, &count) == .success, count > 0 {
+            var bestID: CGDirectDisplayID = displays[0]
+            var bestArea: CGFloat = -1
+            for index in 0..<Int(count) {
+                let candidate = displays[index]
+                let overlap = CGDisplayBounds(candidate).intersection(rect)
+                let area = overlap.isNull ? 0 : overlap.width * overlap.height
+                if area > bestArea {
+                    bestArea = area
+                    bestID = candidate
+                }
+            }
+            return bestID
+        }
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        return displayID(for: center)
+    }
+
+    nonisolated private static func displayID(for point: CGPoint) -> CGDirectDisplayID? {
+        var display: CGDirectDisplayID = 0
+        var count: UInt32 = 0
+        guard CGGetDisplaysWithPoint(point, 1, &display, &count) == .success, count > 0 else {
+            return nil
+        }
+        return display
+    }
+
+    nonisolated private static func mouseDisplayID() -> CGDirectDisplayID? {
+        guard let point = CGEvent(source: nil)?.location else { return nil }
+        return displayID(for: point)
     }
 
     nonisolated private static func copyElement(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
@@ -88,7 +110,9 @@ final class RealTargetCapture: TargetCapturing {
               let value, CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
         // Safe: type ID verified above.
-        return unsafeDowncast(value, to: AXUIElement.self)
+        let element = unsafeDowncast(value, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(element, Self.axTimeoutSeconds)
+        return element
     }
 
     nonisolated private static func copyAXValue(_ element: AXUIElement, _ attribute: String, expecting: AXValueType) -> AXValue? {

@@ -11,10 +11,17 @@
 import Foundation
 import os
 
+/// Explicit scope choice from editors so "Selected apps" with zero picked apps
+/// fails validation instead of silently saving as global "Everywhere".
+nonisolated enum AppScope: Equatable, Sendable {
+    case global
+    case apps([String])
+}
+
 /// One replacement rule. Empty `bundleIDs` means global; otherwise the rule
 /// fires only in those exact apps (case-sensitive — bundle IDs are
 /// case-sensitive reverse-DNS; lowercasing would silently never fire).
-struct DictionaryRule: Sendable, Hashable, Codable, Identifiable {
+nonisolated struct DictionaryRule: Sendable, Hashable, Codable, Identifiable {
     nonisolated static let maxSpokenLength = 80
     nonisolated static let maxReplacementLength = 200
     nonisolated static let maxRules = 500
@@ -285,22 +292,111 @@ final class DictionaryStore {
     var saveFailed = false
     private let persistence: LocalPersistence
     private let log = Logger(subsystem: "app.Oto", category: "dictionary")
+    private var loadTask: Task<Void, Never>?
+    private var hasLoaded = false
+    private var hasLocalMutations = false
+    private var clearedBeforeLoad = false
+    private var loadFailed = false
+    private var saveGeneration: UInt64 = 0
+    private var pendingSaveTask: Task<Void, Never>?
 
     init(persistence: LocalPersistence) {
         self.persistence = persistence
     }
 
     func load() async {
-        rules = await VersionedStoreFile.load(DictionaryRule.self, filename: Self.filename, via: persistence)
+        if let existing = loadTask {
+            await existing.value
+            return
+        }
+        let task = Task {
+            let outcome = await VersionedStoreFile.loadOutcome(
+                DictionaryRule.self,
+                filename: Self.filename,
+                via: self.persistence
+            )
+            self.hasLoaded = true
+            switch outcome {
+            case .readError:
+                self.loadFailed = true
+                self.saveFailed = true
+                return
+            case .missing:
+                self.loadFailed = false
+                if !self.hasLocalMutations {
+                    self.rules = []
+                }
+            case .loaded(let diskRules):
+                self.loadFailed = false
+                if !self.hasLocalMutations {
+                    self.rules = diskRules
+                } else if !self.clearedBeforeLoad {
+                    let localIDs = Set(self.rules.map(\.id))
+                    let localKeys = Set(self.rules.map { $0.duplicateKey() })
+                    let merged = self.rules + diskRules.filter {
+                        !localIDs.contains($0.id) && !localKeys.contains($0.duplicateKey())
+                    }
+                    self.rules = Array(merged.prefix(DictionaryRule.maxRules))
+                    if !diskRules.isEmpty {
+                        await self.persist()
+                    }
+                }
+            }
+        }
+        loadTask = task
+        await task.value
+        loadTask = nil
+    }
+
+    private func waitForLoadIfNeeded() async {
+        if let loadTask {
+            await loadTask.value
+        }
     }
 
     private func persist() async {
-        do {
-            try await VersionedStoreFile.save(rules, filename: Self.filename, via: persistence)
-            saveFailed = false
-        } catch {
+        if loadFailed {
             saveFailed = true
-            log.error("dictionary save failed")
+            return
+        }
+        saveGeneration &+= 1
+        let generation = saveGeneration
+        let snapshot = rules
+        let previous = pendingSaveTask
+        let task = Task {
+            await previous?.value
+            guard generation == self.saveGeneration else { return }
+            do {
+                try await VersionedStoreFile.save(snapshot, filename: Self.filename, via: self.persistence)
+                if generation == self.saveGeneration {
+                    self.saveFailed = false
+                }
+            } catch {
+                if generation == self.saveGeneration {
+                    self.saveFailed = true
+                }
+                self.log.error("dictionary save failed")
+            }
+        }
+        pendingSaveTask = task
+        await task.value
+    }
+
+    /// Validates + inserts using an explicit `AppScope`. `.apps([])` fails
+    /// with `.emptyAppScope` instead of silently saving as global.
+    @discardableResult
+    func add(
+        spoken: String,
+        replacement: String,
+        scope: AppScope,
+        isEnabled: Bool = true
+    ) async -> Result<DictionaryRule, DictionaryValidationError> {
+        switch scope {
+        case .global:
+            return await add(spoken: spoken, replacement: replacement, bundleIDs: [], isEnabled: isEnabled)
+        case .apps(let ids):
+            guard !ids.isEmpty else { return .failure(.emptyAppScope) }
+            return await add(spoken: spoken, replacement: replacement, bundleIDs: ids, isEnabled: isEnabled)
         }
     }
 
@@ -309,6 +405,7 @@ final class DictionaryStore {
     /// surfaces the precedence warning from `precedenceWarning(for:)`.
     @discardableResult
     func add(spoken: String, replacement: String, bundleIDs: [String] = [], isEnabled: Bool = true) async -> Result<DictionaryRule, DictionaryValidationError> {
+        await waitForLoadIfNeeded()
         let cleanSpoken = DictionaryRule.normalizeSpoken(spoken)
         guard !cleanSpoken.isEmpty else { return .failure(.emptySpoken) }
         guard cleanSpoken.count <= DictionaryRule.maxSpokenLength else { return .failure(.spokenTooLong) }
@@ -334,12 +431,28 @@ final class DictionaryStore {
                 scope: DictionaryRule.scopeDescription(cleanScopes)
             ))
         }
+        hasLocalMutations = true
         rules.append(candidate)
         await persist()
         return .success(candidate)
     }
 
+    /// Validates + updates using an explicit `AppScope`. `.apps([])` fails
+    /// with `.emptyAppScope` instead of silently saving as global.
+    func update(_ rule: DictionaryRule, scope: AppScope) async -> Result<DictionaryRule, DictionaryValidationError> {
+        var edited = rule
+        switch scope {
+        case .global:
+            edited.bundleIDs = []
+        case .apps(let ids):
+            guard !ids.isEmpty else { return .failure(.emptyAppScope) }
+            edited.bundleIDs = ids
+        }
+        return await update(edited)
+    }
+
     func update(_ rule: DictionaryRule) async -> Result<DictionaryRule, DictionaryValidationError> {
+        await waitForLoadIfNeeded()
         guard let index = rules.firstIndex(where: { $0.id == rule.id }) else {
             return .failure(.notFound)
         }
@@ -347,6 +460,7 @@ final class DictionaryStore {
         fixed.spoken = DictionaryRule.normalizeSpoken(rule.spoken)
         guard !fixed.spoken.isEmpty else { return .failure(.emptySpoken) }
         guard fixed.spoken.count <= DictionaryRule.maxSpokenLength else { return .failure(.spokenTooLong) }
+        fixed.replacement = rule.replacement.trimmingCharacters(in: CharacterSet.newlines)
         guard !fixed.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .failure(.emptyReplacement)
         }
@@ -364,35 +478,65 @@ final class DictionaryStore {
                 scope: DictionaryRule.scopeDescription(fixed.bundleIDs)
             ))
         }
+        hasLocalMutations = true
         rules[index] = fixed
         await persist()
         return .success(fixed)
     }
 
     func remove(id: UUID) async {
+        await waitForLoadIfNeeded()
+        hasLocalMutations = true
         rules.removeAll { $0.id == id }
         await persist()
     }
 
+    /// Single-write clear of every dictionary rule.
+    func clearAll() async {
+        await waitForLoadIfNeeded()
+        hasLocalMutations = true
+        clearedBeforeLoad = true
+        loadFailed = false
+        rules = []
+        await persist()
+    }
+
     func setEnabled(id: UUID, enabled: Bool) async {
+        await waitForLoadIfNeeded()
         guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
+        hasLocalMutations = true
         rules[index].isEnabled = enabled
         await persist()
     }
 
-    /// Non-blocking notice when a same-spoken rule exists in another scope.
+    /// Non-blocking notice when a same-spoken rule exists in an overlapping
+    /// or wider/narrower scope. Disjoint app-specific rules do not warn.
     func precedenceWarning(for rule: DictionaryRule) -> String? {
         let spokenKey = DictionaryRule.normalizeSpoken(rule.spoken).lowercased()
-        let clash = rules.contains {
+        let sameSpoken = rules.filter {
             $0.id != rule.id
                 && DictionaryRule.normalizeSpoken($0.spoken).lowercased() == spokenKey
-                && Set($0.bundleIDs) != Set(rule.bundleIDs)
         }
-        guard clash else { return nil }
+        guard !sameSpoken.isEmpty else { return nil }
         if !rule.bundleIDs.isEmpty {
-            return "‘\(rule.spoken)’ also has a rule for other apps or everywhere. This rule wins in its apps; the wider rule still applies elsewhere."
+            let hasOverlappingAppRule = sameSpoken.contains { other in
+                guard !other.bundleIDs.isEmpty else { return false }
+                return rule.bundleIDs.contains { id in
+                    DictionaryRule.scopeMatches(other.bundleIDs, target: id)
+                }
+            }
+            if hasOverlappingAppRule {
+                return "‘\(rule.spoken)’ also has another rule covering some of the same apps. Keep only one rule per app so the result stays predictable."
+            }
+            if sameSpoken.contains(where: { $0.bundleIDs.isEmpty }) {
+                return "‘\(rule.spoken)’ also has a global rule. This rule wins in its apps; the global rule still applies elsewhere."
+            }
+            return nil
         } else {
-            return "‘\(rule.spoken)’ also has an app-specific rule. That rule wins in its apps; this global rule applies everywhere else."
+            if sameSpoken.contains(where: { !$0.bundleIDs.isEmpty }) {
+                return "‘\(rule.spoken)’ also has an app-specific rule. That rule wins in its apps; this global rule applies everywhere else."
+            }
+            return nil
         }
     }
 
@@ -406,6 +550,7 @@ final class DictionaryStore {
     /// Import: validate every row first; write once. One bad row never
     /// discards the good rows or the existing store.
     func importData(_ data: Data) async -> DictionaryImportReport {
+        await waitForLoadIfNeeded()
         var report = DictionaryImportReport(imported: 0, skippedDuplicates: 0, rejected: [])
         let file: DictionaryImportFile
         do {
@@ -422,6 +567,7 @@ final class DictionaryStore {
         var accepted: [DictionaryRule] = []
         for (offset, var rule) in file.rules.enumerated() {
             rule.spoken = DictionaryRule.normalizeSpoken(rule.spoken)
+            rule.replacement = rule.replacement.trimmingCharacters(in: CharacterSet.newlines)
             let problems: String? = {
                 if rule.spoken.isEmpty
                     || rule.spoken.count > DictionaryRule.maxSpokenLength { return "Bad spoken form." }
@@ -449,6 +595,7 @@ final class DictionaryStore {
             accepted.append(rule)
         }
         if !accepted.isEmpty {
+            hasLocalMutations = true
             rules += accepted
             await persist()
         }

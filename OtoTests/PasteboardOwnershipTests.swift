@@ -67,6 +67,48 @@ struct PasteboardOwnershipTests {
         PasteboardSnapshot.restore([], to: board)
         #expect(board.string(forType: .string) == nil)
     }
+
+    @Test func restoreTagsTransientType() {
+        let board = scratchBoard()
+        board.clearContents()
+        board.setString("hello", forType: .string)
+        let saved = PasteboardSnapshot.capture(board)
+        board.clearContents()
+        PasteboardSnapshot.restore(saved, to: board)
+        #expect(board.string(forType: .string) == "hello")
+        #expect(board.data(forType: PasteboardReceipt.transientType) == Data())
+    }
+
+    @Test func captureSkipsPromisedFileTypesAndEmptyItems() {
+        let board = scratchBoard()
+        board.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(Data("file:///tmp/x".utf8), forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url"))
+        item.setData(Data("public.data".utf8), forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type"))
+        board.writeObjects([item])
+        let saved = PasteboardSnapshot.capture(board)
+        #expect(saved.isEmpty)
+    }
+
+    @Test func captureEnforcesTotalByteBudget() {
+        let board = scratchBoard()
+        board.clearContents()
+        let item = NSPasteboardItem()
+        item.setData(Data(repeating: 0x41, count: 64), forType: .string)
+        item.setData(Data(repeating: 0x42, count: 1024), forType: .tiff)
+        board.writeObjects([item])
+        let saved = PasteboardSnapshot.capture(board, maxTotalBytes: 256)
+        #expect(saved.count == 1)
+        #expect(saved[0][.string] != nil)
+        #expect(saved[0][.tiff] == nil)
+    }
+
+    @Test func shouldPreserveFlavorSkipsSystemTranslatedWhenAuthoritativePresent() {
+        let translated = PasteboardSnapshot.systemTranslatedFlag
+        #expect(PasteboardSnapshot.shouldPreserveFlavor(flags: [], hasAuthoritativeFlavor: true))
+        #expect(!PasteboardSnapshot.shouldPreserveFlavor(flags: translated, hasAuthoritativeFlavor: true))
+        #expect(PasteboardSnapshot.shouldPreserveFlavor(flags: translated, hasAuthoritativeFlavor: false))
+    }
 }
 
 struct InsertionDecisionTests {

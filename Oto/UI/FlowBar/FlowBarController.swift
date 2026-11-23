@@ -24,23 +24,21 @@ import os
 
 @MainActor
 final class FlowBarController {
-    nonisolated static let pollInterval: UInt64 = 150_000_000
     /// Adoption window: a parked hide waits this long for a new session
     /// before melting (double-tap converts land inside it).
     nonisolated static let adoptionWindowNanoseconds: UInt64 = 400_000_000
-    /// Vanish grace (v6): the first hidden poll after a visible state melts
+    /// Vanish grace (v6): the first hidden update after a visible state melts
     /// the loader out immediately — no hold, no end-state. Total exit ≈
     /// one 0.12s fade + this margin.
     nonisolated static let vanishDelay: Double = 0.14
-    /// Loader minimum dwell: finalizing/inserting routinely pass inside
-    /// one 150 ms poll (and completion melts in 0.14s), so the loader
-    /// often never paints. Every completed session holds loader pixels
-    /// for at least this long — a readability floor for work that
-    /// genuinely happened, never motion for its own sake. Quick by
-    /// design (0.4 s); matrix-tuned, never guessed.
+    /// Loader minimum dwell: finalizing/inserting routinely pass quickly
+    /// (and completion melts in 0.14s), so the loader often never paints.
+    /// Every completed session holds loader pixels for at least this long —
+    /// a readability floor for work that genuinely happened, never motion
+    /// for its own sake. Quick by design (0.4 s); matrix-tuned, never guessed.
     nonisolated static let loaderMinDwell: TimeInterval = 0.4
     /// Per-session loader-tail latch: the completed tail below fires
-    /// once per session id. Without it, every later completed poll
+    /// once per session id. Without it, every later completed update
     /// (state is terminal-persistent until the next begin) would
     /// re-schedule and the pill would pop back forever.
     private var loaderTailedSession: UUID?
@@ -65,9 +63,19 @@ final class FlowBarController {
     private let isMicDenied: () -> Bool
 
     private var panel: FlowBarPanel?
-    private var pollTask: Task<Void, Never>?
+    private var isStarted = false
+    private var coordinatorTask: Task<Void, Never>?
+    private var runnerTask: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
+    private var deadlineTask: Task<Void, Never>?
+    private var armedDeadline: ContinuousClock.Instant?
+    private var isRefreshing = false
+    private var needsAnotherRefresh = false
+    private var workspaceObserver: NSObjectProtocol?
+    private var defaultsObserver: NSObjectProtocol?
     private var lastRouteKey: String?
     private var lastPermissionKey: String?
+    private var lastAnnouncedRecordingSession: UUID?
     private var analyzerRecording = false
     /// Fade-hide generation: any state change invalidates a pending hide
     /// so a new session never inherits a stale fade (v4 finishing).
@@ -77,18 +85,18 @@ final class FlowBarController {
     /// True while a parked hide (adoption window) is pending. A new
     /// visible session then adopts the live panel instead of hide→show.
     private var parkedForAdoption = false
-    /// Over-limit Copied pill latch: text + deadline. Set once per
+    /// Over-limit Copied pill latch: text + monotonic deadline. Set once per
     /// failure route; cleared by any live session or on expiry. Keeps
     /// the pixels capped at pill size without touching the coordinator.
     private var overLimitText: String?
-    private var overLimitUntil: Date?
+    private var overLimitUntil: ContinuousClock.Instant?
     nonisolated static let overLimitDuration: TimeInterval = 2.5
     /// Failure notice latch: the same transient message pill as over-limit,
     /// for failures with no dedicated surface (the permission card owns
     /// mic-denied; the catcher/auto-copy owns recovery). One shot per failure
     /// transition, so state persistence never re-arms it.
     private var failureText: String?
-    private var failureUntil: Date?
+    private var failureUntil: ContinuousClock.Instant?
     private var lastFailureKey: String?
     nonisolated static let failureMessageDuration: TimeInterval = 3.0
 
@@ -115,41 +123,166 @@ final class FlowBarController {
         self.model = FlowBarModel()
     }
 
+    isolated deinit {
+        coordinatorTask?.cancel()
+        runnerTask?.cancel()
+        refreshTask?.cancel()
+        deadlineTask?.cancel()
+        hideTask?.cancel()
+        if let workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
+        }
+        if let defaultsObserver {
+            NotificationCenter.default.removeObserver(defaultsObserver)
+        }
+    }
+
+    private func ensurePanel(width: CGFloat) -> FlowBarPanel {
+        if let panel { return panel }
+        let created = FlowBarPanel(width: width)
+        created.onDragEnded = { [weak self] in
+            self?.triggerRefresh()
+        }
+        panel = created
+        return created
+    }
+
     func start() {
-        guard pollTask == nil else { return }
+        guard !isStarted else { return }
+        isStarted = true
         // Prewarm (v4 F3b): first-show construction moves to launch, so
         // transitions only ever setFrame + orderFront.
         modal.prewarm()
         permission.prewarm()
-        if panel == nil {
-            panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .recording))
+        _ = ensurePanel(width: VisualizerMath.panelWidth(for: .recording))
+
+        let coord = coordinator
+        coordinatorTask = Task { [weak self] in
+            let stream = await coord.stateChanges()
+            for await _ in stream {
+                guard !Task.isCancelled, let self else { break }
+                self.triggerRefresh()
+            }
         }
-        pollTask = Task { await self.pollLoop() }
+
+        if let runner {
+            runnerTask = Task { [weak self] in
+                let stream = await runner.workChanges()
+                for await _ in stream {
+                    guard !Task.isCancelled, let self else { break }
+                    self.triggerRefresh()
+                }
+            }
+        }
+
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.triggerRefresh()
+            }
+        }
+
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.triggerRefresh()
+            }
+        }
+
+        triggerRefresh()
     }
 
     func stop() async {
-        pollTask?.cancel()
-        if let pollTask { _ = await pollTask.value }
-        pollTask = nil
+        isStarted = false
+        coordinatorTask?.cancel()
+        runnerTask?.cancel()
+        refreshTask?.cancel()
+        deadlineTask?.cancel()
         hideTask?.cancel()
+        if let coordinatorTask { _ = await coordinatorTask.value }
+        if let runnerTask { _ = await runnerTask.value }
+        if let refreshTask { _ = await refreshTask.value }
+        coordinatorTask = nil
+        runnerTask = nil
+        refreshTask = nil
+        deadlineTask = nil
+        armedDeadline = nil
+        isRefreshing = false
+        needsAnotherRefresh = false
         hideTask = nil
         parkedForAdoption = false
+        if let workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
+            self.workspaceObserver = nil
+        }
+        if let defaultsObserver {
+            NotificationCenter.default.removeObserver(defaultsObserver)
+            self.defaultsObserver = nil
+        }
         await analyzer.stop()
         analyzerRecording = false
         panel?.cancelSnapFeedback()
         panel?.hide()
         permission.hide()
-        // Route keys are per-poll-run dedup state: a stop/start inside
-        // one failure window must re-fire, not inherit silence (audit).
+        // Per-run dedup state resets on stop so a restart never inherits stale latches.
         lastRouteKey = nil
         lastPermissionKey = nil
         lastStateKey = nil
+        lastAnnouncedRecordingSession = nil
+        loaderTailedSession = nil
+        overLimitText = nil
+        overLimitUntil = nil
         failureText = nil
         failureUntil = nil
         lastFailureKey = nil
     }
 
-    // MARK: - Poll
+    // MARK: - Event-driven refresh
+
+    /// Coalesces bursts of coordinator, runner, accessibility, and defaults
+    /// notifications into serialized `pollOnce()` passes with zero idle wakeups.
+    private func triggerRefresh() {
+        if isRefreshing {
+            needsAnotherRefresh = true
+            return
+        }
+        isRefreshing = true
+        refreshTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                self.needsAnotherRefresh = false
+                await self.pollOnce()
+                if !self.needsAnotherRefresh { break }
+            }
+            self?.isRefreshing = false
+        }
+    }
+
+    /// Arms a single one-shot timer ONLY while a timed latch (`overLimitUntil`
+    /// or `failureUntil`) is active; cancels immediately when idle.
+    private func syncDeadlineTimer(until deadline: ContinuousClock.Instant?) {
+        guard isStarted, let deadline else {
+            deadlineTask?.cancel()
+            deadlineTask = nil
+            armedDeadline = nil
+            return
+        }
+        if armedDeadline == deadline, deadlineTask != nil { return }
+        deadlineTask?.cancel()
+        armedDeadline = deadline
+        deadlineTask = Task { [weak self] in
+            try? await ContinuousClock().sleep(until: deadline, tolerance: .milliseconds(20))
+            guard !Task.isCancelled, let self else { return }
+            self.armedDeadline = nil
+            self.deadlineTask = nil
+            self.triggerRefresh()
+        }
+    }
 
     /// Test hooks: pill surface state without exposing the panel.
     var isPillVisible: Bool { panel?.isVisible ?? false }
@@ -157,16 +290,11 @@ final class FlowBarController {
     /// True while content is fully opaque (a visible window with faded
     /// content reads as missing — this catches what isPillVisible can't).
     var isContentFull: Bool { (panel?.contentAlpha ?? 1) >= 1 }
+    /// Test hook: active pill content width (0 if panel not yet created).
+    var currentPillWidth: CGFloat { panel?.currentWidth ?? 0 }
 
-    private func pollLoop() async {
-        while !Task.isCancelled {
-            await self.pollOnce()
-            try? await Task.sleep(nanoseconds: Self.pollInterval)
-        }
-    }
-
-    /// Internal for headless transition tests (@testable). Production
-    /// path is the poll loop above.
+    /// Snapshot refresh. Event-driven in production (`start()`), and callable
+    /// directly from headless transition tests (`@testable`).
     func pollOnce() async {
         let state = await coordinator.state
         let recovery = await coordinator.recoveryText()
@@ -178,17 +306,21 @@ final class FlowBarController {
             failureText = nil
             failureUntil = nil
         }
-        // latch override lives post-routing (below): a route may arm it
-        // this very poll, and pixels must reflect it immediately.
-        model.motionFrozen = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        model.setMotionFrozen(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         model.update(projection: baseProjection)
 
-        // E2 work feed, read BEFORE the state-change gate below: work
-        // appear/disappear must invalidate a pending hide exactly like a
-        // state change does (otherwise a second transform lands inside the
-        // previous melt and never paints). Recording/starting never show
-        // work (transforms are suspended while recording; cleanup never
-        // runs while recording).
+        // Announce recording start once per session for VoiceOver users.
+        if case .recording(let context) = state {
+            if lastAnnouncedRecordingSession != context.id {
+                lastAnnouncedRecordingSession = context.id
+                Self.announce("Dictation started")
+            }
+        } else {
+            lastAnnouncedRecordingSession = nil
+        }
+
+        // E2 work feed: recording/starting never show work (transforms are
+        // suspended while recording; cleanup never runs while recording).
         let workText: String?
         if Self.workAllows(state: state) {
             if let runnerWork = await runner?.currentWorkLabel() {
@@ -200,14 +332,69 @@ final class FlowBarController {
             workText = nil
         }
 
-        // State change invalidates any pending fade-hide first — but ONLY
-        // when the new target needs the panel. Hidden→hidden moves
-        // (completed→idle) let the scheduled melt ride; cancelling there
-        // would hide→reshow flicker on the very next poll (v6).
-        let stateKey = "\(state)-\(baseProjection.sessionID?.uuidString ?? "nil")-work:\(workText ?? "-")"
+        // Recovery routing & failure latch run BEFORE the hide-invalidation
+        // gate so transient `.message` pills (over-limit "Copied" and failure
+        // notices) properly cancel any pending `hideTask` and restore alpha.
+        let recoveryOwned = syncRecovery(state: state, recovery: recovery)
+        syncFailureLatch(state: state, recoveryOwned: recoveryOwned)
+
+        let now = ContinuousClock.now
+        if let until = overLimitUntil, now >= until {
+            overLimitText = nil
+            overLimitUntil = nil
+        }
+        if let until = failureUntil, now >= until {
+            failureText = nil
+            failureUntil = nil
+        }
+
+        let messageText: String?
+        let messageUntil: ContinuousClock.Instant?
+        if let text = overLimitText, let until = overLimitUntil {
+            messageText = text
+            messageUntil = until
+        } else {
+            messageText = failureText
+            messageUntil = failureUntil
+        }
+
+        var shownMessage: String?
+        let routed: FlowBarProjection
+        if baseProjection.state == .hidden,
+           let text = messageText,
+           let until = messageUntil,
+           now < until
+        {
+            shownMessage = text
+            routed = FlowBarProjection(
+                state: .message, sessionID: nil,
+                handsFreeCaption: false,
+                recoveryAvailable: baseProjection.recoveryAvailable
+            )
+            syncDeadlineTimer(until: until)
+        } else {
+            routed = baseProjection
+            syncDeadlineTimer(until: nil)
+        }
+
+        // E2 work beat: live model work overrides the state visual (same
+        // controller-latch pattern as the message above — the coordinator
+        // owns no pill state for this either).
+        let projection = FlowBarProjection(
+            state: routed.state, sessionID: routed.sessionID,
+            handsFreeCaption: routed.handsFreeCaption,
+            recoveryAvailable: routed.recoveryAvailable,
+            workText: workText
+        )
+
+        // State change invalidates any pending fade-hide AFTER computing the
+        // routed projection (including `.message` and `workText`), so transient
+        // messages cancel stale hides and restore content alpha. Hidden→hidden
+        // moves (completed→idle) let the scheduled melt ride.
+        let stateKey = "\(state)-\(projection.sessionID?.uuidString ?? "nil")-work:\(workText ?? "-")-msg:\(shownMessage ?? "-")"
         if stateKey != lastStateKey {
             lastStateKey = stateKey
-            if baseProjection.state != .hidden || workText != nil {
+            if projection.state != .hidden || projection.workText != nil {
                 if hideTask != nil, parkedForAdoption {
                     // Adoption: a new session landed inside the parked
                     // window (double-tap converts) — keep the live panel,
@@ -222,51 +409,6 @@ final class FlowBarController {
             }
         }
 
-        // Recovery routing BEFORE analyzer sync (v4 F3c): the modal must
-        // not wait behind an awaited stop (~35ms) on the same poll.
-        let recoveryOwned = syncRecovery(state: state, recovery: recovery)
-        syncFailureLatch(state: state, recoveryOwned: recoveryOwned)
-        // Message latch applies HERE (post-routing, same poll): the route
-        // above may have just armed the over-limit notice, or a bare failure
-        // may have armed its own short notice. Model keeps base truth
-        // (failed/hidden); only pixels take the override - same panel,
-        // same size, a re-render that never hide-shows. Over-limit wins when
-        // both are live, so its auto-copy confirmation is never masked.
-        let messageText: String?
-        let messageUntil: Date?
-        if let text = overLimitText, let until = overLimitUntil {
-            messageText = text
-            messageUntil = until
-        } else {
-            messageText = failureText
-            messageUntil = failureUntil
-        }
-        var shownMessage: String?
-        let routed: FlowBarProjection
-        if baseProjection.state == .hidden,
-           let text = messageText,
-           let until = messageUntil,
-           Date() < until
-        {
-            shownMessage = text
-            routed = FlowBarProjection(
-                state: .message, sessionID: nil,
-                handsFreeCaption: false,
-                recoveryAvailable: baseProjection.recoveryAvailable
-            )
-        } else {
-            routed = baseProjection
-        }
-        // E2 work beat: live model work overrides the state visual (same
-        // controller-latch pattern as the message above — the coordinator
-        // owns no pill state for this either). `workText` was read before
-        // the state-change gate so it participates in hide invalidation.
-        let projection = FlowBarProjection(
-            state: routed.state, sessionID: routed.sessionID,
-            handsFreeCaption: routed.handsFreeCaption,
-            recoveryAvailable: routed.recoveryAvailable,
-            workText: workText
-        )
         syncPermissionModal(state: state)
         await syncAnalyzer(state: state)
         syncPanel(state: state, projection: projection, messageText: shownMessage)
@@ -329,21 +471,19 @@ final class FlowBarController {
                loaderTailedSession != context.id
             {
                 loaderTailedSession = context.id
-                if panel == nil {
-                    panel = FlowBarPanel(width: VisualizerMath.panelWidth(for: .inserting))
-                }
-                panel?.setLiveValues(nil)
+                let panel = ensurePanel(width: VisualizerMath.panelWidth(for: .inserting))
+                panel.setLiveValues(nil)
                 // Full alpha, no fade: the tail holds readable pixels, so
                 // the scheduled close must not melt them (a faded tail is
                 // why the loader read as missing).
-                panel?.restoreContentAlpha()
-                panel?.show(
-                    sessionID: nil,
+                panel.restoreContentAlpha()
+                panel.show(
+                    sessionID: context.id,
                     displayID: Self.targetScreen(of: state),
                     width: VisualizerMath.panelWidth(for: .inserting),
                     position: FlowBarPosition.current()
                 )
-                panel?.render(
+                panel.render(
                     visual: .dotsSpinner,
                     level: 0,
                     time: CACurrentMediaTime(),
@@ -390,6 +530,11 @@ final class FlowBarController {
             // Work pill fits its text (measured, clamped) — the fixed
             // table never applies to work.
             width = VisualizerMath.workPillWidth(textWidth: VisualizerMath.measureWorkText(workText))
+        } else if projection.state == .message, let messageText {
+            // Dynamic width for message notices: `"Copied"` stays at
+            // `dictationWidth` (80.85 pt) while full failure notices expand
+            // cleanly up to 320 pt instead of truncating to ~8 characters.
+            width = VisualizerMath.messagePillWidth(textWidth: VisualizerMath.measureWorkText(messageText))
         } else {
             width = VisualizerMath.panelWidth(for: projection.state)
         }
@@ -399,32 +544,30 @@ final class FlowBarController {
             panel?.hide()
             return
         }
-        if panel == nil {
-            panel = FlowBarPanel(width: width)
-        }
+        let panel = ensurePanel(width: width)
         let position = FlowBarPosition.current()
-        let dragging = panel?.isDragging == true
+        let dragging = panel.isDragging
         // Shrink transitions play no fade-out (v4 F1b): the outgoing group
         // would overflow the already-narrower frame mid-fade.
-        let shrink = width < (panel?.currentWidth ?? .greatestFiniteMagnitude)
+        let shrink = width < panel.currentWidth
         if !dragging {
-            panel?.show(
+            panel.show(
                 sessionID: projection.sessionID,
                 displayID: Self.targetScreen(of: state),
                 width: width,
                 position: position
             )
         }
-        // One visual per poll: live work wins over the state visual (same
+        // One visual per refresh: live work wins over the state visual (same
         // single render path — never a state render followed by a work
         // render, which would flicker through two group fades).
         let visual: PillVisual? = projection.workText != nil ? .work : PillVisual.forState(projection.state)
         if let visual {
             // Vsync values loop owns bar transforms while bars are live;
-            // the poll keeps group switching + geometry only (liveValues).
+            // the controller keeps group switching + geometry only (liveValues).
             let live = visual == .bars && !model.motionFrozen
-            panel?.setLiveValues(live ? model : nil)
-            panel?.render(
+            panel.setLiveValues(live ? model : nil)
+            panel.render(
                 visual: visual,
                 level: model.sample.level,
                 time: CACurrentMediaTime(),
@@ -450,11 +593,11 @@ final class FlowBarController {
         if fade {
             panel?.fadeContentOut()
         }
-        hideTask = Task {
+        hideTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delay)
-            guard !Task.isCancelled, generation == self.hideGeneration else { return }
+            guard let self, !Task.isCancelled, generation == self.hideGeneration else { return }
             // A grab landed inside the window: skip this cycle and
-            // clear the task so the next poll reschedules — never stuck.
+            // clear the task so drag-end resumes hide scheduling — never stuck.
             if self.panel?.isDragging == true {
                 self.hideTask = nil
                 self.parkedForAdoption = false
@@ -467,7 +610,7 @@ final class FlowBarController {
     }
 
     /// Returns true when a recovery surface owns this failure — the pill
-    /// must stay quiet even on a deduped poll (the route is still live).
+    /// must stay quiet even on a deduped update (the route is still live).
     @discardableResult
     private func syncRecovery(state: DictationState, recovery: String?) -> Bool {
         let route = RecoveryRouter.route(
@@ -494,7 +637,8 @@ final class FlowBarController {
                 pasteboard.clearContents()
                 pasteboard.setString(text, forType: .string)
                 overLimitText = CatcherText.overLimitMessage
-                overLimitUntil = Date().addingTimeInterval(Self.overLimitDuration)
+                overLimitUntil = ContinuousClock.now + .seconds(Self.overLimitDuration)
+                Self.announce("Transcript copied to clipboard")
                 log.info("over-limit auto-copy words=\(CatcherText.wordCount(text))")
                 return true
             }
@@ -520,6 +664,7 @@ final class FlowBarController {
             // errors, the pill never confirms finished sessions).
             pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
+            Self.announce("Transcript copied to clipboard")
         }
         return true
     }
@@ -542,7 +687,20 @@ final class FlowBarController {
         guard key != lastFailureKey else { return }
         lastFailureKey = key
         failureText = text
-        failureUntil = Date().addingTimeInterval(Self.failureMessageDuration)
+        failureUntil = ContinuousClock.now + .seconds(Self.failureMessageDuration)
+        Self.announce(text)
+    }
+
+    private static func announce(_ message: String) {
+        guard let app = NSApp else { return }
+        NSAccessibility.post(
+            element: app,
+            notification: .announcementRequested,
+            userInfo: [
+                NSAccessibility.NotificationUserInfoKey.announcement: message,
+                NSAccessibility.NotificationUserInfoKey.priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
     }
 
     // MARK: - Permission modal (mic-denied pill-slot card)

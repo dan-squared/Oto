@@ -63,7 +63,6 @@ enum CleanSlate {
         savedStateDir: URL? = nil
     ) {
         defaults.removePersistentDomain(forName: domain)
-        defaults.synchronize()
         let dir: URL?
         if let supportDir {
             dir = supportDir
@@ -107,7 +106,7 @@ enum CleanSlate {
                 }
             }
         }
-        Self.log.info("clean slate: wiped domain \(bundleDomain, privacy: .public)")
+        Self.log.info("clean slate: wiped domain \(domain, privacy: .public)")
     }
 }
 

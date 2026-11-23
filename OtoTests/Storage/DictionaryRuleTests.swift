@@ -286,4 +286,60 @@ struct DictionaryRuleTests {
         #expect(!bad.rejected.isEmpty)
         #expect(store2.rules.count == 1)
     }
+
+    @Test func selectedAppsWithZeroAppsFailsValidation() async {
+        let (store, _) = makeStore()
+        if case .failure(let error) = await store.add(spoken: "hi", replacement: "HI", scope: .apps([])) {
+            #expect(error == .emptyAppScope)
+        } else {
+            Issue.record("expected emptyAppScope for .apps([])")
+        }
+        guard case .success(let saved) = await store.add(spoken: "hi", replacement: "HI", scope: .global) else {
+            Issue.record("setup add must succeed"); return
+        }
+        if case .failure(let error) = await store.update(saved, scope: .apps([])) {
+            #expect(error == .emptyAppScope)
+        } else {
+            Issue.record("expected emptyAppScope on update with .apps([])")
+        }
+    }
+
+    @Test func updateTrimsNewlinesAndClearAllPersistsEmpty() async {
+        let (store, persistence) = makeStore()
+        guard case .success(var saved) = await store.add(spoken: "hi", replacement: "HI", scope: .global) else {
+            Issue.record("setup add must succeed"); return
+        }
+        saved.replacement = "\nHello\n"
+        guard case .success(let updated) = await store.update(saved) else {
+            Issue.record("update must succeed"); return
+        }
+        #expect(updated.replacement == "Hello")
+        await store.clearAll()
+        #expect(store.rules.isEmpty)
+        let reloaded = DictionaryStore(persistence: persistence)
+        await reloaded.load()
+        #expect(reloaded.rules.isEmpty)
+    }
+
+    @Test func precedenceWarningDetectsOverlappingAppsOnly() async {
+        let (store, _) = makeStore()
+        guard case .success(let ruleA) = await store.add(
+            spoken: "oto", replacement: "Oto", bundleIDs: ["com.a.App", "com.b.App"]
+        ) else { Issue.record("add failed"); return }
+        guard case .success(let ruleOverlap) = await store.add(
+            spoken: "oto", replacement: "OTO", bundleIDs: ["com.b.App", "com.c.App"]
+        ) else { Issue.record("add failed"); return }
+        #expect(store.precedenceWarning(for: ruleA) != nil)
+        #expect(store.precedenceWarning(for: ruleOverlap) != nil)
+
+        // Disjoint app scopes do not clash with each other.
+        let (store2, _) = makeStore()
+        guard case .success(let first) = await store2.add(
+            spoken: "oto", replacement: "Oto", bundleIDs: ["com.a.App"]
+        ), case .success(let second) = await store2.add(
+            spoken: "oto", replacement: "OTO", bundleIDs: ["com.d.App"]
+        ) else { Issue.record("add failed"); return }
+        #expect(store2.precedenceWarning(for: first) == nil)
+        #expect(store2.precedenceWarning(for: second) == nil)
+    }
 }

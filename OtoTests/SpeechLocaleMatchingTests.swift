@@ -76,4 +76,32 @@ struct SpeechLocaleMatchingTests {
         )
         #expect(match == Locale(identifier: "en_US"))
     }
+
+    @Test func scriptAwareMatchingPrefersMatchingScriptBeforeCrossScriptFallback() {
+        let zhCandidates = [
+            Locale(identifier: "zh_CN"),
+            Locale(identifier: "zh_TW"),
+        ]
+        // zh-Hant must resolve to zh_TW (Traditional), not zh_CN (Simplified).
+        #expect(
+            SpeechLocaleMatching.bestMatch(
+                for: Locale(identifier: "zh-Hant"),
+                in: zhCandidates
+            ) == Locale(identifier: "zh_TW")
+        )
+        // zh-Hant-HK widens to same script zh_TW rather than zh_CN.
+        #expect(
+            SpeechLocaleMatching.bestMatch(
+                for: Locale(identifier: "zh-Hant-HK"),
+                in: zhCandidates
+            ) == Locale(identifier: "zh_TW")
+        )
+        // zh-Hans resolves to zh_CN (Simplified).
+        #expect(
+            SpeechLocaleMatching.bestMatch(
+                for: Locale(identifier: "zh-Hans"),
+                in: zhCandidates
+            ) == Locale(identifier: "zh_CN")
+        )
+    }
 }

@@ -16,7 +16,7 @@ import os
 /// when Auto Cleanup rewrote it; nil for verbatim entries and all pre-rework
 /// rows (old JSON decodes with nils — same data class as `finalText`, same
 /// bounds/caps/retention/deletion, never audio/partials/clipboard).
-struct HistoryEntry: Sendable, Hashable, Codable, Identifiable {
+nonisolated struct HistoryEntry: Sendable, Hashable, Codable, Identifiable {
     nonisolated static let maxTextLength = 5000
 
     let id: UUID
@@ -58,7 +58,7 @@ struct HistoryEntry: Sendable, Hashable, Codable, Identifiable {
 }
 
 extension HistoryEntry {
-    enum CodingKeys: String, CodingKey {
+    nonisolated enum CodingKeys: String, CodingKey {
         case id
         case finalText
         case createdAt
@@ -70,7 +70,7 @@ extension HistoryEntry {
 
 @Observable @MainActor
 final class HistoryStore {
-    static let filename = "history.v1.json"
+    nonisolated static let filename = "history.v1.json"
     nonisolated static let enabledKey = "app.Oto.historyEnabled"
     nonisolated static let maxEntries = 100
     nonisolated static let maxAgeDays = 30
@@ -82,6 +82,13 @@ final class HistoryStore {
     private let persistence: LocalPersistence
     private let defaults: UserDefaults
     private let log = Logger(subsystem: "app.Oto", category: "history")
+    private var loadTask: Task<Void, Never>?
+    private var hasLoaded = false
+    private var hasLocalMutations = false
+    private var clearedBeforeLoad = false
+    private var loadFailed = false
+    private var saveGeneration: UInt64 = 0
+    private var pendingSaveTask: Task<Void, Never>?
 
     init(persistence: LocalPersistence, defaults: UserDefaults = .standard) {
         self.persistence = persistence
@@ -97,8 +104,52 @@ final class HistoryStore {
     }
 
     func load() async {
-        entries = await VersionedStoreFile.load(HistoryEntry.self, filename: Self.filename, via: persistence)
-        trim()
+        if let existing = loadTask {
+            await existing.value
+            return
+        }
+        let task = Task {
+            let outcome = await VersionedStoreFile.loadOutcome(
+                HistoryEntry.self,
+                filename: Self.filename,
+                via: self.persistence
+            )
+            self.hasLoaded = true
+            switch outcome {
+            case .readError:
+                self.loadFailed = true
+                self.saveFailed = true
+                return
+            case .missing:
+                self.loadFailed = false
+                if !self.hasLocalMutations {
+                    self.entries = []
+                }
+            case .loaded(let diskEntries):
+                self.loadFailed = false
+                let needsPersist: Bool
+                if !self.hasLocalMutations {
+                    self.entries = diskEntries
+                    let beforeTrim = self.entries.count
+                    self.trim()
+                    needsPersist = self.entries.count != beforeTrim
+                } else if self.clearedBeforeLoad {
+                    needsPersist = false
+                } else {
+                    let localIDs = Set(self.entries.map(\.id))
+                    let merged = self.entries + diskEntries.filter { !localIDs.contains($0.id) }
+                    self.entries = merged
+                    self.trim()
+                    needsPersist = !diskEntries.isEmpty
+                }
+                if needsPersist {
+                    await self.persist()
+                }
+            }
+        }
+        loadTask = task
+        await task.value
+        loadTask = nil
     }
 
     /// Records one final transcript. No-op when history is off or text is
@@ -113,10 +164,16 @@ final class HistoryStore {
         bundleID: String?,
         at date: Date = Date()
     ) async {
+        if !hasLoaded {
+            await load()
+        } else {
+            await waitForLoadIfNeeded()
+        }
         guard enabled() else { return }
         let clean = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         let raw = rawText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        hasLocalMutations = true
         entries.append(HistoryEntry(
             finalText: String(clean.prefix(HistoryEntry.maxTextLength)),
             createdAt: date,
@@ -132,9 +189,11 @@ final class HistoryStore {
     /// then clears the raw (a second Undo is a no-op — the entry is now
     /// verbatim). No-op for verbatim entries and unknown IDs.
     func undoCleanup(id: UUID) async {
+        await waitForLoadIfNeeded()
         guard let index = entries.firstIndex(where: { $0.id == id }),
               let raw = entries[index].rawText, !raw.isEmpty
         else { return }
+        hasLocalMutations = true
         entries[index].finalText = raw
         entries[index].rawText = nil
         entries[index].wasCleaned = false
@@ -142,14 +201,22 @@ final class HistoryStore {
     }
 
     func remove(id: UUID) async {
+        await waitForLoadIfNeeded()
+        hasLocalMutations = true
         entries.removeAll { $0.id == id }
         await persist()
     }
 
-    /// Clear All names exactly what it deletes (history file content only).
+    /// Clear All removes every stored transcript AND any backup files for
+    /// history so user-requested deletion leaves nothing behind on disk.
     func clearAll() async {
+        await waitForLoadIfNeeded()
+        hasLocalMutations = true
+        clearedBeforeLoad = true
+        loadFailed = false
         entries = []
         await persist()
+        await persistence.purgeBackups(matchingPrefix: "history.v1")
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -157,6 +224,12 @@ final class HistoryStore {
     }
 
     // MARK: - Private
+
+    private func waitForLoadIfNeeded() async {
+        if let loadTask {
+            await loadTask.value
+        }
+    }
 
     private func trim() {
         let cutoff = Date().addingTimeInterval(TimeInterval(-Self.maxAgeDays * 24 * 3600))
@@ -170,12 +243,30 @@ final class HistoryStore {
     }
 
     private func persist() async {
-        do {
-            try await VersionedStoreFile.save(entries, filename: Self.filename, via: persistence)
-            saveFailed = false
-        } catch {
+        if loadFailed {
             saveFailed = true
-            log.error("history save failed")
+            return
         }
+        saveGeneration &+= 1
+        let generation = saveGeneration
+        let snapshot = entries
+        let previous = pendingSaveTask
+        let task = Task {
+            await previous?.value
+            guard generation == self.saveGeneration else { return }
+            do {
+                try await VersionedStoreFile.save(snapshot, filename: Self.filename, via: self.persistence)
+                if generation == self.saveGeneration {
+                    self.saveFailed = false
+                }
+            } catch {
+                if generation == self.saveGeneration {
+                    self.saveFailed = true
+                }
+                self.log.error("history save failed")
+            }
+        }
+        pendingSaveTask = task
+        await task.value
     }
 }

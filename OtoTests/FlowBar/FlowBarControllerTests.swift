@@ -181,12 +181,45 @@ struct FlowBarControllerTests {
         // The latch drives pixels, not `model.projection` (which stays the
         // honest terminal state). Visibility is the observable contract.
         #expect(sut.controller.isPillVisible)
+        #expect(sut.controller.isContentFull)
+        // UI-02: failure pill expands dynamically past dictationWidth so the
+        // full message is readable rather than truncating to ~8 characters.
+        #expect(sut.controller.currentPillWidth > VisualizerMath.dictationWidth)
 
         try? await Task.sleep(for: .milliseconds(3_200))
         await sut.controller.pollOnce()
         try? await Task.sleep(for: .milliseconds(250))
         await sut.controller.pollOnce()
         #expect(!sut.controller.isPillVisible)
+    }
+
+    @Test func failureMessageCancelsPendingHideAndRestoresAlpha() async throws {
+        // UI-06: when a session transitions from a parked/fading hidden state
+        // straight into a transient `.message` pill, the message must cancel
+        // the pending hideTask and restore full content opacity.
+        let sut = makeSUT(finishError: SpeechSessionError.engineFailure("test"))
+        let id1 = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+        #expect(sut.controller.isPillVisible)
+
+        // Cancel arms a parked hide (fading content out).
+        await sut.coordinator.cancel(id1!)
+        await waitFor(sut.coordinator) { if case .cancelled = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+
+        // Immediately start & fail a second session before the parked hide expires.
+        let id2 = await sut.coordinator.beginHold()
+        await waitFor(sut.coordinator) { if case .recording = $0 { true } else { false } }
+        await sut.coordinator.finish(id2!)
+        await waitFor(sut.coordinator) { if case .failed = $0 { true } else { false } }
+        await sut.controller.pollOnce()
+
+        // Past the 400ms adoption window: failure message must still be visible & opaque.
+        try? await Task.sleep(for: .milliseconds(500))
+        #expect(sut.controller.isPillVisible)
+        #expect(sut.controller.isContentFull)
+        await sut.controller.stop()
     }
 
     @Test func micDeniedFailureNeverUsesPill() async throws {

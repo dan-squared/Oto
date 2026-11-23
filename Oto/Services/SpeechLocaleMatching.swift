@@ -34,16 +34,37 @@ enum SpeechLocaleMatching: Sendable {
         }
 
         guard let language = locale.language.languageCode?.identifier else { return nil }
+        let script = locale.language.script?.identifier
 
         // `locale.language.region`, not `locale.region`: the latter reports
         // the regional override rather than the region of the language.
-        if let region = locale.language.region?.identifier,
-           let regional = ordered.first(where: {
+        if let region = locale.language.region?.identifier {
+            if let script,
+               let scriptRegional = ordered.first(where: {
+                   $0.language.languageCode?.identifier == language
+                       && $0.language.script?.identifier == script
+                       && $0.language.region?.identifier == region
+               })
+            {
+                return scriptRegional
+            }
+            if let regional = ordered.first(where: {
+                $0.language.languageCode?.identifier == language
+                    && $0.language.region?.identifier == region
+            }) {
+                return regional
+            }
+        }
+
+        // Respect script before falling back across scripts (e.g., `zh-Hant`
+        // should match `zh-Hant-TW` / `zh_TW` rather than `zh-Hans-CN` / `zh_CN`).
+        if let script,
+           let scriptMatch = ordered.first(where: {
                $0.language.languageCode?.identifier == language
-                   && $0.language.region?.identifier == region
+                   && $0.language.script?.identifier == script
            })
         {
-            return regional
+            return scriptMatch
         }
 
         return ordered.first { $0.language.languageCode?.identifier == language }

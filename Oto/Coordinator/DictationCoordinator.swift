@@ -20,7 +20,9 @@ import os
 ///   after every suspension);
 /// - release during preparation means "finish when ready", never cancel.
 actor DictationCoordinator {
-    private(set) var state: DictationState = .idle
+    private(set) var state: DictationState = .idle {
+        didSet { notifyObservers() }
+    }
 
     /// Transcript preserved when insertion fails or the target is gone,
     /// plus the app it was dictated for (Retry confirms against the
@@ -29,7 +31,9 @@ actor DictationCoordinator {
     /// into a confirm dialog naming the wrong app. Cleared when a new
     /// session begins. The production menu copies it until the Flow Bar
     /// (Phase 6) surfaces it.
-    private(set) var recovery: KeptRecovery?
+    private(set) var recovery: KeptRecovery? {
+        didSet { notifyObservers() }
+    }
     /// Pass-through reads (tests + menu): derived, so they cannot drift.
     var recoveryTranscript: Transcript? { recovery?.transcript }
     var recoveryExpectedBundleID: String? { recovery?.expectedBundleID }
@@ -120,9 +124,14 @@ actor DictationCoordinator {
     private let log = Logger(subsystem: "app.Oto", category: "coordinator")
 
     /// Live work feed for the pill (E1+E2): non-nil while Auto Cleanup
-    /// (`Cleaning up`) runs. The controller polls this next to its existing
-    /// `recoveryText()` read — dictation `state` never carries it.
-    private(set) var currentWork: WorkLabel?
+    /// (`Cleaning up`) runs. The controller observes this via `stateChanges()`
+    /// next to its `recoveryText()` read — dictation `state` never carries it.
+    private(set) var currentWork: WorkLabel? {
+        didSet { notifyObservers() }
+    }
+
+    /// Multi-subscriber change notifications for event-driven UI (Flow Bar, Menu Bar).
+    private var stateObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
 
     init(
         audio: any AudioCaptureServing,
@@ -153,9 +162,46 @@ actor DictationCoordinator {
     }
 
     /// Live rule refresh from the dictionary store (Writing pane saves).
-    /// Value copy: the background finalize path keeps using plain arrays.
-    func setDictionaryRules(_ rules: [DictionaryRule]) {
+    /// Value copy: the background finalize path keeps using plain arrays,
+    /// and enabled replacement terms are forwarded to speech recognition as
+    /// contextual strings.
+    func setDictionaryRules(_ rules: [DictionaryRule]) async {
         pipeline = TranscriptPipeline(dictionaryRules: rules)
+        let terms = Self.contextualStrings(from: rules)
+        await speech.setContextualStrings(terms)
+    }
+
+    /// Event-driven change stream yielding whenever `state`, `currentWork`,
+    /// or `recovery` changes. Supports multiple concurrent subscribers.
+    func stateChanges() -> AsyncStream<Void> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            stateObservers[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeStateObserver(id) }
+            }
+        }
+    }
+
+    private func removeStateObserver(_ id: UUID) {
+        stateObservers.removeValue(forKey: id)
+    }
+
+    private func notifyObservers() {
+        for continuation in stateObservers.values {
+            continuation.yield(())
+        }
+    }
+
+    private static func contextualStrings(from rules: [DictionaryRule]) -> [String] {
+        var seen = Set<String>()
+        var terms: [String] = []
+        for rule in rules where rule.isEnabled {
+            let trimmed = rule.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+            terms.append(trimmed)
+        }
+        return terms
     }
 
     /// Current pill work feed (see `currentWork`). Nil when idle.
@@ -306,6 +352,49 @@ actor DictationCoordinator {
         }
     }
 
+    /// Short, user-facing menu bar error status (<= ~26 chars), or `nil` when
+    /// the last session did not fail. Never dumps verbose internal details or
+    /// multi-sentence recovery explanations into the macOS menu bar dropdown.
+    func menuErrorSummary() -> String? {
+        guard case .failed(_, let failure) = state else { return nil }
+        return Self.conciseMenuError(for: failure, hasRecovery: recoveryTranscript != nil)
+    }
+
+    nonisolated static func conciseMenuError(
+        for failure: DictationFailure,
+        hasRecovery: Bool
+    ) -> String {
+        switch failure {
+        case .microphoneDenied:
+            return "Microphone access needed"
+        case .noAudioCaptured:
+            return "No audio detected"
+        case .audioCapture:
+            return "Microphone error"
+        case .speechPreparation:
+            return "Speech unavailable"
+        case .targetGone:
+            return hasRecovery ? "App closed · text kept" : "Target app closed"
+        case .noTextField:
+            return hasRecovery ? "No text field · kept" : "No text field"
+        case .insertionFailed(let detail):
+            let lower = detail.lowercased()
+            if lower.contains("accessibility") {
+                return "Accessibility needed"
+            }
+            if lower.contains("password") || lower.contains("secure") {
+                return "Skipped password field"
+            }
+            if lower.contains("posting") || lower.contains("input monitoring") {
+                return "Input access needed"
+            }
+            if lower.contains("focus") || lower.contains("in front") {
+                return hasRecovery ? "App unfocused · kept" : "App lost focus"
+            }
+            return hasRecovery ? "Paste failed · kept" : "Paste failed"
+        }
+    }
+
     // MARK: - Private
 
     private func begin(interaction: InteractionMode) -> UUID? {
@@ -424,6 +513,9 @@ actor DictationCoordinator {
 
         // P1: preparation just completed — close the press→ready span here,
         // whichever branch follows (recording, or release-during-prepare).
+        // Capture pressReceivedAt before closePressToReady() clears it so the
+        // start-tone lead below counts elapsed preparation time.
+        let pressedAt = pressReceivedAt
         closePressToReady()
 
         if finishRequested {
@@ -438,22 +530,32 @@ actor DictationCoordinator {
         // The start tone must actually be heard. Ducking is instant and
         // absolute (virtual main volume to 0), and press→ready settles around
         // 110–140 ms while `begin_record.caf` runs 454 ms — ducking here would
-        // cut the tone to a click. Waiting it out costs nothing worth having:
-        // the person is still waiting for the tone before speaking, so the
-        // media that keeps playing for those milliseconds cannot land in a
-        // transcript. Zero when no tone is wired (tests) or the asset is
-        // missing, and skipped when the toggle is off — nothing to protect.
+        // cut the tone to a click. Sleep only the portion of the tone that
+        // remains since the press arrived, rather than adding a full extra
+        // `startTone` on top of preparation. Zero when no tone is wired
+        // (tests) or the asset is missing, and skipped when the toggle is off.
         let toneLead = FeedbackSoundSettings.isEnabled() ? startTone : .zero
         if toneLead > .zero {
-            try? await Task.sleep(for: toneLead)
-            // Finished or cancelled inside the tone: no duck, nothing muted.
-            guard currentSessionID == sessionID else { return }
+            let remaining: Duration
+            if let pressedAt {
+                let elapsed = pressedAt.duration(to: .now)
+                remaining = elapsed < toneLead ? (toneLead - elapsed) : .zero
+            } else {
+                remaining = toneLead
+            }
+            if remaining > .zero {
+                try? await Task.sleep(for: remaining)
+            }
         }
+        // Finished or cancelled inside the tone: check BOTH identity and
+        // `.recording` state (`finish` moves to `.finalizing` while keeping
+        // `currentSessionID`), so a late wake-up can never mute during finish.
+        guard currentSessionID == sessionID, case .recording = state else { return }
         await mediaDuck?.duck(sessionID: sessionID)
-        // Suspension crossed: a cancel may have won mid-duck. Re-check
-        // identity — a late duck with no owner restores immediately, so
-        // no path can leave the user muted.
-        guard currentSessionID == sessionID else {
+        // Suspension crossed: a finish or cancel may have won mid-duck.
+        // Re-check both identity and `.recording` — a late duck with no live
+        // recording restores immediately, so no path can leave the user muted.
+        guard currentSessionID == sessionID, case .recording = state else {
             await restoreMedia(sessionID: sessionID)
             return
         }
@@ -543,11 +645,20 @@ actor DictationCoordinator {
         // buffer is captured, never on a timer mid-session.
         if await shouldSkipTranscription(context: context) {
             guard currentSessionID == sessionID else { return }
-            // Terminal FIRST: a cancel landing inside restore must not be
-            // overwritten afterward (cancel-wins). Restore is idempotent
-            // either way, so ordering it last is always safe.
+            // Terminal FIRST: a cancel landing inside teardown/restore must
+            // not be overwritten afterward (cancel-wins). Chain speech.cancel()
+            // through teardownTask so SpeechAnalyzer, resultTask, and relay.sink
+            // are released cleanly and never collide with a next session's prepare.
             currentSessionID = nil
             state = .completed(context)
+            let prior = teardownTask
+            let current = Task { [weak self] in
+                await prior?.value
+                guard let self else { return }
+                await self.speech.cancel()
+            }
+            teardownTask = current
+            await current.value
             await restoreMedia(sessionID: sessionID)
             log.info("completed (silent, loader skipped) \(sessionID.uuidString.prefix(8), privacy: .public)")
             log.info("PERF pressToReady=\(self.pressToReadyMs ?? -1, privacy: .public)ms outcome=silent-skip")
@@ -637,7 +748,7 @@ actor DictationCoordinator {
             // Terminal first (cancel-wins over in-flight restore).
             currentSessionID = nil
             recovery = KeptRecovery(
-                transcript: Transcript(text: clean),
+                transcript: Transcript(text: final),
                 expectedBundleID: context.target.bundleIdentifier
             )
             state = .failed(context, .targetGone)

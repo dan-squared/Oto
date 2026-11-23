@@ -36,6 +36,10 @@ struct SettingsUIStateTests {
         // Typed state in, identical display out — typo'd states are now
         // unrepresentable instead of silent.
         let state = makeState()
+        // Unread (nil) is honest pending: grey tone, no denied guidance.
+        #expect(state.micPermission == nil)
+        #expect(state.micTone == .idle)
+        #expect(state.micDeniedGuidance == nil)
         state.micPermission = .granted
         #expect(state.micText == "Allowed")
         #expect(state.micAllowed == true)

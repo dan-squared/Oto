@@ -84,6 +84,8 @@ struct DualShortcutConfigurationTests {
         #expect(migrated.handsFreeEnabled == false)
         // Old key left in place, still decodable as the old type.
         #expect(ShortcutConfiguration.load(from: defaults) == old)
+        // Migration persists immediately so it does not re-run on future launches.
+        #expect(defaults.data(forKey: DualShortcutConfiguration.defaultsKey) != nil)
     }
 
     @Test func handsFreeOldConfigLandsInHandsFreeSlot() {
@@ -121,13 +123,16 @@ struct DualShortcutConfigurationTests {
         #expect(!a.conflictsWith(.functionKey(codes: [Int64(kVK_F6)])))
     }
 
-    @Test func comboVersusComboConservativelyConflictsOnSameKey() {
-        let mods = UInt32(CarbonModifiers.command)
-        let otherMods = UInt32(CarbonModifiers.option)
-        let a = ShortcutTrigger.Kind.combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_D))
-        // Same key even with disjoint modifiers: blocked by design.
-        #expect(a.conflictsWith(.combo(modifiers: otherMods, keyCode: UInt32(kVK_ANSI_D))))
-        #expect(!a.conflictsWith(.combo(modifiers: mods, keyCode: UInt32(kVK_ANSI_G))))
+    @Test func comboVersusComboConflictsOnlyOnSameModifiersAndKey() {
+        let ctrl = UInt32(CarbonModifiers.control)
+        let opt = UInt32(CarbonModifiers.option)
+        let ctrlSpace = ShortcutTrigger.Kind.combo(modifiers: ctrl, keyCode: UInt32(kVK_Space))
+        // Exact same modifiers + key conflicts.
+        #expect(ctrlSpace.conflictsWith(.combo(modifiers: ctrl, keyCode: UInt32(kVK_Space))))
+        // Different modifiers + same key (e.g. ⌃Space vs ⌥Space) is allowed.
+        #expect(!ctrlSpace.conflictsWith(.combo(modifiers: opt, keyCode: UInt32(kVK_Space))))
+        // Same modifiers + different key is allowed.
+        #expect(!ctrlSpace.conflictsWith(.combo(modifiers: ctrl, keyCode: UInt32(kVK_ANSI_G))))
     }
 
     @Test func holdVersusComboConflictsOnSharedFamilyEitherOrder() {
@@ -199,16 +204,20 @@ struct DualShortcutConfigurationTests {
     }
 
     @Test func factoryDefaultsSatisfyPolicy() {
-        // The out-of-box setup must obey its own rule: right-Cmd hold +
-        // unassigned hands-free + Opt+1/2/3 transforms, zero conflicts.
+        // The out-of-box setup must obey its own rule: Right Option hold +
+        // unassigned hands-free + ⌃⇧1–4 transforms, zero conflicts and zero
+        // global ⌘1–⌘4 tab-switching hijack.
         let config = DualShortcutConfiguration.default()
         let transforms = TransformShortcuts.default()
         #expect(ShortcutAudit.violations(
             hold: config.hold.kind, handsFree: config.handsFree.kind,
             transforms: transforms
         ).isEmpty)
-        #expect(transforms.polish == .combo(
-            modifiers: UInt32(CarbonModifiers.command), keyCode: UInt32(kVK_ANSI_1)))
+        let expectedMods = UInt32(CarbonModifiers.control | CarbonModifiers.shift)
+        #expect(transforms.polish == .combo(modifiers: expectedMods, keyCode: UInt32(kVK_ANSI_1)))
+        #expect(transforms.concise == .combo(modifiers: expectedMods, keyCode: UInt32(kVK_ANSI_2)))
+        #expect(transforms.professional == .combo(modifiers: expectedMods, keyCode: UInt32(kVK_ANSI_3)))
+        #expect(transforms.custom == .combo(modifiers: expectedMods, keyCode: UInt32(kVK_ANSI_4)))
     }
 
     @Test func auditNamesGrandfatheredViolations() {

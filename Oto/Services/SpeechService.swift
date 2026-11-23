@@ -14,6 +14,11 @@ protocol SpeechServing: Sendable {
     func prepare() async throws
     func finish() async throws -> String
     func cancel() async
+    func setContextualStrings(_ terms: [String]) async
+}
+
+extension SpeechServing {
+    func setContextualStrings(_ terms: [String]) async {}
 }
 
 /// Scriptable fake for Phase 1 coordinator tests. The preparation gate lets
@@ -33,6 +38,7 @@ actor FakeSpeechService: SpeechServing {
     private(set) var prepareCalls = 0
     private(set) var finishCalls = 0
     private(set) var cancelCalls = 0
+    private(set) var contextualStringsHistory: [[String]] = []
 
     /// When false, `prepare()` suspends until `openPrepareGate()`.
     private var prepareGateOpen: Bool
@@ -84,6 +90,10 @@ actor FakeSpeechService: SpeechServing {
 
     func cancel() async {
         cancelCalls += 1
+    }
+
+    func setContextualStrings(_ terms: [String]) async {
+        contextualStringsHistory.append(terms)
     }
 
     func closePrepareGate() {

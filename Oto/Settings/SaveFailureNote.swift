@@ -17,6 +17,7 @@ struct SaveFailureNote: View {
         .font(.footnote)
         .foregroundStyle(.red)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .accessibilityIdentifier("saveFailure")
     }

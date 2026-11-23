@@ -62,20 +62,39 @@ extension EnvironmentValues {
     }
 }
 
+/// Crisp tactile spring button style for the onboarding continue pill.
+private struct OnboardingPillButtonStyle: ButtonStyle {
+    var reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !self.reduceMotion ? 0.97 : 1.0)
+            .animation(
+                self.reduceMotion ? nil : .spring(duration: 0.20, bounce: 0.0),
+                value: configuration.isPressed
+            )
+    }
+}
+
 /// The pill itself, or with `placeholder` only the room it takes.
 struct OnboardingContinuePill: View {
     let spec: OnboardingContinueButton
     var placeholder = false
+
+    /// Smooth, critically damped spring for capsule width/position morphs
+    /// when the title changes (e.g. "Continue" → "Enable Accessibility" →
+    /// "Allow Microphone" → "Finish").
+    static let morphSpring: Animation = .spring(duration: 0.34, bounce: 0.0)
 
     var body: some View {
         if self.placeholder {
             self.label.hidden().accessibilityHidden(true)
         } else {
             self.button
-                .id(self.spec.title)
         }
     }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
     @State private var hovering = false
 
@@ -104,8 +123,9 @@ struct OnboardingContinuePill: View {
                 }
                 .shadow(color: .black.opacity(0.38), radius: 12, y: 6)
                 .shadow(color: .black.opacity(0.22), radius: 1, y: 1)
+                .animation(self.reduceMotion ? nil : Self.morphSpring, value: self.spec.title)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OnboardingPillButtonStyle(reduceMotion: self.reduceMotion))
         .focused(self.$focused)
         .overlay {
             if self.focused {
@@ -113,9 +133,10 @@ struct OnboardingContinuePill: View {
             }
         }
         .opacity(self.spec.isEnabled ? 1 : 0.6)
-        .allowsHitTesting(self.spec.isEnabled)
+        .disabled(!self.spec.isEnabled)
         .onHover { self.hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: self.lit)
+        .animation(self.reduceMotion ? nil : Self.morphSpring, value: self.spec.title)
         .keyboardShortcut(.defaultAction)
         .accessibilityLabel(self.spec.title)
         .accessibilityHint("Press Enter to continue.")
@@ -139,16 +160,17 @@ struct OnboardingContinuePill: View {
     }
 }
 
-/// The pill's label. A change of wording fades where it stands rather than
-/// travelling up or down.
+/// The pill's label. A change of wording crossfades cleanly inside the
+/// spring-morphing capsule without jumping or clipping.
 struct OnboardingMorphLabel: View {
     let text: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(_ text: String) { self.text = text }
 
     var body: some View {
         Text(self.text)
             .contentTransition(.opacity)
-            .animation(.easeInOut(duration: 0.18), value: self.text)
+            .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.20), value: self.text)
     }
 }

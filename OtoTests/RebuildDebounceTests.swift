@@ -155,4 +155,56 @@ struct RebuildDebounceTests {
         capture.noteBufferPeak(silent)
         #expect(await capture.sessionPeakAmplitude() == 0)
     }
+
+    @Test func defaultQuietWindowIs300msAndSupportsContinuousClock() {
+        let defaultPolicy = RebuildDebouncePolicy()
+        #expect(defaultPolicy.quietNanoseconds == 300_000_000)
+        let t0 = ContinuousClock.now
+        #expect(defaultPolicy.shouldRebuildNow(now: t0, lastRebuild: nil))
+        #expect(!defaultPolicy.shouldRebuildNow(now: t0 + .milliseconds(100), lastRebuild: t0))
+        #expect(defaultPolicy.shouldRebuildNow(now: t0 + .milliseconds(350), lastRebuild: t0))
+    }
+
+    @Test func interleavedStereoFloatNotesPeakWithoutOOB() async {
+        // AUD-01: interleaved multi-channel buffers store all channels in channels[0].
+        // Put signal on channel 1 (right) only to verify both safe indexing and coverage.
+        let frames = 1024
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 48_000,
+            channels: 2, interleaved: true
+        ), let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)
+        ), let samples = buffer.floatChannelData?[0] else {
+            Issue.record("could not build interleaved stereo buffer")
+            return
+        }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        for f in 0..<frames {
+            samples[f * 2] = 0
+            samples[f * 2 + 1] = 0.4
+        }
+        let capture = await MainActor.run { AppleAudioCapture() }
+        capture.noteBufferPeak(buffer)
+        #expect(abs(await capture.sessionPeakAmplitude() - 0.4) < 0.001)
+    }
+
+    @Test func int32ToneNotesNormalizedPeak() async {
+        // AUD-01: Int32 audio interfaces must score normalized peak, never 0.
+        let frames = 1024
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt32, sampleRate: 48_000,
+            channels: 1, interleaved: false
+        ), let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)
+        ), let channel = buffer.int32ChannelData?[0] else {
+            Issue.record("could not build int32 buffer")
+            return
+        }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let halfScale = Int32(1 << 30) // 0.5 of 2^31
+        for f in 0..<frames { channel[f] = halfScale }
+        let capture = await MainActor.run { AppleAudioCapture() }
+        capture.noteBufferPeak(buffer)
+        #expect(abs(await capture.sessionPeakAmplitude() - 0.5) < 0.001)
+    }
 }

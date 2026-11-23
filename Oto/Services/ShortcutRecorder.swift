@@ -196,13 +196,13 @@ enum ShortcutRecorderRules: Sendable {
             return .cleared
         }
 
-        // Bare fn as keyDown (code 63, external keyboards): no
+        // Bare fn / Globe as keyDown (code 63 or 179, external keyboards): no
         // flagsChanged ever fires on these devices, so the flags path
         // can't arm. Stage exactly like a flags capture. Bare only —
         // with other modifiers held, fall through to the combo path
         // unchanged below.
-        if keyCode == UInt16(kVK_Function), relevant.isEmpty {
-            return .captureModifier(code: keyCode)
+        if (keyCode == UInt16(kVK_Function) || keyCode == UInt16(HIDEventMonitor.globeKeyCode)), relevant.isEmpty {
+            return .captureModifier(code: UInt16(kVK_Function))
         }
 
         // A combo needs a real modifier (shift alone never works) or a
@@ -244,10 +244,21 @@ enum ShortcutRecorderRules: Sendable {
     /// renamed when the app went unsandboxed; the reservation is a
     /// system property, not a sandbox one.)
     nonisolated static func isReservedSystemCombo(modifiers: Int, keyCode: UInt16) -> Bool {
-        // Spotlight (⌘Space), Siri/dictation system keys, and lock-screen
-        // class combos never reach a sandboxed app.
-        if modifiers == CarbonModifiers.command, keyCode == UInt16(kVK_Space) {
-            return true
+        // Spotlight (⌘Space), system window/app controls (⌘Q/⌘W/⌘Tab), and
+        // Oto's own clipboard/undo keys (⌘V/⌘C/⌘Z) must never be hijacked.
+        if modifiers == CarbonModifiers.command {
+            switch keyCode {
+            case UInt16(kVK_Space),
+                 UInt16(kVK_ANSI_V),
+                 UInt16(kVK_ANSI_C),
+                 UInt16(kVK_ANSI_Z),
+                 UInt16(kVK_ANSI_Q),
+                 UInt16(kVK_ANSI_W),
+                 UInt16(kVK_Tab):
+                return true
+            default:
+                break
+            }
         }
         return false
     }
@@ -299,7 +310,7 @@ enum SystemFnUsage: Equatable, Sendable {
         case .inputSource:
             return "Quick fn taps switch input source — double-tap needs a key macOS doesn't own."
         case .none:
-            return "fn is free on this Mac — but double-tap still needs a non-fn hold key."
+            return "fn is free on this Mac — instant hold and double-tap both work."
         case .unknown:
             return "Double-tap needs a key macOS doesn't own — any hold key but fn works."
         }

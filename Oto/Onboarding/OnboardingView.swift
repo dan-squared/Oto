@@ -14,7 +14,7 @@ import AppKit
 import SwiftUI
 
 struct OnboardingView: View {
-    @ObservedObject var flow: OnboardingFlow
+    let flow: OnboardingFlow
 
     var body: some View {
         GeometryReader { proxy in
@@ -41,6 +41,14 @@ struct OnboardingView: View {
                         let place = proxy[slot.bounds]
                         OnboardingContinuePill(spec: slot.spec)
                             .position(x: place.midX, y: place.midY)
+                            .animation(
+                                self.reduceMotion ? nil : OnboardingContinuePill.morphSpring,
+                                value: slot.spec.title
+                            )
+                            .animation(
+                                self.reduceMotion ? nil : OnboardingStage.stepAnimation,
+                                value: self.stage.step
+                            )
                     }
                 }
             }
@@ -52,10 +60,10 @@ struct OnboardingView: View {
         // drawn a single frame; the grants are asked there too.
         .task {
             self.flow.load()
-            self.prepareLastChapter()
+            self.flow.scheduleLastChapterPreparation()
         }
         .onChange(of: self.stage.step) { _, _ in
-            self.prepareLastChapter()
+            self.flow.scheduleLastChapterPreparation()
         }
         .onDisappear { self.flow.disarm() }
         // A grant made in System Settings is only visible once the person
@@ -74,18 +82,7 @@ struct OnboardingView: View {
     // MARK: Private
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject private var stage = OnboardingStage.shared
-
-    /// The last chapter is the point dictation becomes real, so the system's
-    /// Accessibility and microphone asks belong to it. Called after the
-    /// chapter's own spring has finished, never during the turn.
-    private func prepareLastChapter() {
-        guard self.flow.isLastChapter else { return }
-        Task {
-            await OnboardingStage.arrival()
-            self.flow.prepareDictation()
-        }
-    }
+    private var stage: OnboardingStage { .shared }
 
     /// Reduce Motion keeps a pill in each place: they change by fading, and
     /// nothing crosses the window.

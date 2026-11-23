@@ -15,7 +15,7 @@ import Foundation
 import os
 
 enum PerfTrace: Sendable {
-    nonisolated static let log = OSLog(subsystem: "app.Oto", category: "perf")
+    nonisolated static let signposter = OSSignposter(subsystem: "app.Oto", category: "perf")
 
     /// Fixed vocabulary — Instruments filters on these names. Renaming a case
     /// invalidates every recorded trace; treat the raw values as a contract.
@@ -40,15 +40,17 @@ enum PerfTrace: Sendable {
     }
 
     nonisolated static func begin(_ phase: Phase) -> OSSignpostID {
-        let id = OSSignpostID(log: log)
-        os_signpost(.begin, log: log, name: "Dictation", signpostID: id,
-                    "%{public}s", phase.rawValue)
+        let id = signposter.makeSignpostID()
+        _ = signposter.beginInterval("Dictation", id: id, "\(phase.rawValue, privacy: .public)")
         return id
     }
 
     nonisolated static func end(_ phase: Phase, _ id: OSSignpostID) {
-        os_signpost(.end, log: log, name: "Dictation", signpostID: id,
-                    "%{public}s", phase.rawValue)
+        signposter.endInterval(
+            "Dictation",
+            OSSignpostIntervalState.beginState(id: id),
+            "\(phase.rawValue, privacy: .public)"
+        )
     }
 
     /// Integer milliseconds for the release log line. Truncates, never

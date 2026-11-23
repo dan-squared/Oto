@@ -19,6 +19,26 @@
 import AppKit
 import QuartzCore
 
+/// Weak trampoline for `CADisplayLink` so the display link never retains
+/// `FlowBarPanel` (breaks the strong retain cycle and auto-invalidates if the
+/// panel deallocates while a link is still scheduled).
+@MainActor
+private final class WeakDisplayLinkTarget: NSObject {
+    weak var owner: FlowBarPanel?
+
+    init(owner: FlowBarPanel) {
+        self.owner = owner
+    }
+
+    @objc func tick(_ link: CADisplayLink) {
+        guard let owner else {
+            link.invalidate()
+            return
+        }
+        owner.pushLiveValues(link)
+    }
+}
+
 @MainActor
 final class FlowBarPanel {
     private let panel: NSPanel
@@ -42,10 +62,15 @@ final class FlowBarPanel {
     /// Drag-and-snap state (Phase 8). While true the controller renders
     /// content but never moves geometry — the finger owns the frame.
     private(set) var isDragging = false
+    /// Fires when a drag finishes so the event-driven controller can resume
+    /// any deferred hide without waiting for a poll timer.
+    var onDragEnded: (() -> Void)?
     private var dragStartSlot = FlowBarPosition.bottom
+    private var dragTargetScreen: NSScreen?
     private var lastTickedSlot: FlowBarPosition?
     private var tickGate = SnapTickGate()
     private var landTask: Task<Void, Never>?
+    private var screenObserver: NSObjectProtocol?
     private var topGhost: NSPanel?
     private var bottomGhost: NSPanel?
     private var topGhostView: SnapIndicatorView?
@@ -147,6 +172,7 @@ final class FlowBarPanel {
     init(width: CGFloat) {
         let windowWidth = width + 2 * PillContentView.glassMargin
         content = PillContentView(frame: NSRect(x: 0, y: 0, width: windowWidth, height: VisualizerMath.pillHeight))
+        content.autoresizingMask = [.width, .height]
         panel = Self.makePanel(
             contentView: content,
             size: NSSize(width: windowWidth, height: VisualizerMath.pillHeight),
@@ -154,6 +180,47 @@ final class FlowBarPanel {
         )
         currentWidth = width
         content.dragDelegate = self
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleScreenParametersChanged()
+            }
+        }
+    }
+
+    isolated deinit {
+        valuesLink?.invalidate()
+        valuesLink = nil
+        landTask?.cancel()
+        landTask = nil
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+        }
+    }
+
+    /// Re-validates `pinnedScreen` when monitors are plugged/unplugged or
+    /// resolution/dock/notch geometry changes, re-clamping the visible panel.
+    private func handleScreenParametersChanged() {
+        guard let existing = pinnedScreen else { return }
+        let existingID = Self.displayID(of: existing)
+        let resolved: NSScreen?
+        if let existingID,
+           let stillConnected = NSScreen.screens.first(where: { Self.displayID(of: $0) == existingID })
+        {
+            resolved = stillConnected
+        } else {
+            resolved = Self.resolveScreen(displayID: nil)?.0
+        }
+        pinnedScreen = resolved
+        guard panel.isVisible, !isDragging, let resolved, let slot = currentSlot else { return }
+        setFrame(for: currentWidth, on: resolved, position: slot, animated: false)
+    }
+
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 
     /// Show (or re-pin) for a session. Same session → resize in place.
@@ -232,12 +299,13 @@ final class FlowBarPanel {
         }
         liveSource = source
         guard valuesLink == nil else { return }
-        let link = content.displayLink(target: self, selector: #selector(pushLiveValues(_:)))
+        let target = WeakDisplayLinkTarget(owner: self)
+        let link = content.displayLink(target: target, selector: #selector(WeakDisplayLinkTarget.tick(_:)))
         link.add(to: .main, forMode: .common)
         valuesLink = link
     }
 
-    @objc private func pushLiveValues(_ link: CADisplayLink) {
+    fileprivate func pushLiveValues(_ link: CADisplayLink) {
         guard let source = liveSource else { return }
         // Frame clock: the model smooths toward the analyzer's target with
         // this timestamp's delta, then the bars draw the smoothed level with
@@ -263,12 +331,26 @@ final class FlowBarPanel {
         content.alphaValue = 1
     }
 
+    /// Tears down any in-progress drag and orders out drop-slot ghosts so
+    /// hiding mid-drag never leaks ghost panels or strands `isDragging`.
+    func cancelDragIfNeeded() {
+        guard isDragging || topGhost?.isVisible == true || bottomGhost?.isVisible == true else { return }
+        isDragging = false
+        ghostGeneration += 1
+        topGhost?.orderOut(nil)
+        bottomGhost?.orderOut(nil)
+        lastTickedSlot = nil
+        dragTargetScreen = nil
+    }
+
     /// Order out + leave the content visible for next show. Pins are
     /// forgotten: the next show takes the full orderFront path (a
     /// resize-only re-show of a hidden panel would never repaint —
     /// the repeat-transform invisibility class).
     func hideNow() {
+        cancelDragIfNeeded()
         setLiveValues(nil)
+        content.suspendAnimations()
         panel.orderOut(nil)
         content.alphaValue = 1
         pinnedSessionID = nil
@@ -279,7 +361,9 @@ final class FlowBarPanel {
     func hide() {
         // Cancel-before-orderOut invariant (09 §2.2 class): tasks die in
         // the controller before this runs; orderOut is the last step.
+        cancelDragIfNeeded()
         setLiveValues(nil)
+        content.suspendAnimations()
         panel.orderOut(nil)
         pinnedSessionID = nil
         pinnedScreen = nil
@@ -292,17 +376,23 @@ final class FlowBarPanel {
     /// reads as missing pixels — visibility alone can't catch that).
     var contentAlpha: CGFloat { content.alphaValue }
 
-    /// Current pill frame for the catcher morph (v4): nil unless the pill
-    /// is visibly up. The controller snapshots this BEFORE the vanish
-    /// path runs (recovery routes before panel sync).
+    /// Current pill capsule frame for the catcher morph (v4): nil unless the
+    /// pill is visibly up. Inset horizontally by `glassMargin` so the morph
+    /// begins from the visible glass capsule rather than its transparent pad.
     var frameForMorph: NSRect? {
         guard panel.isVisible else { return nil }
-        return panel.frame
+        return panel.frame.insetBy(dx: PillContentView.glassMargin, dy: 0)
     }
 
     private func setFrame(for width: CGFloat, on screen: NSScreen, position: FlowBarPosition, animated: Bool) {
         let windowWidth = width + 2 * PillContentView.glassMargin
-        let frame = FlowBarPosition.frame(width: windowWidth, on: screen.visibleFrame, position: position)
+        let safeTop = FlowBarPosition.additionalSafeTopInset(for: screen)
+        let frame = FlowBarPosition.frame(
+            width: windowWidth,
+            on: screen.visibleFrame,
+            position: position,
+            safeTopInset: safeTop
+        )
         currentSlot = position
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -325,6 +415,10 @@ final class FlowBarPanel {
     /// Current pill frame, screen space. Used to seed the snap highlight.
     private var pillFrame: NSRect { panel.frame }
 
+    private func dragScreen(forCenter point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? pinnedScreen
+    }
+
     private func ghostPanels() -> [(NSPanel, SnapIndicatorView, FlowBarPosition)] {
         if topGhost == nil {
             let view = SnapIndicatorView(frame: NSRect(
@@ -332,7 +426,8 @@ final class FlowBarPanel {
             ))
             let ghost = Self.makePanel(
                 contentView: view,
-                size: NSSize(width: currentWidth, height: VisualizerMath.pillHeight)
+                size: NSSize(width: currentWidth, height: VisualizerMath.pillHeight),
+                shadow: false
             )
             ghost.ignoresMouseEvents = true
             topGhost = ghost
@@ -344,7 +439,8 @@ final class FlowBarPanel {
             ))
             let ghost = Self.makePanel(
                 contentView: view,
-                size: NSSize(width: currentWidth, height: VisualizerMath.pillHeight)
+                size: NSSize(width: currentWidth, height: VisualizerMath.pillHeight),
+                shadow: false
             )
             ghost.ignoresMouseEvents = true
             bottomGhost = ghost
@@ -356,9 +452,23 @@ final class FlowBarPanel {
         return [(topGhost, topGhostView, .top), (bottomGhost, bottomGhostView, .bottom)]
     }
 
+    private func positionGhosts(on screen: NSScreen) {
+        let safeTop = FlowBarPosition.additionalSafeTopInset(for: screen)
+        for (ghost, _, position) in ghostPanels() {
+            ghost.setFrame(
+                FlowBarPosition.frame(
+                    width: currentWidth,
+                    on: screen.visibleFrame,
+                    position: position,
+                    safeTopInset: safeTop
+                ),
+                display: true
+            )
+        }
+    }
+
     @discardableResult
-    private func highlightGhosts(centerY: CGFloat) -> FlowBarPosition {
-        guard let screen = pinnedScreen else { return .bottom }
+    private func highlightGhosts(centerY: CGFloat, on screen: NSScreen) -> FlowBarPosition {
         let nearest = FlowBarPosition.nearest(
             dropCenterY: centerY, on: screen.visibleFrame
         )
@@ -390,6 +500,7 @@ extension FlowBarPanel: PillDragDelegate {
     func pillDragBegan() {
         guard !isDragging, let screen = pinnedScreen else { return }
         isDragging = true
+        dragTargetScreen = screen
         ghostGeneration += 1
         dragStartSlot = FlowBarPosition.current()
         cancelSnapFeedback()
@@ -397,18 +508,13 @@ extension FlowBarPanel: PillDragDelegate {
         lastTickedSlot = dragStartSlot
         // Ghosts at both slots, sized like the live pill; the slot under
         // the grab glows first — the user sees the choice immediately.
-        for (ghost, _, position) in ghostPanels() {
-            ghost.setFrame(
-                FlowBarPosition.frame(
-                    width: currentWidth, on: screen.visibleFrame, position: position
-                ),
-                display: true
-            )
+        positionGhosts(on: screen)
+        for (ghost, _, _) in ghostPanels() {
             ghost.alphaValue = 0
             ghost.orderFront(nil)
             ghost.animator().alphaValue = 1
         }
-        highlightGhosts(centerY: pillFrame.midY)
+        highlightGhosts(centerY: pillFrame.midY, on: screen)
         // Stay above the ghosts for the whole drag.
         panel.orderFront(nil)
     }
@@ -419,15 +525,24 @@ extension FlowBarPanel: PillDragDelegate {
             NSRect(origin: screenOrigin, size: panel.frame.size),
             display: true
         )
-        let nearest = highlightGhosts(
-            centerY: screenOrigin.y + VisualizerMath.pillHeight / 2
+        let center = NSPoint(
+            x: screenOrigin.x + panel.frame.width / 2,
+            y: screenOrigin.y + VisualizerMath.pillHeight / 2
         )
+        guard let screen = dragScreen(forCenter: center) else { return }
+        if dragTargetScreen !== screen {
+            dragTargetScreen = screen
+            positionGhosts(on: screen)
+            panel.orderFront(nil)
+        }
+        let nearest = highlightGhosts(centerY: center.y, on: screen)
         tickOnSlotEntry(nearest)
     }
 
     func pillDragEnded(moved: Bool) {
         guard isDragging else { return }
         isDragging = false
+        dragTargetScreen = nil
         // Generation-guarded fade: a grab-drop-grab inside 0.12s must not
         // let the stale completion orderOut a live new drag (audit).
         let generation = ghostGeneration
@@ -435,12 +550,18 @@ extension FlowBarPanel: PillDragDelegate {
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.12
                 ghost.animator().alphaValue = 0
-            }, completionHandler: { [weak self] in
-                guard self?.ghostGeneration == generation else { return }
-                ghost.orderOut(nil)
+            }, completionHandler: { [weak self, weak ghost] in
+                MainActor.assumeIsolated {
+                    guard self?.ghostGeneration == generation else { return }
+                    ghost?.orderOut(nil)
+                }
             })
         }
-        guard moved, let screen = pinnedScreen else { return }
+        defer { onDragEnded?() }
+        guard moved,
+              let screen = dragScreen(forCenter: NSPoint(x: panel.frame.midX, y: panel.frame.midY))
+        else { return }
+        pinnedScreen = screen
         let target = FlowBarPosition.nearest(
             dropCenterY: panel.frame.midY, on: screen.visibleFrame
         )
@@ -449,11 +570,11 @@ extension FlowBarPanel: PillDragDelegate {
         // so this fires exactly as the pill settles — never at finger lift.
         // Same-slot drops still tick: the placement registered, felt.
         landTask?.cancel()
-        landTask = Task {
+        landTask = Task { [weak self] in
             try? await Task.sleep(
                 nanoseconds: UInt64(FlowBarPosition.snapDuration * 1_000_000_000)
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self != nil else { return }
             NSHapticFeedbackManager.defaultPerformer.perform(
                 .alignment, performanceTime: .now
             )
@@ -465,7 +586,8 @@ extension FlowBarPanel: PillDragDelegate {
 }
 
 /// Drop-slot ghost: pill-sized rounded fill that says "release here".
-/// Stroke + fill, no text — the shape IS the affordance.
+/// Stroke + fill, no text — the shape IS the affordance. Adaptive semantic
+/// colors keep the ghost legible over both light and dark surfaces.
 final class SnapIndicatorView: NSView {
     var highlighted = false {
         didSet { needsDisplay = true }
@@ -478,12 +600,12 @@ final class SnapIndicatorView: NSView {
             yRadius: VisualizerMath.pillHeight / 2
         )
         (highlighted
-            ? NSColor.white.withAlphaComponent(0.30)
-            : NSColor.white.withAlphaComponent(0.10)).setFill()
+            ? NSColor.labelColor.withAlphaComponent(0.24)
+            : NSColor.labelColor.withAlphaComponent(0.08)).setFill()
         path.fill()
         (highlighted
-            ? NSColor.white.withAlphaComponent(0.75)
-            : NSColor.white.withAlphaComponent(0.35)).setStroke()
+            ? NSColor.labelColor.withAlphaComponent(0.65)
+            : NSColor.labelColor.withAlphaComponent(0.28)).setStroke()
         path.lineWidth = highlighted ? 2 : 1
         path.stroke()
     }

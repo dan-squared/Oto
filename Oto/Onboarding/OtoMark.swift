@@ -21,15 +21,15 @@ enum OtoMarkSource {
     static func tinted(_ color: NSColor) -> NSImage? {
         guard let cropped else { return nil }
         let size = cropped.size
-        let image = NSImage(size: size)
-        image.lockFocus()
-        color.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        cropped.draw(
-            in: NSRect(origin: .zero, size: size), from: .zero,
-            operation: .destinationIn, fraction: 1
-        )
-        image.unlockFocus()
-        return image
+        guard size.width > 0, size.height > 0 else { return nil }
+        return NSImage(size: size, flipped: false) { rect in
+            color.setFill()
+            rect.fill()
+            cropped.draw(
+                in: rect, from: .zero,
+                operation: .destinationIn, fraction: 1
+            )
+            return true
+        }
     }
 }

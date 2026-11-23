@@ -241,11 +241,14 @@ struct ShortcutRecorderModifier: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content
+        syncCallbacks()
+        return content
             .onAppear {
+                syncCallbacks()
                 if isListening { start() }
             }
             .onChange(of: isListening) { _, listening in
+                syncCallbacks()
                 if listening {
                     start()
                 } else {
@@ -257,12 +260,23 @@ struct ShortcutRecorderModifier: ViewModifier {
             }
     }
 
+    private func syncCallbacks() {
+        box.onCapture = onCapture
+        box.onCaptureModifier = onCaptureModifier
+        box.onClear = onClear
+        box.onCancel = onCancel
+        box.onInvalid = onInvalid
+        box.onInvalidInput = onInvalidInput
+    }
+
     private func start() {
         stop()
+        syncCallbacks()
         // Snapshot once per listening session; the list cannot change
         // meaningfully mid-capture.
         let system = CarbonHotKeyCenter.enabledSystemShortcuts()
-        box.token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [box] event in
+        box.token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak box] event in
+            guard let box else { return event }
             // Any keyDown ends a pending lone-modifier arm (the combo path
             // owns the gesture from here); priority order below is unchanged.
             box.flags.stepKeyDown()
@@ -278,26 +292,27 @@ struct ShortcutRecorderModifier: ViewModifier {
             // Handled synchronously; the callbacks below only set UI state.
             switch outcome {
             case .cancelled:
-                onCancel()
+                box.onCancel()
             case .cleared:
-                onClear()
+                box.onClear()
             case .invalid(let reason):
                 ShortcutRecorderModifier.logInvalid(keyCode: event.keyCode, mods: event.modifierFlags.rawValue, reason: String(describing: reason))
-                onInvalid(reason)
-                onInvalidInput?(reason, event.keyCode, event.modifierFlags)
+                box.onInvalid(reason)
+                box.onInvalidInput?(reason, event.keyCode, event.modifierFlags)
             case .captured(let modifiers, let keyCode, let conflicts):
-                onCapture(modifiers, keyCode, conflicts)
+                box.onCapture(modifiers, keyCode, conflicts)
             case .captureModifier(let code):
                 // Bare fn as keyDown (code 63): same staging as a flags
                 // capture — both call sites already suspend, stop, log.
-                onCaptureModifier(code)
+                box.onCaptureModifier(code)
             }
             return nil
         }
         // Bare modifiers emit flagsChanged, never keyDown — without this
         // monitor they are deafeningly silent (no beep, no message). Never
         // consumed: the system must keep seeing every modifier.
-        box.flagsToken = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [box] event in
+        box.flagsToken = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak box] event in
+            guard let box else { return event }
             guard let flag = FlagsCaptureState.nsFlag(for: event.keyCode) else { return event }
             let down = event.modifierFlags.contains(flag)
             let outcome = down
@@ -307,34 +322,67 @@ struct ShortcutRecorderModifier: ViewModifier {
             case .none:
                 break
             case .capture(let code):
-                onCaptureModifier(code)
+                box.onCaptureModifier(code)
             case .chord:
                 ShortcutRecorderModifier.logInvalid(keyCode: event.keyCode, mods: event.modifierFlags.rawValue, reason: "chordOnly")
-                onInvalid(.chordOnly)
-                onInvalidInput?(.chordOnly, event.keyCode, event.modifierFlags)
+                box.onInvalid(.chordOnly)
+                box.onInvalidInput?(.chordOnly, event.keyCode, event.modifierFlags)
             }
             return event
         }
     }
 
     private func stop() {
-        if let token = box.token {
-            NSEvent.removeMonitor(token)
-            box.token = nil
-        }
-        if let token = box.flagsToken {
-            NSEvent.removeMonitor(token)
-            box.flagsToken = nil
-        }
-        box.flags.reset()
+        box.removeMonitors()
     }
 
     private final class MonitorBox {
         var token: Any?
         var flagsToken: Any?
         var flags = FlagsCaptureState()
+        var onCapture: (UInt32, UInt32, [RecorderConflict]) -> Void = { _, _, _ in }
+        var onCaptureModifier: (UInt16) -> Void = { _ in }
+        var onClear: () -> Void = {}
+        var onCancel: () -> Void = {}
+        var onInvalid: (RecorderInvalidReason) -> Void = { _ in }
+        var onInvalidInput: ((RecorderInvalidReason, UInt16, NSEvent.ModifierFlags) -> Void)?
+
+        isolated deinit {
+            removeMonitors()
+        }
+
+        func removeMonitors() {
+            if let token {
+                NSEvent.removeMonitor(token)
+                self.token = nil
+            }
+            if let flagsToken {
+                NSEvent.removeMonitor(flagsToken)
+                self.flagsToken = nil
+            }
+            flags.reset()
+        }
     }
 }
+
+/// Cleans up a single local `NSEvent` monitor automatically on deallocation so
+/// a popover torn down without `onDisappear` never leaks a monitor.
+private final class LocalEventMonitorBox {
+    var token: Any?
+
+    isolated deinit {
+        remove()
+    }
+
+    func remove() {
+        if let token {
+            NSEvent.removeMonitor(token)
+            self.token = nil
+        }
+    }
+}
+
+private let trackedModifierMask: NSEvent.ModifierFlags = [.control, .option, .shift, .command, .function]
 
 extension View {
     func shortcutRecorder(
@@ -371,7 +419,7 @@ struct ShortcutCapturePopover: View {
     @State private var isListening = false
     @State private var message: String?
     @State private var modifierFlags: NSEvent.ModifierFlags = []
-    @State private var modifierMonitor: Any?
+    @State private var modifierMonitorBox = LocalEventMonitorBox()
     @State private var attemptedChips: [String] = []
     @State private var refusal: String?
     @State private var glow: OtoRecorderGlow.Tone?
@@ -494,11 +542,19 @@ struct ShortcutCapturePopover: View {
             isCleared = currentKind == .unassigned
             dispatch.setSuspended(true)
             isListening = true
-            modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            modifierFlags = NSEvent.modifierFlags
+            modifierMonitorBox.remove()
+            modifierMonitorBox.token = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                let previous = modifierFlags.intersection(trackedModifierMask)
+                let current = event.modifierFlags.intersection(trackedModifierMask)
                 modifierFlags = event.modifierFlags
-                attemptedChips = []
-                refusal = nil
-                glow = nil
+                // Only clear refusal/attempt feedback when a NEW modifier is
+                // pressed down, never when releasing keys after a refused press.
+                if isListening, glow != .accepted, !current.subtracting(previous).isEmpty {
+                    attemptedChips = []
+                    refusal = nil
+                    glow = nil
+                }
                 return event
             }
         }
@@ -514,10 +570,7 @@ struct ShortcutCapturePopover: View {
             dispatch.setSuspended(false)
             closeTask?.cancel()
             closeTask = nil
-            if let modifierMonitor {
-                NSEvent.removeMonitor(modifierMonitor)
-                self.modifierMonitor = nil
-            }
+            modifierMonitorBox.remove()
         }
 #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .otoProbeClearRecorder)) { _ in
@@ -634,7 +687,7 @@ struct TransformShortcutCapturePopover: View {
     @State private var closeTask: Task<Void, Never>?
 
     @State private var modifierFlags: NSEvent.ModifierFlags = []
-    @State private var monitor: Any?
+    @State private var monitorBox = LocalEventMonitorBox()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -721,21 +774,25 @@ struct TransformShortcutCapturePopover: View {
         .onAppear {
             capturing = true
             modifierFlags = NSEvent.modifierFlags
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            monitorBox.remove()
+            monitorBox.token = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                let previous = modifierFlags.intersection(trackedModifierMask)
+                let current = event.modifierFlags.intersection(trackedModifierMask)
                 modifierFlags = event.modifierFlags
-                attemptedChips = []
-                refusal = nil
-                glow = nil
+                // Only clear refusal/attempt feedback when a NEW modifier is
+                // pressed down, never when releasing keys after a refused press.
+                if capturing, glow != .accepted, !current.subtracting(previous).isEmpty {
+                    attemptedChips = []
+                    refusal = nil
+                    glow = nil
+                }
                 return event
             }
         }
         .onDisappear {
             closeTask?.cancel()
             closeTask = nil
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
+            monitorBox.remove()
         }
     }
 

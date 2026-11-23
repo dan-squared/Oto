@@ -73,6 +73,23 @@ struct GeneralPane: View {
                     get: { loginStatus == .enabled },
                     set: { newValue in setLogin(enabled: newValue) }
                 ))
+                if loginStatus == .requiresApproval {
+                    HStack(spacing: 8) {
+                        Text("Needs approval in System Settings → Login Items.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Button("Open Login Items") {
+                            SMAppService.openSystemSettingsLoginItems()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                } else if loginStatus == .notFound {
+                    Text("Move Oto into Applications to enable Launch at login.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 if let loginError {
                     Text(loginError)
                         .font(.footnote)
@@ -90,6 +107,13 @@ struct GeneralPane: View {
                 }
             }
             .task { refreshLogin() }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                let latest = login.status()
+                loginStatus = latest
+                if latest == .enabled {
+                    loginError = nil
+                }
+            }
 
             Section {
                 // Label left, compact control right — the grouped-settings
@@ -176,18 +200,20 @@ struct GeneralPane: View {
     /// Read the live login-item status on every visit: System Settings can
     /// revoke approval behind the app's back. The card carries no permanent
     /// caption — only failed actions speak (toggle, Dock error).
-    private func refreshLogin() {
+    private func refreshLogin(clearError: Bool = true) {
         loginStatus = login.status()
-        loginError = nil
+        if clearError {
+            loginError = nil
+        }
     }
 
     private func setLogin(enabled: Bool) {
         do {
             try login.setEnabled(enabled)
-            refreshLogin()
+            refreshLogin(clearError: true)
         } catch {
             loginError = error.localizedDescription
-            refreshLogin()
+            refreshLogin(clearError: false)
         }
     }
 

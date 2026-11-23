@@ -69,22 +69,22 @@ struct HotkeyTransitionStateTests {
     @Test func combinationNeverCancelsHandsFree() {
         // Hands-free is meant to keep running while you do other things.
         var machine = HotkeyTransitionState()
-        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .begin)
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .toggle)
         #expect(machine.step(.event(.combinationBegan), mode: .handsFree) == .ignore)
-        // The toggle still finishes on its second press.
-        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .finish)
+        // The stateless toggle fires again on its second press.
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .toggle)
     }
 
     // MARK: - Hands-free
 
     @Test func handsFreeTogglesOnDownsIgnoresUps() {
         var machine = HotkeyTransitionState()
-        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .begin)
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .toggle)
         #expect(machine.step(.event(.keyUp), mode: .handsFree) == .ignore)
         #expect(machine.step(.event(.keyDown(isRepeat: true)), mode: .handsFree) == .ignore)
-        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .finish)
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .toggle)
         #expect(machine.step(.event(.keyUp), mode: .handsFree) == .ignore)
-        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .begin)
+        #expect(machine.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .toggle)
     }
 
     // MARK: - Loss and Escape
@@ -103,7 +103,7 @@ struct HotkeyTransitionStateTests {
         #expect(down.step(.escape, mode: .holdToTalk) == .reset)
 
         var free = HotkeyTransitionState()
-        #expect(free.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .begin)
+        #expect(free.step(.event(.keyDown(isRepeat: false)), mode: .handsFree) == .toggle)
         #expect(free.step(.escape, mode: .handsFree) == .reset)
     }
 
@@ -178,5 +178,32 @@ struct ModifierHoldStateTests {
         #expect(ModifierHoldState.flag(for: UInt16(kVK_RightCommand)) == .maskCommand)
         #expect(ModifierHoldState.flag(for: UInt16(kVK_RightControl)) == .maskControl)
         #expect(ModifierHoldState.flag(for: UInt16(kVK_ANSI_D)) == nil)
+    }
+
+    @Test func sidedModifierMasksDistinguishLeftAndRightAndFallBack() {
+        let leftOpt = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | ModifierHoldState.deviceLeftAltMask)
+        let rightOpt = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | ModifierHoldState.deviceRightAltMask)
+        #expect(ModifierHoldState.isModifierDown(keyCode: UInt16(kVK_Option), flags: leftOpt) == true)
+        #expect(ModifierHoldState.isModifierDown(keyCode: UInt16(kVK_RightOption), flags: leftOpt) == false)
+        #expect(ModifierHoldState.isModifierDown(keyCode: UInt16(kVK_RightOption), flags: rightOpt) == true)
+        #expect(ModifierHoldState.isModifierDown(keyCode: UInt16(kVK_Option), flags: rightOpt) == false)
+        // Fallback when device bits are absent (synthetic events):
+        #expect(ModifierHoldState.isModifierDown(keyCode: UInt16(kVK_RightOption), flags: [.maskAlternate]) == true)
+        #expect(ModifierHoldState.isModifierDown(keyCode: UInt16(kVK_RightOption), flags: []) == false)
+    }
+
+    @MainActor
+    @Test func modifierHotkeyMonitorHealsStaleCarbonDown() {
+        let monitor = ModifierHotkeyMonitor()
+        let t0 = ContinuousClock().now
+        #expect(monitor.stepCarbonKeyDown(at: t0) == .keyDown(isRepeat: false))
+        // Immediate duplicate within 1.5s is normalized to repeat.
+        #expect(monitor.stepCarbonKeyDown(at: t0 + .milliseconds(200)) == .keyDown(isRepeat: true))
+        // Missed keyUp followed by press >1.5s later heals as a fresh press.
+        #expect(monitor.stepCarbonKeyDown(at: t0 + .milliseconds(2000)) == .keyDown(isRepeat: false))
+        // stop() clears carbonDown immediately.
+        monitor.stop()
+        #expect(monitor.stepCarbonKeyDown(at: t0 + .milliseconds(2050)) == .keyDown(isRepeat: false))
+        #expect(monitor.stepCarbonKeyUp() == .keyUp)
     }
 }

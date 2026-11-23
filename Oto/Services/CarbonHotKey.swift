@@ -52,7 +52,7 @@ final class CarbonHotKey {
     let onKeyUp: () -> Void
 
     fileprivate let id: Int
-    nonisolated(unsafe) fileprivate var eventHotKeyRef: EventHotKeyRef?
+    fileprivate var eventHotKeyRef: EventHotKeyRef?
 
     init?(
         carbonKeyCode: Int,
@@ -71,16 +71,7 @@ final class CarbonHotKey {
         }
     }
 
-    deinit {
-        // Nonisolated by definition, and the center is MainActor-bound —
-        // no hop is possible here. Unregister at the OS level directly:
-        // the RAII guarantee (a dead HotKey cannot remain registered)
-        // holds; the center's weak entry evaporates and is swept on the
-        // next registration. Runs on the main actor in practice (the
-        // monitor owns this from @MainActor lifecycle methods) — asserted,
-        // so an off-main release traps loudly in Debug instead of
-        // violating Carbon's "Not thread safe" contract silently.
-        assert(Thread.isMainThread, "CarbonHotKey must die on the main thread.")
+    isolated deinit {
         if let ref = eventHotKeyRef {
             UnregisterEventHotKey(ref)
             eventHotKeyRef = nil
@@ -130,13 +121,14 @@ final class CarbonHotKeyCenter {
         guard let ref = registerEventHotKey(for: hotKey) else {
             return false
         }
+        guard setUpEventHandlerIfNeeded() else {
+            UnregisterEventHotKey(ref)
+            return false
+        }
         hotKey.eventHotKeyRef = ref
-        // Sweep weak entries whose owners de-registered via deinit (the
-        // explicit unregister path was removed with the deinit fix — one
-        // OS-level path, no stale callbacks either way).
+        // Sweep weak entries whose owners de-registered via isolated deinit.
         hotKeys = hotKeys.filter { $0.value.value != nil }
         hotKeys[hotKey.id] = WeakHotKey(value: hotKey)
-        setUpEventHandlerIfNeeded()
         return true
     }
 
@@ -173,8 +165,8 @@ final class CarbonHotKeyCenter {
         return ref
     }
 
-    private func setUpEventHandlerIfNeeded() {
-        guard eventHandler == nil else { return }
+    private func setUpEventHandlerIfNeeded() -> Bool {
+        guard eventHandler == nil else { return true }
         var handler: EventHandlerRef?
         let error = InstallEventHandler(
             GetEventDispatcherTarget(),
@@ -184,8 +176,9 @@ final class CarbonHotKeyCenter {
             Unmanaged.passUnretained(self).toOpaque(),
             &handler
         )
-        guard error == noErr, let handler else { return }
+        guard error == noErr, let handler else { return false }
         eventHandler = handler
+        return true
     }
 
     /// Parsed, Sendable fire command: kind + id cross the isolation

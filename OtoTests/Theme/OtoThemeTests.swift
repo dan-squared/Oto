@@ -45,4 +45,24 @@ struct OtoThemeTests {
         #expect(settingsDark > 0.08 && settingsDark < 0.13)
         #expect(OtoPalette.white(OtoPalette.NS.settingsGround, for: .aqua) == 1.0)
     }
+
+    @Test func highContrastAppearancesIncreaseSeparation() {
+        // UI-12: High Contrast appearances resolve cleanly via
+        // performAsCurrentDrawingAppearance and strengthen contrast.
+        let standardLightInk = OtoPalette.white(OtoPalette.NS.ink, for: .aqua, highContrastOverride: false)
+        let highContrastLightInk = OtoPalette.white(OtoPalette.NS.ink, for: .aqua, highContrastOverride: true)
+        #expect(highContrastLightInk < standardLightInk)
+
+        let standardDarkInk = OtoPalette.white(OtoPalette.NS.ink, for: .darkAqua, highContrastOverride: false)
+        let highContrastDarkInk = OtoPalette.white(OtoPalette.NS.ink, for: .darkAqua, highContrastOverride: true)
+        #expect(highContrastDarkInk > standardDarkInk)
+
+        let standardLightHairline = OtoPalette.white(OtoPalette.NS.hairline, for: .aqua, highContrastOverride: false)
+        let highContrastLightHairline = OtoPalette.white(OtoPalette.NS.hairline, for: .aqua, highContrastOverride: true)
+        #expect(highContrastLightHairline < standardLightHairline)
+
+        let standardDarkHairline = OtoPalette.white(OtoPalette.NS.hairline, for: .darkAqua, highContrastOverride: false)
+        let highContrastDarkHairline = OtoPalette.white(OtoPalette.NS.hairline, for: .darkAqua, highContrastOverride: true)
+        #expect(highContrastDarkHairline > standardDarkHairline)
+    }
 }

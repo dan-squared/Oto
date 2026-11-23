@@ -40,6 +40,20 @@ struct FlowBarPositionTests {
         #expect(frame.width == 92.4)
     }
 
+    @Test func topSlotRespectsSafeTopInsetForNotch() {
+        // UI-10: in Fullscreen Spaces on a notched MacBook, visibleFrame
+        // reaches the screen top; safeTopInset keeps the Top pill below the notch.
+        let fullscreen = NSRect(x: 0, y: 0, width: 1512, height: 982)
+        let topFrame = FlowBarPosition.frame(
+            width: 92.4, on: fullscreen, position: .top, safeTopInset: 38
+        )
+        #expect(topFrame.maxY == 982 - 38 - FlowBarPosition.topMargin)
+        let bottomFrame = FlowBarPosition.frame(
+            width: 92.4, on: fullscreen, position: .bottom, safeTopInset: 38
+        )
+        #expect(bottomFrame.minY == FlowBarPosition.bottomMargin)
+    }
+
     @Test func tallCardsAnchorByTheirOwnHeight() {
         // 60pt permission card at Top: maxY stays 12pt under the visible
         // top — never pushed up under the menu bar by a pill-height anchor.

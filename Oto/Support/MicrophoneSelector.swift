@@ -39,7 +39,8 @@ enum MicrophoneSelector {
         guard AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids
         ) == noErr else { return [] }
-        return ids.compactMap { id in
+        let actualCount = min(count, Int(size) / MemoryLayout<AudioDeviceID>.size)
+        return ids.prefix(actualCount).compactMap { id in
             guard hasInputChannels(id), let uid = stringProperty(
                 id, selector: kAudioDevicePropertyDeviceUID
             ) else { return nil }
@@ -94,13 +95,16 @@ enum MicrophoneSelector {
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(id, &address, 0, nil, &size) == noErr,
               size >= UInt32(MemoryLayout<AudioBufferList>.size) else { return false }
-        let data = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 1)
+        let data = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(size),
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
         defer { data.deallocate() }
-        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, data) == noErr else { return false }
-        return data.withMemoryRebound(to: AudioBufferList.self, capacity: 1) { list in
-            let buffers = UnsafeBufferPointer(start: &list.pointee.mBuffers, count: Int(list.pointee.mNumberBuffers))
-            return buffers.contains { $0.mNumberChannels > 0 }
-        }
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, data) == noErr,
+              size >= UInt32(MemoryLayout<AudioBufferList>.size) else { return false }
+        let listPointer = data.bindMemory(to: AudioBufferList.self, capacity: 1)
+        let buffers = UnsafeMutableAudioBufferListPointer(listPointer)
+        return buffers.contains { $0.mNumberChannels > 0 }
     }
 
     /// CFString device properties (UID, name). Property fetches hand back

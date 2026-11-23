@@ -133,4 +133,21 @@ struct SnippetStoreTests {
         let global = #"{"id":"\#(id)","name":"Addr","expansion":"1 Main St"}"#
         #expect(try JSONDecoder().decode(Snippet.self, from: Data(global.utf8)).bundleIDs.isEmpty)
     }
+
+    @Test func selectedAppsWithZeroAppsFailsValidation() async {
+        let store = makeStore()
+        if case .failure(let error) = await store.add(name: "Addr", expansion: "1 Main St", scope: .apps([])) {
+            #expect(error == .emptyAppScope)
+        } else {
+            Issue.record("expected emptyAppScope for .apps([])")
+        }
+        guard case .success(let saved) = await store.add(name: "Addr", expansion: "1 Main St", scope: .global) else {
+            Issue.record("setup add must succeed"); return
+        }
+        if case .failure(let error) = await store.update(saved, scope: .apps([])) {
+            #expect(error == .emptyAppScope)
+        } else {
+            Issue.record("expected emptyAppScope on update with .apps([])")
+        }
+    }
 }

@@ -21,6 +21,7 @@
 //
 
 import Foundation
+import Synchronization
 
 /// Fresh-enough snapshot of the system's speech locale sets.
 struct LocaleSnapshot: Equatable, Sendable {
@@ -57,37 +58,43 @@ extension Notification.Name {
     nonisolated static let otoSpeechLocaleInvalidated = Notification.Name("app.Oto.speechLocaleInvalidated")
 }
 
-final class LocaleSnapshotCache: @unchecked Sendable {
+nonisolated final class LocaleSnapshotCache: Sendable {
     /// Product singleton: one snapshot for the process. Tests use fresh
     /// instances (`LocaleSnapshotCache()`) so no test can poison another.
-    nonisolated(unsafe) static let shared = LocaleSnapshotCache()
+    static let shared = LocaleSnapshotCache()
 
     /// Starting cap: a missed invalidation can only lie for minutes, never
     /// for a launch lifetime. Tuned by P1 session-spacing data.
-    nonisolated static let maxAgeLimit: Duration = .seconds(600)
+    static let maxAgeLimit: Duration = .seconds(600)
 
-    private let lock = NSLock()
-    private nonisolated(unsafe) var snapshot: LocaleSnapshot? = nil
-    private nonisolated(unsafe) var observer: NSObjectProtocol? = nil
+    private struct ObserverBox: @unchecked Sendable {
+        let token: NSObjectProtocol
+    }
 
-    nonisolated init(notificationCenter: NotificationCenter = .default) {
-        observer = notificationCenter.addObserver(
+    private let notificationCenter: NotificationCenter
+    private let snapshot = Mutex<LocaleSnapshot?>(nil)
+    private let observer = Mutex<ObserverBox?>(nil)
+
+    init(notificationCenter: NotificationCenter = .default) {
+        self.notificationCenter = notificationCenter
+        let box = ObserverBox(token: notificationCenter.addObserver(
             forName: NSLocale.currentLocaleDidChangeNotification,
             object: nil,
             queue: nil
-        ) { [weak self] _ in self?.invalidate() }
+        ) { [weak self] _ in self?.invalidate() })
+        observer.withLock { $0 = box }
     }
 
     deinit {
-        if let observer {
-            NotificationCenter.default.removeObserver(observer)
+        if let box = observer.withLock({ let b = $0; $0 = nil; return b }) {
+            notificationCenter.removeObserver(box.token)
         }
     }
 
     /// Pure decision — exhaustively unit-tested, no system calls.
     /// Matching ALWAYS goes through `SpeechLocaleMatching.bestMatch`
     /// (never re-implemented here).
-    nonisolated static func decide(
+    static func decide(
         current: Locale,
         snapshot: LocaleSnapshot?,
         now: ContinuousClock.Instant
@@ -102,28 +109,24 @@ final class LocaleSnapshotCache: @unchecked Sendable {
     }
 
     /// Press-path read: zero awaits on either outcome.
-    nonisolated func resolve(
+    func resolve(
         current: Locale = .current,
         now: ContinuousClock.Instant = ContinuousClock.now
     ) -> LocaleCacheDecision {
-        lock.lock()
-        let snap = snapshot
-        lock.unlock()
+        let snap = snapshot.withLock { $0 }
         return Self.decide(current: current, snapshot: snap, now: now)
     }
 
-    nonisolated func store(supported: [Locale], installed: [Locale], takenAt: ContinuousClock.Instant = ContinuousClock.now) {
-        lock.lock()
-        snapshot = LocaleSnapshot(supported: supported, installed: installed, takenAt: takenAt)
-        lock.unlock()
+    func store(supported: [Locale], installed: [Locale], takenAt: ContinuousClock.Instant = ContinuousClock.now) {
+        snapshot.withLock {
+            $0 = LocaleSnapshot(supported: supported, installed: installed, takenAt: takenAt)
+        }
     }
 
     /// Any cause → snapshot = nil (next press requeries) + post the P2
-    /// contract notification. Idempotent.
-    nonisolated func invalidate() {
-        lock.lock()
-        snapshot = nil
-        lock.unlock()
-        NotificationCenter.default.post(name: .otoSpeechLocaleInvalidated, object: nil)
+    /// contract notification on the configured center. Idempotent.
+    func invalidate() {
+        snapshot.withLock { $0 = nil }
+        notificationCenter.post(name: .otoSpeechLocaleInvalidated, object: nil)
     }
 }

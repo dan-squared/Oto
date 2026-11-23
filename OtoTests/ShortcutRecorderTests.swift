@@ -106,6 +106,43 @@ struct ShortcutRecorderTests {
         }))
     }
 
+    @Test func otoCriticalAndSystemCommandCombosAreDisallowed() {
+        for keyCode in [
+            UInt16(kVK_ANSI_V), UInt16(kVK_ANSI_C), UInt16(kVK_ANSI_Z),
+            UInt16(kVK_ANSI_Q), UInt16(kVK_ANSI_W), UInt16(kVK_Tab),
+        ] {
+            let outcome = ShortcutRecorderRules.classify(
+                keyCode: keyCode,
+                modifiers: [.command],
+                systemShortcuts: []
+            )
+            guard case .captured(_, _, let conflicts) = outcome else {
+                Issue.record("expected captured with disallowed conflict for key \(keyCode), got \(outcome)")
+                continue
+            }
+            #expect(ShortcutRecorderConflicts.blocksSaving(conflicts) == true)
+        }
+        // Adding Shift or using Control keeps them allowed.
+        let cmdShiftV = ShortcutRecorderRules.classify(
+            keyCode: UInt16(kVK_ANSI_V), modifiers: [.command, .shift], systemShortcuts: []
+        )
+        guard case .captured(_, _, let shiftConflicts) = cmdShiftV else {
+            Issue.record("expected captured, got \(cmdShiftV)")
+            return
+        }
+        #expect(shiftConflicts.isEmpty)
+    }
+
+    @Test func globeKeyDownCapturesFunctionModifier() {
+        #expect(
+            ShortcutRecorderRules.classify(
+                keyCode: UInt16(HIDEventMonitor.globeKeyCode),
+                modifiers: [],
+                systemShortcuts: []
+            ) == .captureModifier(code: UInt16(kVK_Function))
+        )
+    }
+
     // MARK: - Conflict policy copy (audit S4 gap: blocksSaving/describe
     // had zero coverage despite gating what the UI saves)
 
@@ -247,6 +284,6 @@ struct ShortcutRecorderTests {
         #expect(SystemFnUsage.caption(for: .emoji) == "Quick fn taps open macOS Emoji — double-tap needs a key macOS doesn't own.")
         #expect(SystemFnUsage.caption(for: .dictation) == "Quick fn taps start macOS Dictation — double-tap needs a key macOS doesn't own.")
         #expect(SystemFnUsage.caption(for: .inputSource) == "Quick fn taps switch input source — double-tap needs a key macOS doesn't own.")
-        #expect(SystemFnUsage.caption(for: .none) == "fn is free on this Mac — but double-tap still needs a non-fn hold key.")
+        #expect(SystemFnUsage.caption(for: .none) == "fn is free on this Mac — instant hold and double-tap both work.")
     }
 }

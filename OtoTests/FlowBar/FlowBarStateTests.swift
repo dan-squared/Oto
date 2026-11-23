@@ -97,7 +97,29 @@ struct FlowBarStateTests {
         ] {
             let text = failurePillText(failure)
             #expect(text != nil, "\(failure) needs a visible notice")
-            #expect((text?.count ?? 0) < 60)
+            #expect((text?.count ?? 0) <= 28)
+        }
+    }
+
+    @Test func menuErrorSummaryIsShortAndConcise() {
+        let verboseReason = "Accessibility permission is required to insert text. Nothing was pasted — the transcript is kept for recovery."
+        let cases: [(DictationFailure, Bool)] = [
+            (.microphoneDenied, false),
+            (.noAudioCaptured, false),
+            (.audioCapture("AVAudioEngine failed to start with error -10875"), false),
+            (.speechPreparation("Missing speech model assets for locale"), false),
+            (.targetGone, true),
+            (.noTextField, true),
+            (.insertionFailed(verboseReason), true),
+            (.insertionFailed("The focused field is a secure password field."), true),
+            (.insertionFailed("The target app lost focus just before pasting."), true),
+            (.insertionFailed("Unknown insertion error with lots of detail"), true),
+        ]
+        for (failure, hasRecovery) in cases {
+            let summary = DictationCoordinator.conciseMenuError(for: failure, hasRecovery: hasRecovery)
+            #expect(!summary.isEmpty)
+            #expect(summary.count <= 26, "Menu error too long (\(summary.count) chars): \(summary)")
+            #expect(!summary.hasPrefix("failed:"))
         }
     }
 

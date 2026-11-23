@@ -34,8 +34,8 @@ enum TriggerUpdateResult: Equatable, Sendable {
 
 /// MainActor owner of the shortcut layer. Holds the monitors, the dual
 /// config, and one transition machine per slot; translates transitions into
-/// the ONE async hop to the coordinator. Backends emit values; this decides
-/// nothing about sessions beyond routing intents.
+/// serialized FIFO intents to the coordinator. Backends emit values; this
+/// decides nothing about sessions beyond routing intents.
 ///
 /// Two slots live at once with fixed modes (hold = hold-to-talk,
 /// hands-free = hands-free toggle). The coordinator's single-session guard
@@ -48,6 +48,9 @@ final class ShortcutDispatch {
     /// transition machines stay pure, and a dispatch without a player is a
     /// silent one, never a slower one.
     private let sounds: (any FeedbackSounding)?
+    /// Live macOS `AppleFnUsageType` reader (injectable in tests so fn-mode
+    /// behavior is tested deterministically independent of host settings).
+    private let systemFnUsageProvider: () -> SystemFnUsage
     private let log = Logger(subsystem: "app.Oto", category: "shortcut")
 
     private let holdComboMonitor = ModifierHotkeyMonitor()
@@ -60,26 +63,31 @@ final class ShortcutDispatch {
     /// Timing only — routing decisions stay in the transition machines
     /// and the coordinator guards.
     private var holdTap = DoubleTapTracker()
-    /// Pending/confirmed bare-fn press. The shared machine stays pristine
-    /// for fn (it never steps it); this pair is the whole fn state.
+    /// Pending/confirmed bare-fn press when macOS owns fn taps.
     /// Timing rules live in the pure core; the Task below is a thin timer.
     private var fnHold = FnHoldConfirm()
     private var fnConfirmTask: Task<Void, Never>?
 
-    /// True when the hold slot is a bare fn key — the only trigger with
-    /// system tap behavior. All other holds stay instant. Derived from
-    /// the model policy (single source; never a scattered keyCode check).
+    /// True when the hold slot is bare fn (derived from model policy).
     private var isFnHold: Bool {
         trigger(for: .hold).kind.isSystemTapSensitive
     }
-    /// Begin-generation counter: every routed begin bumps it synchronously;
-    /// the routing Task settles it after storing the id (or nil-ing).
-    /// Conversion spins on it so cancel+toggle can never run ahead of a
-    /// routed begin and nil on a session whose id hasn't landed yet.
-    /// (Without this, down2's begin lands between convert's cancel of the
-    /// stale id and its toggle — the toggle then nils on the live micro.)
-    private var beginGeneration = 0
-    private var beginSettledThrough = 0
+
+    /// Bare fn now runs through the exact same instant hold-to-talk + double-tap
+    /// path as every other modifier hold key (matching Hex: 0 ms start, no
+    /// 200 ms confirmation lag, instant close on release). Retained as a hook
+    /// so `FnHoldConfirm` remains unit-tested and opt-in if ever needed.
+    private var isFnTapProtected: Bool {
+        false
+    }
+
+    /// Single serialized FIFO task chain for all coordinator-bound intents
+    /// (`begin`, `finish`, `cancel`, `escape`, `doubleTap`, `toggle`,
+    /// `cancelActiveSession`). Every intent awaits the prior intent before
+    /// reading `activeSessionID` or talking to the coordinator — eliminating
+    /// spin-loops and begin/finish/Escape races.
+    private var pendingAction: Task<Void, Never>?
+
     /// Latest session ID returned by the coordinator. Never cleared
     /// eagerly: cancel/finish are idempotent, so a stale ID is a harmless
     /// no-op — but clearing it would strand an Escape-during-starting
@@ -89,8 +97,7 @@ final class ShortcutDispatch {
         didSet { configuration.save() }
     }
 
-    /// Last real global down/up observed per slot (for calibration). Nil
-    /// until a full press-release cycle arrives through a live backend.
+    /// Last real global down/up observed per slot (for calibration).
     private var observedDownHold = false
     private var observedUpAfterDownHold = false
     private var observedDownHandsFree = false
@@ -104,17 +111,25 @@ final class ShortcutDispatch {
         Self.worst(of: calibrationHold, and: calibrationHandsFree)
     }
 
+    /// True when either enabled slot uses `.modifierHold` or `.functionKey`
+    /// and therefore needs Accessibility trust for the HID event tap.
+    var requiresAccessibility: Bool {
+        ShortcutSlot.allCases.contains { slotEnabled($0) && slotRequiresAccessibility($0) }
+    }
+
     /// While true, global registration is suspended (recorder listening).
     private(set) var isSuspended = false
 
     init(
         coordinator: DictationCoordinator,
         configuration: DualShortcutConfiguration = .load(),
-        sounds: (any FeedbackSounding)? = nil
+        sounds: (any FeedbackSounding)? = nil,
+        systemFnUsageProvider: @escaping () -> SystemFnUsage = { SystemFnUsage.read() }
     ) {
         self.coordinator = coordinator
         self.configuration = configuration
         self.sounds = sounds
+        self.systemFnUsageProvider = systemFnUsageProvider
 
         holdComboMonitor.onEvent = { [weak self] in self?.receive($0, from: .hold) }
         handsFreeComboMonitor.onEvent = { [weak self] in self?.receive($0, from: .handsFree) }
@@ -154,7 +169,7 @@ final class ShortcutDispatch {
         // One shared HID tap for both slots + one shared Escape observation.
         hidMonitor.configure(holdSlots: holdSlots, functionSlots: functionSlots, escapeObserved: true)
         // HID-kind slots need a live tap; combo slots already reported above.
-        for slot in ShortcutSlot.allCases where slotUsesHIDTap(slot) && !hidMonitor.isLive {
+        for slot in ShortcutSlot.allCases where slotEnabled(slot) && slotUsesHIDTap(slot) && !hidMonitor.isLive {
             setCalibration(.requiresAccessibility, for: slot)
             log.error("HID tap unavailable (accessibility?)")
         }
@@ -202,6 +217,8 @@ final class ShortcutDispatch {
         holdTransition = HotkeyTransitionState()
         handsFreeTransition = HotkeyTransitionState()
         holdTap.reset()
+        isHandsFreeSessionActive = false
+        fnHandsFreeStoppedAt = nil
         dropFnPending()
     }
 
@@ -222,24 +239,40 @@ final class ShortcutDispatch {
         }
     }
 
-    /// Re-check Accessibility-derived availability. Called on every menu
-    /// open (the one hook guaranteed to run while the user is present —
-    /// audit F2 wired the previously zero-caller path here). Revocation
-    /// surfaces as unavailable; recovery re-registers. Never rebuilds
-    /// while either trigger is physically down — tearing down mid-hold would
-    /// strand the release.
+    /// Re-check Accessibility-derived availability without tearing down a
+    /// healthy live tap. Only restarts backends when a required combo monitor
+    /// or the HID tap is actually dead (`verifyLive() == false`).
     func refreshAvailability() {
-        if !isAccessibilityTrusted() {
-            let holdGated = slotRequiresAccessibility(.hold)
-            let freeGated = slotRequiresAccessibility(.handsFree)
+        guard !isSuspended else { return }
+        let trusted = isAccessibilityTrusted()
+        if !trusted {
+            let holdGated = slotEnabled(.hold) && slotRequiresAccessibility(.hold)
+            let freeGated = slotEnabled(.handsFree) && slotRequiresAccessibility(.handsFree)
             if holdGated { setCalibration(.requiresAccessibility, for: .hold) }
             if freeGated { setCalibration(.requiresAccessibility, for: .handsFree) }
-            // A lone combo slot can still heal without trust; when both
-            // slots are AX-gated there is nothing to heal.
             if holdGated && freeGated { return }
         }
         guard !holdTransition.isDown, !handsFreeTransition.isDown, !fnHold.isDown else { return }
-        // Re-register to heal a timed-out tap or revoked backend.
+
+        guard configuration.holdEnabled || configuration.handsFreeEnabled else {
+            updateCalibrationForAvailability()
+            return
+        }
+
+        let hidHealthy = !HIDEventMonitor.liveTapsEnabled || hidMonitor.verifyLive()
+        let comboHealthy = ShortcutSlot.allCases.allSatisfy { slot in
+            guard slotEnabled(slot) else { return true }
+            if case .combo = trigger(for: slot).kind {
+                return comboMonitor(for: slot).isLive
+            }
+            return true
+        }
+        let needsHidHeal = !hidHealthy && trusted
+        if !needsHidHeal && comboHealthy {
+            updateCalibrationForAvailability()
+            return
+        }
+        // Heal a timed-out tap or failed combo registration.
         start()
     }
 
@@ -253,22 +286,24 @@ final class ShortcutDispatch {
         updateSlot(trigger, slot: .handsFree)
     }
 
-    /// Per-slot save gate: same-slot equality is a no-op, a trigger that
-    /// conflicts with the OTHER slot is refused without saving (preset picks
-    /// route through here too — no bypass), otherwise cancel the active
-    /// session, save, reset that slot's calibration, and re-register.
-    /// Any successful save re-enables its own slot (F1 per-slot: today's
-    /// Delete is a one-way door per slot — a fresh explicit assignment is
-    /// intent to have that slot on).
+    /// Per-slot save gate: same-slot equality is a no-op, bare `fn` into
+    /// hands-free is refused when macOS owns `fn` taps, a trigger that
+    /// conflicts with the OTHER slot is refused without saving, otherwise
+    /// cancel the active session, save, reset that slot's calibration, and
+    /// re-register. Any successful save re-enables its own slot.
     private func updateSlot(_ trigger: ShortcutTrigger, slot: ShortcutSlot) -> TriggerUpdateResult {
         let fixed = trigger.withInteraction(slot == .hold ? .holdToTalk : .handsFree)
         let current = slot == .hold ? configuration.hold : configuration.handsFree
         let other = slot == .hold ? configuration.handsFree : configuration.hold
         guard fixed != current else { return .unchanged }
+        if slot == .handsFree,
+           !fixed.kind.supportsHandsFreeToggle,
+           systemFnUsageProvider() != .none
+        {
+            log.info("save blocked for hands-free: \(String(describing: fixed.kind), privacy: .public) requires hold-only while macOS owns fn taps")
+            return .blocked
+        }
         guard !fixed.kind.conflictsWith(other.kind) else {
-            // Silent refusals are undebuggable: name both kinds so device
-            // trails show what the person attempted (key metadata only —
-            // kinds never carry transcript text).
             log.info("save blocked for \(slot == .hold ? "hold" : "hands-free", privacy: .public): \(String(describing: fixed.kind), privacy: .public) vs other \(String(describing: other.kind), privacy: .public)")
             return .blocked
         }
@@ -302,11 +337,7 @@ final class ShortcutDispatch {
     }
 
     /// The recorder's Remove (and ⌫): the slot goes back to deliberately
-    /// empty rather than merely switched off. Leaving the old trigger in
-    /// place made a clear invisible — the row kept drawing keys that could
-    /// no longer fire. Unassigned registers nothing, claims nothing, and
-    /// calibrates as `.notSet`; recording again re-enables the slot through
-    /// `updateSlot`.
+    /// empty rather than merely switched off.
     func clearSlot(_ slot: ShortcutSlot) {
         cancelActiveSession()
         if slot == .hold {
@@ -321,12 +352,15 @@ final class ShortcutDispatch {
     }
 
     /// Atomic exchange of the two slots' triggers (the modal's Swap).
-    /// Always safe without gating: the kind *pair* is unchanged, only the
-    /// assignment flips, so no new conflict can exist by construction.
-    /// Stored interactions are re-enforced (belt-and-braces over the
-    /// migration-time enforcement). Enable flags stay with their slots:
-    /// swapping keys must never silently turn a way to talk on or off.
+    /// Refuses moving bare `fn` into hands-free when macOS owns `fn` taps
+    /// (`SystemFnUsage != .none`). Enable flags stay with their slots.
     func swapHoldAndHandsFree() {
+        if !configuration.hold.kind.supportsHandsFreeToggle,
+           systemFnUsageProvider() != .none
+        {
+            log.info("swap blocked: cannot place bare fn in hands-free while macOS owns fn taps")
+            return
+        }
         cancelActiveSession()
         let oldHold = configuration.hold
         configuration.hold = configuration.handsFree.withInteraction(.holdToTalk)
@@ -336,11 +370,7 @@ final class ShortcutDispatch {
         log.info("shortcuts swapped between slots")
     }
 
-    /// Reset both slots to factory triggers with both slots on: the
-    /// modal's Reset. One cancel, one save, one registration — not a
-    /// pair of gated saves (factory values satisfy the policy by test,
-    /// so no gate is needed, and unchanged-slot saves would skip the
-    /// flag restore).
+    /// Reset both slots to factory triggers with both slots on.
     func resetToDefaults() {
         cancelActiveSession()
         configuration = DualShortcutConfiguration.default()
@@ -377,8 +407,6 @@ final class ShortcutDispatch {
     }
 
     func resetCalibration(for slot: ShortcutSlot) {
-        // An unassigned slot is never "untested" — it is deliberately
-        // empty. Preserve notSet so the row never degrades.
         if case .unassigned = trigger(for: slot).kind {
             setCalibration(.notSet, for: slot)
             return
@@ -435,20 +463,12 @@ final class ShortcutDispatch {
     }
 
     private func updateCalibrationForAvailability() {
-        // No both-off early return: the loop maps disabled slots to
-        // notSet, so an off slot reads as off (never stale untested).
-        // Suspended is the only skip: a transient teardown, not a state.
         guard !isSuspended else { return }
         for slot in ShortcutSlot.allCases {
-            // Disabled slots report notSet (set by reset/start paths),
-            // never availability states — an off slot has nothing to
-            // receive, and must never read as broken.
             if !slotEnabled(slot) {
                 setCalibration(.notSet, for: slot)
                 continue
             }
-            // Unassigned slots report notSet (set by reset/start paths),
-            // never availability states — there is nothing to receive.
             if case .unassigned = trigger(for: slot).kind {
                 setCalibration(.notSet, for: slot)
             } else if slotRequiresAccessibility(slot), !isAccessibilityTrusted() {
@@ -462,8 +482,6 @@ final class ShortcutDispatch {
     private func slotBackendsLive(_ slot: ShortcutSlot) -> Bool {
         switch trigger(for: slot).kind {
         case .unassigned:
-            // Unreachable by construction (availability skips unassigned
-            // slots); true so no caller can derive "not received" from it.
             return true
         case .combo:
             return comboMonitor(for: slot).isLive
@@ -486,50 +504,73 @@ final class ShortcutDispatch {
         }
     }
 
-    // MARK: - Event routing (the single async hop)
+    // MARK: - Event routing (serialized FIFO task chain)
+
+    private func enqueueCoordinatorAction(_ work: @escaping @MainActor (ShortcutDispatch) async -> Void) {
+        let prior = pendingAction
+        pendingAction = Task { @MainActor [weak self] in
+            _ = await prior?.value
+            guard let self else { return }
+            await work(self)
+        }
+    }
 
     /// Any reconfiguration orphans the in-flight release path, so the
     /// active session (if any) is cancelled deterministically instead of
     /// stranding it recording. Cancel is discard-only.
     private func cancelActiveSession() {
-        guard let id = activeSessionID else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            await self.coordinator.cancel(id)
+        enqueueCoordinatorAction { dispatch in
+            guard let id = dispatch.activeSessionID else { return }
+            await dispatch.coordinator.cancel(id)
         }
     }
 
-    /// Cancel that cannot miss a begin still in flight. A combination press
-    /// can arrive before the routed begin's ID has landed; spinning on the
-    /// generation gate (the same one the double-tap conversion uses) makes
-    /// "discard this hold" deterministic instead of a race.
-    private func cancelSessionAfterPendingBegins() {
-        let generation = beginGeneration
-        Task { [weak self] in
-            guard let self else { return }
-            while self.beginSettledThrough < generation {
-                await Task.yield()
-            }
-            if let current = self.activeSessionID {
-                await self.coordinator.cancel(current)
-            }
-        }
-    }
-
-    /// One Task per user gesture at most (begin/finish only — repeats and
-    /// ignores never hop). The 12 "no per-event task" limit constrains
-    /// event streams, not gesture intents.
+    /// One Task per user gesture at most (begin/finish/toggle/cancel only —
+    /// repeats and ignores never hop).
     private func receive(_ event: ShortcutEvent, from slot: ShortcutSlot) {
         receive(event, from: slot, at: ContinuousClock().now)
     }
 
+    /// Cooldown timestamp after stopping a hands-free session with bare `fn`,
+    /// absorbing any duplicate `.flagsChanged` echo macOS HIToolbox/Globe emits
+    /// on a quick `fn` tap so a single click to stop hands-free never
+    /// cancels finalization or re-triggers `DoubleTapTracker`.
+    private var fnHandsFreeStoppedAt: ContinuousClock.Instant?
+    nonisolated static let fnHandsFreeStopCooldown: Duration = .milliseconds(400)
+
     /// Time-injected core: production passes `.now`, tests script instants.
     private func receive(_ event: ShortcutEvent, from slot: ShortcutSlot, at now: ContinuousClock.Instant) {
-        // Bare fn bypasses the shared machine (which begins instantly):
-        // its taps belong to macOS, only sustained holds are Oto's.
-        if slot == .hold, isFnHold {
+        // Bare fn only needs tap-protection when macOS owns quick fn taps
+        // (`AppleFnUsageType != 0`). When set to "Do Nothing" (`.none`), fn
+        // runs through the instant hold path with full double-tap support.
+        if slot == .hold, isFnTapProtected {
             receiveFnHold(event, at: now)
             return
+        }
+        if slot == .hold, isFnHold {
+            // While within the post-stop cooldown after clicking `fn` to close
+            // hands-free mode, swallow any trailing `.keyUp` or macOS Globe
+            // echo `.flagsChanged` pulse so it can never re-arm `holdTap` or
+            // restart hands-free.
+            if let stoppedAt = fnHandsFreeStoppedAt,
+               stoppedAt.duration(to: now) < Self.fnHandsFreeStopCooldown
+            {
+                holdTap.reset()
+                holdTransition.isDown = false
+                return
+            }
+            // When a hands-free session is currently active, a single click of
+            // `fn` stops and finalizes it immediately on `.keyDown` (no hold
+            // required) and arms the cooldown against macOS Globe echoes.
+            if case .keyDown(isRepeat: false) = event, isHandsFreeSessionActive {
+                noteObserved(down: true, slot: .hold)
+                noteObserved(down: false, slot: .hold)
+                fnHandsFreeStoppedAt = now
+                holdTap.reset()
+                holdTransition.isDown = false
+                stopActiveHandsFreeSessionOnClick()
+                return
+            }
         }
         if case .keyDown = event {
             noteObserved(down: true, slot: slot)
@@ -541,18 +582,16 @@ final class ShortcutDispatch {
             // tap: the release is swallowed, so the tracker must forget it.
             holdTap.reset()
         }
-        // Modes are slot properties: hold is always hold-to-talk,
-        // hands-free always toggles. The transition machines are already
-        // mode-parameterized, so each slot steps its own.
         let mode: InteractionMode = slot == .hold ? .holdToTalk : .handsFree
         let action: ShortcutTransition
         if slot == .hold {
             action = holdTransition.step(.event(event), mode: mode)
-            if case .keyDown = event {
+            if case .keyDown(isRepeat: false) = event {
                 holdTap.down(at: now)
             } else if case .keyUp = event {
                 if holdTap.up(at: now) {
                     convertDoubleTapToHandsFree()
+                    return
                 }
             }
         } else {
@@ -561,14 +600,11 @@ final class ShortcutDispatch {
         route(action, mode: mode)
     }
 
-    /// Bare-fn hold path. fn taps belong to macOS (emoji, dictation,
-    /// remap, or nothing — varies by device/setting and is unobservable),
-    /// so Oto commits nothing until a sustained hold: early release drops
-    /// silently (no session, no pill, no duck, no conversion, no
-    /// calibration trace). Confirmed holds route exactly like any hold.
-    /// Events pass through untouched either way — the native tap behavior
-    /// is byte-identical. fn never feeds the double-tap tracker: taps are
-    /// system gestures, converting them would double-fire against macOS.
+    /// Tap-protected bare-fn hold path (active when `SystemFnUsage != .none`).
+    /// Quick taps under `FnHoldConfirm.threshold` drop silently so macOS
+    /// handles them untouched; sustained holds confirm and route normally;
+    /// combination use (`fn+Arrow`, `fn+click`) drops pre-confirm or cancels
+    /// post-confirm cleanly without stranding `fnHold.isDown`.
     private func receiveFnHold(_ event: ShortcutEvent, at now: ContinuousClock.Instant) {
         switch event {
         case .keyDown(let isRepeat):
@@ -577,15 +613,10 @@ final class ShortcutDispatch {
             fnConfirmTask = Task { [weak self] in
                 try? await Task.sleep(for: FnHoldConfirm.threshold)
                 guard let self else { return }
-                // Same press, still held, still fn-hold configured and live.
-                // (Reconfig/teardown disarms via stop(); suspend/Escape too.)
                 guard self.fnHold.shouldConfirm(at: ContinuousClock().now),
-                      self.isFnHold,
+                      self.isFnTapProtected,
                       self.slotEnabled(.hold), !self.isSuspended
                 else { return }
-                // fn+key/mouse while held is a system gesture (fn+arrows,
-                // fn+click): committing would hijack it. The HID layer
-                // already tracks this per hold code.
                 if self.hidMonitor.isInCombination(code: UInt16(kVK_Function)) {
                     self.fnHold.reset()
                     self.log.debug("fn hold dropped (combination use)")
@@ -611,43 +642,66 @@ final class ShortcutDispatch {
         case .monitorLost:
             dropFnPending()
         case .combinationBegan:
-            // fn's own confirmation path already drops on combination use
-            // (isInCombination); the routed event never targets fn.
-            break
+            let wasConfirmed = fnHold.isConfirmed
+            dropFnPending()
+            if wasConfirmed {
+                cancelActiveSession()
+            }
         }
     }
 
-    /// Disarm fn-hold without touching the coordinator (nothing began, so
-    /// there is nothing to cancel — the whole point of confirmation).
-    /// A confirmed session is never armed here: release routes finish
-    /// first, so drop means no live session exists.
     private func dropFnPending() {
         fnConfirmTask?.cancel()
         fnConfirmTask = nil
         fnHold.reset()
     }
-    /// Double-tap confirmed on the hold slot: the tap's own micro-session
-    /// is cancelled best-effort (non-terminal → discarded pre-insertion;
-    /// near-impossible race watched by the matrix), then the existing
-    /// hands-free toggle path begins. Sequenced in ONE Task — cancel
-    /// before toggle — so the toggle can never run ahead of the cancel
-    /// and nil on a still-live micro. The Task first spins past every
-    /// begin routed before the confirm (generation gate): down2's begin
-    /// id may not have landed yet, and cancelling the stale id while the
-    /// toggle meets the live micro nils the conversion. Zero new
-    /// coordinator calls.
+
+    /// True while a hands-free session is currently active (`starting` or
+    /// `recording`), tracked synchronously as intents are dispatched so a
+    /// single click of the hold key (`fn` or Right Option) immediately stops
+    /// hands-free on `.keyDown` instead of requiring a hold+release.
+    private var isHandsFreeSessionActive = false
+
+    /// Stops an active hands-free session immediately when the user clicks
+    /// the hold key once. If the previous hands-free session had already
+    /// ended on its own (e.g. error/timeout), falls back to starting hold.
+    private func stopActiveHandsFreeSessionOnClick() {
+        isHandsFreeSessionActive = false
+        enqueueCoordinatorAction { dispatch in
+            let state = await dispatch.coordinator.state
+            switch state {
+            case .starting(let ctx) where ctx.interaction == .handsFree,
+                 .recording(let ctx) where ctx.interaction == .handsFree:
+                Task { await dispatch.coordinator.toggleHandsFree() }
+            default:
+                if state.isTerminal {
+                    dispatch.fnHandsFreeStoppedAt = nil
+                    dispatch.holdTransition.isDown = true
+                    dispatch.sounds?.play(.listening)
+                    if let id = await dispatch.coordinator.beginHold() {
+                        dispatch.activeSessionID = id
+                    }
+                } else if let id = dispatch.activeSessionID {
+                    Task { await dispatch.coordinator.finish(id) }
+                }
+            }
+        }
+    }
+
+    /// Double-tap confirmed on the hold slot: serialized strictly behind any
+    /// in-flight `begin` via `pendingAction`, cancels the tap's micro-session
+    /// and starts a fresh hands-free session without racing `route(.finish)`.
     private func convertDoubleTapToHandsFree() {
-        let generation = beginGeneration
-        Task { [weak self] in
-            guard let self else { return }
-            while self.beginSettledThrough < generation {
-                await Task.yield()
+        isHandsFreeSessionActive = true
+        enqueueCoordinatorAction { dispatch in
+            if let current = dispatch.activeSessionID {
+                await dispatch.coordinator.cancel(current)
             }
-            if let current = self.activeSessionID {
-                await self.coordinator.cancel(current)
-            }
-            if let newID = await self.coordinator.toggleHandsFree() {
-                self.activeSessionID = newID
+            if let newID = await dispatch.coordinator.toggleHandsFree() {
+                dispatch.activeSessionID = newID
+                dispatch.isHandsFreeSessionActive = true
+            } else {
+                dispatch.isHandsFreeSessionActive = false
             }
         }
     }
@@ -655,18 +709,14 @@ final class ShortcutDispatch {
     private func receiveEscape() {
         _ = holdTransition.step(.escape, mode: .holdToTalk)
         _ = handsFreeTransition.step(.escape, mode: .handsFree)
+        holdTap.reset()
+        isHandsFreeSessionActive = false
         dropFnPending()
-        guard let id = activeSessionID else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            await self.coordinator.cancel(id)
-        }
+        cancelActiveSession()
     }
 
-    /// Escape-cancel availability (escape workstream): Escape rides the one
-    /// shared HID tap, which needs Accessibility trust. Menu-compat: kept as
-    /// a single derived value (shared-tap liveness) so the menu compiles
-    /// unchanged; per-slot escape state follows each slot's calibration row.
+    /// Escape-cancel availability: Escape rides the one shared HID tap, which
+    /// needs Accessibility trust.
     var isEscapeCancelAvailable: Bool {
         hidMonitor.isLive
     }
@@ -678,7 +728,7 @@ final class ShortcutDispatch {
     /// Test hook: drive a backend event for a slot without hardware.
     func receiveForTests(_ event: ShortcutEvent, from slot: ShortcutSlot) { receive(event, from: slot) }
     func receiveEscapeForTests() { receiveEscape() }
-    /// Test hook: deterministic time-injected variant (double-tap tests).
+    /// Test hook: deterministic time-injected variant (double-tap / fn tests).
     func receiveForTests(_ event: ShortcutEvent, from slot: ShortcutSlot, at now: ContinuousClock.Instant) {
         receive(event, from: slot, at: now)
     }
@@ -688,47 +738,57 @@ final class ShortcutDispatch {
         case .ignore, .reset:
             break
         case .cancel:
-            // The press was a shortcut, not dictation: discard it (nothing
-            // has been inserted yet) and never finish it on the release the
-            // monitor swallows.
-            cancelSessionAfterPendingBegins()
+            isHandsFreeSessionActive = false
+            cancelActiveSession()
         case .begin:
-            // Press cue first: it must not sit behind the generation gate or
-            // the async hop below. A press that turns into a shortcut cancels
-            // after this and cancels nothing else — the tone already played,
-            // which is the honest cost of not delaying every press to classify
-            // it (a modifier being used as a chord is a rare gesture).
+            // Press cue synchronously on hold begin so it never sits behind
+            // the async hop.
             sounds?.play(.listening)
-            // Generation-gated by convertDoubleTapToHandsFree: bumped
-            // synchronously here, settled by the Task after storing.
-            beginGeneration += 1
-            let generation = beginGeneration
-            // Hands-free begins through the toggle path so the session is
-            // recorded with the mode the person actually chose (audit F1).
-            // `beginHold` would label it `.holdToTalk` and leave the tested
-            // toggle path dead in production. Finish below is mode-agnostic.
-            if mode == .handsFree {
-                Task { [weak self] in
-                    guard let self else { return }
-                    defer { self.beginSettledThrough = max(self.beginSettledThrough, generation) }
-                    if let id = await self.coordinator.toggleHandsFree() {
-                        self.activeSessionID = id
+            enqueueCoordinatorAction { dispatch in
+                if mode == .handsFree {
+                    if let id = await dispatch.coordinator.toggleHandsFree() {
+                        dispatch.activeSessionID = id
+                        dispatch.isHandsFreeSessionActive = true
                     }
-                }
-            } else {
-                Task { [weak self] in
-                    guard let self else { return }
-                    defer { self.beginSettledThrough = max(self.beginSettledThrough, generation) }
-                    if let id = await self.coordinator.beginHold() {
-                        self.activeSessionID = id
+                } else {
+                    if let id = await dispatch.coordinator.beginHold() {
+                        dispatch.activeSessionID = id
+                        dispatch.isHandsFreeSessionActive = false
                     }
                 }
             }
+        case .toggle:
+            enqueueCoordinatorAction { dispatch in
+                let state = await dispatch.coordinator.state
+                if case .starting(let ctx) = state, ctx.interaction == .handsFree {
+                    // Stopping hands-free runs finalizeSession asynchronously so
+                    // Escape can still interrupt mid-finalize without deadlocking.
+                    dispatch.isHandsFreeSessionActive = false
+                    Task { await dispatch.coordinator.toggleHandsFree() }
+                    return
+                }
+                if case .recording(let ctx) = state, ctx.interaction == .handsFree {
+                    dispatch.isHandsFreeSessionActive = false
+                    Task { await dispatch.coordinator.toggleHandsFree() }
+                    return
+                }
+                // Starting a new hands-free session (or harmless no-op when a
+                // hold-to-talk session is already active).
+                if let id = await dispatch.coordinator.toggleHandsFree() {
+                    dispatch.activeSessionID = id
+                    dispatch.isHandsFreeSessionActive = true
+                    dispatch.sounds?.play(.listening)
+                }
+            }
         case .finish:
-            guard let id = activeSessionID else { break }
-            Task { [weak self] in
-                guard let self else { return }
-                await self.coordinator.finish(id)
+            enqueueCoordinatorAction { dispatch in
+                guard let id = dispatch.activeSessionID else { return }
+                dispatch.isHandsFreeSessionActive = false
+                // Finalization awaits speech+polish+insertion; spawn so a
+                // subsequent Escape or double-tap cancel can interrupt it
+                // immediately while still guaranteeing `activeSessionID` was
+                // read strictly after the preceding `begin`.
+                Task { await dispatch.coordinator.finish(id) }
             }
         }
     }

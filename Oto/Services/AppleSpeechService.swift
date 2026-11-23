@@ -8,6 +8,7 @@
 import AVFoundation
 import Foundation
 import Speech
+import Synchronization
 import os
 
 /// Runtime failures from the live speech path. `prepare()` throws
@@ -34,73 +35,93 @@ extension SpeechSessionError: LocalizedError {
 }
 
 /// Realtime feeder: the ONLY object the audio thread touches. Converter +
-/// continuation live behind one lock; session state stays on the actor.
-/// `feed` drops (never blocks) when no session is configured.
-///
-/// Concurrency (Swift 6, default MainActor isolation): the lock is the
-/// isolation. Shared mutable state is `nonisolated(unsafe)` — manually
-/// synchronized memory, every access under `lock` — and the methods are
-/// plain checked `nonisolated`. `unsafe` names exactly the trust: remove
-/// the lock discipline and nothing compiler-side saves us. The audio
-/// thread can never hop to an actor, so actor isolation is not an
-/// available alternative for this type. `NSLock` itself is Sendable
-/// (`NS_SWIFT_SENDABLE` in the 27 SDK).
-final class AudioFeedBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private nonisolated(unsafe) var continuation: AsyncStream<AnalyzerInput>.Continuation?
-    private nonisolated(unsafe) var format: AVAudioFormat?
-    private nonisolated(unsafe) var conversionFailures = 0
-    private let converter = BufferConverter()
-
-    nonisolated func createStream() -> AsyncStream<AnalyzerInput> {
-        lock.lock()
-        defer { lock.unlock() }
-        let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-        self.continuation = continuation
-        conversionFailures = 0
-        return stream
+/// continuation live behind one `Synchronization.Mutex`; session state stays
+/// on the actor. `feed` drops (never blocks) when no session is configured.
+nonisolated final class AudioFeedBox: Sendable {
+    private struct State {
+        var continuation: AsyncStream<AnalyzerInput>.Continuation?
+        var format: AVAudioFormat?
+        var conversionFailures = 0
+        let converter = BufferConverter()
     }
 
-    nonisolated func configure(format: AVAudioFormat) {
-        lock.lock()
-        defer { lock.unlock() }
-        self.format = format
+    private struct BufferBox: @unchecked Sendable {
+        let buffer: AVAudioPCMBuffer
     }
 
-    nonisolated func feed(_ buffer: AVAudioPCMBuffer) {
-        lock.lock()
-        guard let continuation, let format else {
-            lock.unlock()
-            return
-        }
-        let converted: AVAudioPCMBuffer?
-        do {
-            converted = try converter.convertBuffer(buffer, to: format)
-        } catch {
-            // Counted, never logged per-buffer (realtime thread): surfaced
-            // once per session at finish (bt-sco-flap.md). Silence with a
-            // number beats silence with a shrug.
-            conversionFailures += 1
-            converted = nil
-        }
-        lock.unlock()
-        if let converted {
-            continuation.yield(AnalyzerInput(buffer: converted))
+    private let state = Mutex(State())
+
+    init() {}
+
+    func createStream() -> AsyncStream<AnalyzerInput> {
+        state.withLock { s in
+            s.converter.reset()
+            let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+            s.continuation = continuation
+            s.conversionFailures = 0
+            return stream
         }
     }
 
-    nonisolated func conversionFailureCount() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return conversionFailures
+    func configure(format: AVAudioFormat) {
+        state.withLock { s in
+            s.format = format
+        }
     }
 
-    nonisolated func finishInput() {
-        lock.lock()
-        defer { lock.unlock() }
-        continuation?.finish()
-        continuation = nil
-        format = nil
+    func feed(_ buffer: AVAudioPCMBuffer) {
+        let boxed = BufferBox(buffer: buffer)
+        let deliverable: (AsyncStream<AnalyzerInput>.Continuation, AnalyzerInput)? = state.withLock { s in
+            guard let continuation = s.continuation, let format = s.format else {
+                return nil
+            }
+            let converted: AVAudioPCMBuffer
+            do {
+                converted = try s.converter.convertBuffer(boxed.buffer, to: format)
+            } catch {
+                // Counted, never logged per-buffer (realtime thread): surfaced
+                // once per session at finish (bt-sco-flap.md). Silence with a
+                // number beats silence with a shrug.
+                s.conversionFailures += 1
+                return nil
+            }
+            guard converted.frameLength > 0 else { return nil }
+            return (continuation, AnalyzerInput(buffer: converted))
+        }
+        if let (continuation, input) = deliverable {
+            continuation.yield(input)
+        }
+    }
+
+    func conversionFailureCount() -> Int {
+        state.withLock { $0.conversionFailures }
+    }
+
+    func finishInput() {
+        let pending: (AsyncStream<AnalyzerInput>.Continuation, AnalyzerInput?)? = state.withLock { s in
+            guard let continuation = s.continuation else {
+                s.format = nil
+                s.converter.reset()
+                return nil
+            }
+            var trailing: AnalyzerInput?
+            if let format = s.format,
+               let flushed = try? s.converter.flush(to: format),
+               flushed.frameLength > 0
+            {
+                trailing = AnalyzerInput(buffer: flushed)
+            }
+            s.continuation = nil
+            s.format = nil
+            s.converter.reset()
+            return (continuation, trailing)
+        }
+        if let (continuation, trailing) = pending {
+            if let trailing {
+                continuation.yield(trailing)
+            }
+            continuation.finish()
+        }
     }
 }
 
@@ -124,6 +145,7 @@ actor AppleSpeechService: SpeechServing {
     private var analyzer: SpeechAnalyzer?
     private var resultTask: Task<Void, Never>?
     private var finalizedText = ""
+    private var contextualTerms: [String] = []
 
     init(
         relay: AudioBufferRelay,
@@ -133,13 +155,34 @@ actor AppleSpeechService: SpeechServing {
         self.permissions = permissions
     }
 
+    func setContextualStrings(_ terms: [String]) async {
+        contextualTerms = terms
+    }
+
     /// Resolve locale → verify assets → build session. Inspects readiness
     /// ONLY: anything but ready throws a specific `SpeechReadiness` with a
     /// recovery message. This method never downloads.
     func prepare() async throws {
+        // Defensively tear down any stale active session so a leaked analyzer
+        // or relay sink can never corrupt a new dictation.
+        if analyzer != nil || transcriber != nil || resultTask != nil {
+            await cancel()
+        }
+
+        var prepared = false
+        defer {
+            if !prepared {
+                relay.reset()
+            }
+        }
+
         // 1. Microphone first (most actionable recovery).
         guard await permissions.ensureMicrophone() else {
             throw SpeechReadiness.microphoneDenied
+        }
+
+        guard SpeechTranscriber.isAvailable else {
+            throw SpeechReadiness.unsupportedLocale
         }
 
         // 2. Resolve the system locale against what Apple supports. P3:
@@ -166,11 +209,14 @@ actor AppleSpeechService: SpeechServing {
         PerfTrace.end(.localeResolve, tLocale)
 
         // 3. Readiness inspection — probe module for the status call.
+        // Omit volatile results and audioTimeRange unless a live partial
+        // listener is wired so the recognizer does no unnecessary work.
+        let reportingOptions: Set<SpeechTranscriber.ReportingOption> = onPartial != nil ? [.volatileResults] : []
         let transcriber = SpeechTranscriber(
             locale: resolved,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
-            attributeOptions: [.audioTimeRange]
+            reportingOptions: reportingOptions,
+            attributeOptions: []
         )
         let tProbe = PerfTrace.begin(.assetProbe)
         let installed = await SpeechTranscriber.installedLocales
@@ -192,9 +238,20 @@ actor AppleSpeechService: SpeechServing {
         }
         guard readiness == .ready else { throw readiness }
 
-        // 4. Build the single-analyzer session.
+        // 4. Build the single-analyzer session with lingering model retention
+        // and user-initiated priority for responsive consecutive dictations.
         let tWarm = PerfTrace.begin(.engineWarm)
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let options = SpeechAnalyzer.Options(priority: .userInitiated, modelRetention: .lingering)
+        let analyzer = SpeechAnalyzer(modules: [transcriber], options: options)
+        if !contextualTerms.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings[.general] = contextualTerms
+            do {
+                try await analyzer.setContext(context)
+            } catch {
+                log.notice("failed to set contextual strings: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             PerfTrace.end(.engineWarm, tWarm)
             throw SpeechSessionError.engineFailure("no compatible audio format")
@@ -213,13 +270,19 @@ actor AppleSpeechService: SpeechServing {
         finalizedText = ""
 
         resultTask = Task { [weak self] in
-            await self?.consumeResults()
+            await self?.consumeResults(for: transcriber)
         }
 
         do {
             try await analyzer.start(inputSequence: stream)
         } catch {
             PerfTrace.end(.engineWarm, tWarm)
+            feedBox.finishInput()
+            await analyzer.cancelAndFinishNow()
+            let task = resultTask
+            resultTask = nil
+            task?.cancel()
+            await task?.value
             teardown()
             throw SpeechSessionError.engineFailure(error.localizedDescription)
         }
@@ -228,25 +291,32 @@ actor AppleSpeechService: SpeechServing {
         // relay flushes here in order (capture-first, no lost first words).
         let feedBox = self.feedBox
         relay.attach { buffer in feedBox.feed(buffer) }
+        prepared = true
         PerfTrace.end(.engineWarm, tWarm)
         log.info("speech prepared")
     }
 
-    /// Close input → drain once → finalize through end of input → collect
-    /// finals → release. Then the drop counter decides: past threshold the
-    /// transcript is untrustworthy and this throws instead of returning it.
+    /// Close input → flush trailing frames → finalize through end of input →
+    /// drain all final results → release. Then the drop counter decides: past
+    /// threshold the transcript is untrustworthy and this throws instead.
     func finish() async throws -> String {
         feedBox.finishInput()
+        let task = resultTask
         let tFinal = PerfTrace.begin(.finalizeAwait)
         do {
             try await analyzer?.finalizeAndFinishThroughEndOfInput()
+            PerfTrace.end(.finalizeAwait, tFinal)
+            // Await natural completion of `consumeResults` so every final
+            // result emitted during finalization drains into `finalizedText`.
+            await task?.value
         } catch {
+            PerfTrace.end(.finalizeAwait, tFinal)
             // Non-fatal by itself (Yap-proven): finals collected so far
-            // still count; teardown proceeds below.
+            // still count; cancel and await the consumer before teardown.
             log.error("finalize failed, keeping collected finals")
+            task?.cancel()
+            await task?.value
         }
-        PerfTrace.end(.finalizeAwait, tFinal)
-        resultTask?.cancel()
         resultTask = nil
 
         let text = finalizedText
@@ -273,18 +343,20 @@ actor AppleSpeechService: SpeechServing {
     func cancel() async {
         feedBox.finishInput()
         await analyzer?.cancelAndFinishNow()
-        resultTask?.cancel()
+        let task = resultTask
         resultTask = nil
+        task?.cancel()
+        await task?.value
         teardown()
         log.info("speech cancelled")
     }
 
     // MARK: - Private
 
-    private func consumeResults() async {
-        guard let transcriber else { return }
+    private func consumeResults(for transcriber: SpeechTranscriber) async {
         do {
             for try await result in transcriber.results {
+                guard !Task.isCancelled, self.transcriber === transcriber else { break }
                 let text = String(result.text.characters)
                 if result.isFinal {
                     finalizedText += text

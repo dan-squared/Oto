@@ -169,4 +169,63 @@ struct HistoryStoreTests {
         let texts = Set(store.entries.map(\.finalText))
         #expect(texts.count == 20)
     }
+
+    @Test func loadPersistsExpiredTrimToDisk() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let persistence = LocalPersistence(directory: dir)
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        let ancient = Date().addingTimeInterval(TimeInterval(-31 * 24 * 3600))
+        let fresh = Date()
+        try await VersionedStoreFile.save(
+            [
+                HistoryEntry(finalText: "expired", createdAt: ancient),
+                HistoryEntry(finalText: "recent", createdAt: fresh),
+            ],
+            filename: HistoryStore.filename,
+            via: persistence
+        )
+        let store = HistoryStore(persistence: persistence, defaults: defaults)
+        await store.load()
+        #expect(store.entries.count == 1)
+        #expect(store.entries[0].finalText == "recent")
+        // Verify expired entry was purged from disk too.
+        let rawOnDisk = await VersionedStoreFile.load(HistoryEntry.self, filename: HistoryStore.filename, via: persistence)
+        #expect(rawOnDisk.count == 1)
+        #expect(rawOnDisk[0].finalText == "recent")
+    }
+
+    @Test func clearAllPurgesHistoryBackups() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let persistence = LocalPersistence(directory: dir)
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        try await persistence.write(Data("{{corrupt".utf8), filename: HistoryStore.filename)
+        await persistence.moveAside(filename: HistoryStore.filename, reason: "corrupt")
+        let backups = dir.appendingPathComponent("Backups", isDirectory: true)
+        #expect(((try? FileManager.default.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil)) ?? []).count == 1)
+
+        let store = HistoryStore(persistence: persistence, defaults: defaults)
+        await store.clearAll()
+        let remaining = (try? FileManager.default.contentsOfDirectory(at: backups, includingPropertiesForKeys: nil)) ?? []
+        #expect(remaining.isEmpty)
+    }
+
+    @Test func loadDoesNotWipeEarlyRecord() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let persistence = LocalPersistence(directory: dir)
+        let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
+        try await VersionedStoreFile.save(
+            [HistoryEntry(finalText: "from disk", createdAt: Date().addingTimeInterval(-60))],
+            filename: HistoryStore.filename,
+            via: persistence
+        )
+        let store = HistoryStore(persistence: persistence, defaults: defaults)
+        store.setEnabled(true)
+        await store.record(finalText: "early live", bundleID: nil)
+        await store.load()
+        let texts = Set(store.entries.map(\.finalText))
+        #expect(texts == ["early live", "from disk"])
+    }
 }

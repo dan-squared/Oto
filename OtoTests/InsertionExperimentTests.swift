@@ -65,6 +65,20 @@ struct InsertionExperimentTests {
         #expect(PasteKeycodeResolver.fallback(for: "q") == UInt16(kVK_ANSI_V))
     }
 
+    @Test func translateRejectsUndersizedLayoutBuffer() {
+        let tiny = Data(repeating: 0, count: max(1, MemoryLayout<UCKeyboardLayout>.size - 1))
+        #expect(PasteKeycodeResolver.translate(
+            keyCode: UInt16(kVK_ANSI_V),
+            layoutData: tiny,
+            keyboardType: 0
+        ) == nil)
+        #expect(PasteKeycodeResolver.translate(
+            keyCode: UInt16(kVK_ANSI_V),
+            layoutData: Data(),
+            keyboardType: 0
+        ) == nil)
+    }
+
     @Test func experimentDefaultsMatchToday() {
         let defaults = UserDefaults(suiteName: "test.oto.\(UUID().uuidString)")!
         let xp = InsertionExperiment.current(defaults: defaults)
@@ -85,5 +99,53 @@ struct InsertionExperimentTests {
         // Unknown source strings fail safe to private (today).
         defaults.set("quantum", forKey: InsertionExperiment.sourceKey)
         #expect(!InsertionExperiment.current(defaults: defaults).useDefaultEventSource)
+    }
+
+    @Test func chromiumMajorVersionParsesFourPartVersions() {
+        #expect(ChromiumRaceDetector.chromiumMajorVersion("155.0.7123.42") == 155)
+        #expect(ChromiumRaceDetector.chromiumMajorVersion("156.1.2.3") == 156)
+        #expect(ChromiumRaceDetector.chromiumMajorVersion("157.0.0.1") == 157)
+        #expect(ChromiumRaceDetector.chromiumMajorVersion("A") == nil)
+        #expect(ChromiumRaceDetector.chromiumMajorVersion("Current") == nil)
+        #expect(ChromiumRaceDetector.chromiumMajorVersion("155.0.1") == nil)
+    }
+
+    @Test func directTypingChunksWithoutSplittingSurrogatesAndHandlesNewlines() {
+        let emoji = "😀" // 2 UTF-16 code units
+        let nineteen = String(repeating: "a", count: 19) + emoji
+        let strokes = DirectTextTyping.strokes(for: nineteen)
+        #expect(strokes.count == 2)
+        if case .text(let first) = strokes[0], case .text(let second) = strokes[1] {
+            #expect(first.count == 19)
+            #expect(second.count == 2)
+        } else {
+            Issue.record("expected two text strokes")
+        }
+
+        let multiline = DirectTextTyping.strokes(for: "hi\r\nthere\nnow")
+        #expect(multiline.count == 5)
+        #expect(multiline[1] == .lineBreak)
+        #expect(multiline[3] == .lineBreak)
+    }
+
+    @Test func smartSpacingAddsLeadingSpaceAfterWordsAndSentencePunctuation() {
+        #expect(SmartSpacing.apply(to: "world", characterBeforeCaret: "o") == " world")
+        #expect(SmartSpacing.apply(to: "next sentence", characterBeforeCaret: ".") == " next sentence")
+        #expect(SmartSpacing.apply(to: "after comma", characterBeforeCaret: ",") == " after comma")
+        #expect(SmartSpacing.apply(to: "after paren", characterBeforeCaret: ")") == " after paren")
+        #expect(SmartSpacing.apply(to: "after digit", characterBeforeCaret: "7") == " after digit")
+
+        // Never adds space at start of field, after whitespace, opening brackets, or symbols.
+        #expect(SmartSpacing.apply(to: "start", characterBeforeCaret: nil) == "start")
+        #expect(SmartSpacing.apply(to: "after space", characterBeforeCaret: " ") == "after space")
+        #expect(SmartSpacing.apply(to: "after newline", characterBeforeCaret: "\n") == "after newline")
+        #expect(SmartSpacing.apply(to: "inside paren", characterBeforeCaret: "(") == "inside paren")
+        #expect(SmartSpacing.apply(to: "mention", characterBeforeCaret: "@") == "mention")
+        #expect(SmartSpacing.apply(to: "100", characterBeforeCaret: "$") == "100")
+
+        // Never adds space before closing punctuation or already-spaced text.
+        #expect(SmartSpacing.apply(to: ", however", characterBeforeCaret: "a") == ", however")
+        #expect(SmartSpacing.apply(to: ". Done", characterBeforeCaret: "a") == ". Done")
+        #expect(SmartSpacing.apply(to: " already spaced", characterBeforeCaret: "a") == " already spaced")
     }
 }

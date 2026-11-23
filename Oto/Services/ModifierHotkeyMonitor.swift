@@ -28,11 +28,17 @@ final class ModifierHotkeyMonitor {
     /// dispatch for the calibration row (never claimed without proof).
     private(set) var isLive = false
 
+    /// If `kEventHotKeyReleased` is missed (e.g. menu tracking or screen lock),
+    /// a subsequent press arriving after this interval is treated as a fresh
+    /// press rather than stuck forever as an auto-repeat.
+    nonisolated static let stalePressTimeout: Duration = .milliseconds(1500)
+
     private var carbonHotKey: CarbonHotKey?
     /// Carbon may re-deliver pressed events while held; normalize those to
     /// repeats here so the transition machine never sees a second "first"
     /// down (which would wrongly toggle hands-free off mid-hold).
     private var carbonDown = false
+    private var carbonDownAt: ContinuousClock.Instant?
 
     func configure(comboModifiers: UInt32, keyCode: UInt32) {
         stop()
@@ -41,14 +47,13 @@ final class ModifierHotkeyMonitor {
             carbonModifiers: Int(comboModifiers),
             onKeyDown: { [weak self] in
                 guard let self else { return }
-                let repeatPress = self.carbonDown
-                self.carbonDown = true
-                self.onEvent?(.keyDown(isRepeat: repeatPress))
+                let event = self.stepCarbonKeyDown()
+                self.onEvent?(event)
             },
             onKeyUp: { [weak self] in
                 guard let self else { return }
-                self.carbonDown = false
-                self.onEvent?(.keyUp)
+                let event = self.stepCarbonKeyUp()
+                self.onEvent?(event)
             }
         )
         // Registration failure (conflict) surfaces as nil → not live,
@@ -59,6 +64,23 @@ final class ModifierHotkeyMonitor {
     func stop() {
         carbonHotKey = nil
         carbonDown = false
+        carbonDownAt = nil
         isLive = false
+    }
+
+    /// Pure key-down normalization exposed internally for unit tests.
+    func stepCarbonKeyDown(at now: ContinuousClock.Instant = ContinuousClock().now) -> ShortcutEvent {
+        let isStale = carbonDownAt.map { $0.duration(to: now) > Self.stalePressTimeout } ?? true
+        let repeatPress = carbonDown && !isStale
+        carbonDown = true
+        carbonDownAt = now
+        return .keyDown(isRepeat: repeatPress)
+    }
+
+    /// Pure key-up normalization exposed internally for unit tests.
+    func stepCarbonKeyUp() -> ShortcutEvent {
+        carbonDown = false
+        carbonDownAt = nil
+        return .keyUp
     }
 }

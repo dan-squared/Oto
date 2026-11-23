@@ -128,7 +128,7 @@ enum OnboardingChapterLayout {
 /// quiet empty surface on the right, and one footer that stays put from the
 /// first chapter to the last. The walk carries no pictures.
 struct OnboardingChaptersView: View {
-    @ObservedObject var flow: OnboardingFlow
+    let flow: OnboardingFlow
 
     var body: some View {
         GeometryReader { proxy in
@@ -178,7 +178,7 @@ struct OnboardingChaptersView: View {
 
     // MARK: Private
 
-    @ObservedObject private var stage = OnboardingStage.shared
+    private var stage: OnboardingStage { .shared }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func pageMark(in size: CGSize) -> some View {
@@ -228,19 +228,22 @@ struct OnboardingChaptersView: View {
         .accessibilityLabel("Onboarding progress")
     }
 
-    /// The chapter's frame on the right: a quiet, empty surface. The walk
-    /// shows no pictures.
+    /// The chapter's frame on the right: a clean flat surface (no gradient)
+    /// hosting the live physics-driven SwiftUI visualization for the active step.
     private func media(corner: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: corner, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [OnboardingTheme.mediaTop, OnboardingTheme.mediaBottom],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        return shape
+            .fill(OnboardingTheme.mediaSurface)
+            .overlay {
+                OnboardingChapterVisual(
+                    step: self.stage.step,
+                    holdKind: self.flow.holdKind
                 )
-            )
+                .padding(.vertical, 28)
+            }
+            .clipShape(shape)
             .overlay(
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .strokeBorder(OnboardingTheme.mediaEdge, lineWidth: 1)
+                shape.strokeBorder(OnboardingTheme.mediaEdge, lineWidth: 1)
             )
     }
 
@@ -249,6 +252,7 @@ struct OnboardingChaptersView: View {
             OnboardingGlassCircleButton(symbol: "chevron.left", action: self.flow.back)
                 .opacity(self.flow.canGoBack ? 1 : 0)
                 .disabled(!self.flow.canGoBack)
+                .accessibilityHidden(!self.flow.canGoBack)
                 .keyboardShortcut("[", modifiers: .command)
                 .accessibilityLabel("Back")
 
@@ -308,12 +312,9 @@ struct OnboardingGlassCircleButton: View {
         let label = Image(systemName: self.symbol)
             .font(.system(size: 13, weight: .semibold))
             .frame(width: self.size, height: self.size)
-        if #available(macOS 26.0, *) {
-            Button(action: self.action) { label }
-                .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
-        } else {
-            Button(action: self.action) { label }
-                .buttonStyle(.bordered).buttonBorderShape(.circle).controlSize(.large)
-        }
+        Button(action: self.action) { label }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
     }
 }

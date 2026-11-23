@@ -136,6 +136,83 @@ struct DeliveryVerificationTests {
         )
         #expect(outcome == .unverifiable)
     }
+
+    @Test func verifyWaitsOnePollBeforeFirstReadWhenPollPositive() async {
+        let events = CaretBox(nil)
+        let box = CaretBox(caret(0, 0))
+        let probe = DeliveryProbe(
+            initial: caret(0, 0),
+            read: { box.current },
+            stillFocused: { true }
+        )
+        let outcome = await DeliveryVerification.verify(
+            probe: probe,
+            budget: 5_000_000,
+            poll: 1_000_000,
+            sleep: { _ in
+                // Update caret on the pre-read poll sleep: proves the first
+                // read did not fire at t = 0 before the sleep.
+                box.set(CaretSample(location: 4, length: 0, characters: 4))
+                events.set(CaretSample(location: 1, length: 0, characters: 1))
+            }
+        )
+        #expect(outcome == .landed)
+        #expect(events.current != nil)
+    }
+
+    @Test func verifyCaretChangeWithoutSameElementOrGrowthIsUnverifiable() async {
+        let box = CaretBox(caret(5, 0, 10))
+        let probe = DeliveryProbe(
+            initial: caret(0, 0, 10),
+            read: { box.current },
+            stillFocused: { false }
+        )
+        let result = await DeliveryVerification.verifyDetailed(
+            probe: probe, budget: 5_000_000, poll: 0, sleep: { _ in }
+        )
+        #expect(result.outcome == .unverifiable)
+        #expect(!result.characterCountGrew)
+    }
+
+    @Test func verifyDetailedDistinguishesCharacterGrowthFromCaretOnlyMove() async {
+        let grewProbe = DeliveryProbe(
+            initial: caret(0, 0, 0),
+            read: { CaretSample(location: 5, length: 0, characters: 5) },
+            stillFocused: { true }
+        )
+        let grewResult = await DeliveryVerification.verifyDetailed(
+            probe: grewProbe, budget: 5_000_000, poll: 0, sleep: { _ in }
+        )
+        #expect(grewResult == DeliveryResult(outcome: .landed, characterCountGrew: true))
+
+        let caretOnlyProbe = DeliveryProbe(
+            initial: caret(0, 0, 5),
+            read: { CaretSample(location: 3, length: 0, characters: 5) },
+            stillFocused: { true }
+        )
+        let caretOnlyResult = await DeliveryVerification.verifyDetailed(
+            probe: caretOnlyProbe, budget: 5_000_000, poll: 0, sleep: { _ in }
+        )
+        #expect(caretOnlyResult == DeliveryResult(outcome: .landed, characterCountGrew: false))
+    }
+
+    @Test func probeAsyncTimesOutHungProbeAsUnavailable() async {
+        struct HungDeliveryCheck: DeliveryChecking {
+            nonisolated func probe(for pid: pid_t) -> DeliveryProbe {
+                Thread.sleep(forTimeInterval: 1.0)
+                return DeliveryProbe(
+                    initial: CaretSample(location: 0, length: 0, characters: 0),
+                    read: { nil },
+                    stillFocused: { true }
+                )
+            }
+        }
+        let clock = ContinuousClock()
+        let start = clock.now
+        let probe = await HungDeliveryCheck().probeAsync(for: 1234)
+        #expect(probe.initial == nil)
+        #expect(clock.now - start < .milliseconds(900))
+    }
 }
 
 struct InsertionReadinessTests {

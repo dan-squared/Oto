@@ -139,11 +139,20 @@ final class NoTargetModalController {
     /// Morph generation: a re-fired route supersedes a mid-morph one
     /// (pill-melt cancel precedent).
     private var morphGeneration = 0
+    private var morphFadeTask: Task<Void, Never>?
+    private var morphFinishTask: Task<Void, Never>?
+    private var copyTask: Task<Void, Never>?
     /// Internal for tests: prewarm stability.
     var hasPanel: Bool { panel != nil }
     /// Internal for tests: the focus-steal defense pin (nonactivating
     /// recipe retained through the v4 reflow).
     var isNonactivating: Bool { panel?.styleMask.contains(.nonactivatingPanel) ?? false }
+
+    isolated deinit {
+        morphFadeTask?.cancel()
+        morphFinishTask?.cancel()
+        copyTask?.cancel()
+    }
 
     /// Build panel + hosting once, off the transition path (v4 F3b).
     /// Never orders front — pure construction cost moved to launch.
@@ -173,13 +182,23 @@ final class NoTargetModalController {
         CatcherPalette.current(NSApp.effectiveAppearance)
     }
 
-    /// Swap content + clear any layer background SwiftUI resolved on its
-    /// own (v6 variant A — clear only what EXISTS, never force-create).
+    /// Clear any layer background SwiftUI resolved on its own (v6 variant A —
+    /// clear only what EXISTS, never force-create). `NoTargetModalController`
+    /// is `@Observable`, so SwiftUI updates reactively without rebuilding the
+    /// `rootView` hierarchy.
     private func refreshContent() {
-        hosting?.rootView = NoTargetModalView(controller: self)
         if let layer = hosting?.layer {
             layer.backgroundColor = NSColor.clear.cgColor
         }
+    }
+
+    private func cancelPendingTasks() {
+        morphFadeTask?.cancel()
+        morphFadeTask = nil
+        morphFinishTask?.cancel()
+        morphFinishTask = nil
+        copyTask?.cancel()
+        copyTask = nil
     }
 
     /// Stores a transcript for display AND recovery: `text` stays the
@@ -198,15 +217,17 @@ final class NoTargetModalController {
     ) {
         store(text)
         copied = false
-        // Invalidate any pending auto-close: a re-show owns a fresh second.
+        // Invalidate any pending auto-close or morph tasks.
         copyGeneration += 1
+        morphGeneration += 1
+        cancelPendingTasks()
         prewarm()
-        refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else { return }
         let visible = screen.visibleFrame
         let height = cardHeight(for: self.text, visible: visible)
         log.info("catcher show words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height))")
         self.cardHeight = height
+        refreshContent()
         let endFrame = NSRect(
             x: visible.midX - Self.width / 2,
             y: visible.midY - height / 2,
@@ -219,9 +240,6 @@ final class NoTargetModalController {
             y: endFrame.midY - endFrame.height * 0.485,
             width: endFrame.width * 0.97, height: endFrame.height * 0.97
         )
-        // A re-show supersedes any in-flight morph (its mask + task are
-        // stale); the mask itself is reset below, before anything is shown.
-        morphGeneration += 1
         surface?.setCardColor(currentPalette.cardColor)
         panel?.ignoresMouseEvents = false
         panel?.setFrame(startFrame, display: false)
@@ -247,6 +265,9 @@ final class NoTargetModalController {
 
     func hide() {
         morphGeneration += 1
+        copyGeneration += 1
+        cancelPendingTasks()
+        copied = false
         panel?.ignoresMouseEvents = false
         panel?.orderOut(nil)
     }
@@ -272,10 +293,11 @@ final class NoTargetModalController {
     ) {
         store(text)
         copied = false
-        // Invalidate any pending auto-close: a re-show owns a fresh second.
+        // Invalidate any pending auto-close or morph tasks.
         copyGeneration += 1
+        morphGeneration += 1
+        cancelPendingTasks()
         prewarm()
-        refreshContent()
         guard let (screen, _) = FlowBarPanel.resolveScreen(displayID: displayID) else {
             show(text: text, displayID: displayID, reduceMotion: reduceMotion)
             return
@@ -287,8 +309,11 @@ final class NoTargetModalController {
         let height = cardHeight(for: self.text, visible: screen.visibleFrame)
         log.info("catcher morph words=\(CatcherText.wordCount(text)) display=\(CatcherText.wordCount(self.text)) size=\(Int(Self.width))x\(Int(height)) slot=\(position.rawValue)")
         self.cardHeight = height
-        let endFrame = Self.morphEndFrameAtSlot(visible: screen.visibleFrame, position: position, height: height)
-        morphGeneration += 1
+        refreshContent()
+        let safeTop = FlowBarPosition.additionalSafeTopInset(for: screen)
+        let endFrame = Self.morphEndFrameAtSlot(
+            visible: screen.visibleFrame, position: position, height: height, safeTopInset: safeTop
+        )
         let generation = morphGeneration
 
         surface.setCardColor(currentPalette.cardColor)
@@ -329,16 +354,17 @@ final class NoTargetModalController {
 
         surface.animateMorph(duration: Self.morphDuration)
 
-        Task { @MainActor in
+        morphFadeTask = Task { @MainActor [weak self, weak panel, weak surface] in
             try? await Task.sleep(for: .milliseconds(Int(Self.contentFadeDelay * 1000)))
-            guard generation == self.morphGeneration, panel.isVisible else { return }
-            surface.fadeContentIn(duration: Self.contentFadeDuration)
+            guard let self, !Task.isCancelled, generation == self.morphGeneration,
+                  panel?.isVisible == true else { return }
+            surface?.fadeContentIn(duration: Self.contentFadeDuration)
         }
-        Task { @MainActor in
+        morphFinishTask = Task { @MainActor [weak self, weak panel, weak surface] in
             try? await Task.sleep(for: .milliseconds(Int(Self.morphDuration * 1000)))
-            guard generation == self.morphGeneration else { return }
-            surface.finishMorph()
-            panel.ignoresMouseEvents = false
+            guard let self, !Task.isCancelled, generation == self.morphGeneration else { return }
+            surface?.finishMorph()
+            panel?.ignoresMouseEvents = false
         }
     }
 
@@ -380,21 +406,27 @@ final class NoTargetModalController {
     /// from the pill edge — top grows down, bottom grows up); the guard
     /// below only shrinks pathological frames, keeping the slot edge.
     /// Pure geometry, unit-tested.
-    nonisolated static func morphEndFrameAtSlot(visible: NSRect, position: FlowBarPosition, height: CGFloat) -> NSRect {
-        var frame = FlowBarPosition.frame(width: Self.width, height: height, on: visible, position: position)
+    nonisolated static func morphEndFrameAtSlot(
+        visible: NSRect, position: FlowBarPosition, height: CGFloat, safeTopInset: CGFloat = 0
+    ) -> NSRect {
+        var frame = FlowBarPosition.frame(
+            width: Self.width, height: height, on: visible, position: position, safeTopInset: safeTopInset
+        )
+        let usableMaxY = visible.maxY - safeTopInset
+        let usableHeight = max(0, usableMaxY - visible.minY)
         if frame.width < Self.width {
             frame.size.width = Self.width
             frame.origin.x = visible.midX - Self.width / 2
         }
-        if frame.height > visible.height {
-            frame.size.height = visible.height
-            if position == .top { frame.origin.y = visible.maxY - visible.height }
+        if frame.height > usableHeight {
+            frame.size.height = usableHeight
+            if position == .top { frame.origin.y = usableMaxY - usableHeight }
         }
         // Pathological rooms: X overflow stays explicit (audit F1), but a
         // card must never park itself off-screen vertically — clamp into
-        // visible, slot edge preferred, visibility required.
-        if frame.maxY > visible.maxY {
-            frame.origin.y = visible.maxY - frame.height
+        // usable visible space, slot edge preferred, visibility required.
+        if frame.maxY > usableMaxY {
+            frame.origin.y = usableMaxY - frame.height
         }
         if frame.minY < visible.minY {
             frame.origin.y = visible.minY
@@ -421,19 +453,22 @@ final class NoTargetModalController {
         // VoiceOver announcement: the panel is never key (focus-steal
         // defense), so VO users get the confirmation announced instead of
         // finding it. Posted on the app element — no focus change.
-        NSAccessibility.post(
-            element: NSApp as Any,
-            notification: .announcementRequested,
-            userInfo: [
-                NSAccessibility.NotificationUserInfoKey.announcement: "Copied recovery transcript",
-                NSAccessibility.NotificationUserInfoKey.priority: NSAccessibilityPriorityLevel.high.rawValue,
-            ]
-        )
+        if let app = NSApp {
+            NSAccessibility.post(
+                element: app,
+                notification: .announcementRequested,
+                userInfo: [
+                    NSAccessibility.NotificationUserInfoKey.announcement: "Copied recovery transcript",
+                    NSAccessibility.NotificationUserInfoKey.priority: NSAccessibilityPriorityLevel.high.rawValue,
+                ]
+            )
+        }
         copyGeneration += 1
         let generation = copyGeneration
-        Task {
+        copyTask?.cancel()
+        copyTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, generation == self.copyGeneration else { return }
+            guard let self, !Task.isCancelled, generation == self.copyGeneration else { return }
             self.copied = false
             self.hide()
         }
@@ -461,18 +496,22 @@ struct NoTargetModalView: View {
                 // on by the mask.
                 Color.clear
                 VStack(alignment: .leading, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if controller.text.isEmpty {
-                            Text("Nothing to paste into.")
-                                .font(.title3)
-                                .foregroundStyle(palette.dim)
-                        } else {
-                            Text(controller.text)
-                                .font(.title3)
-                                .foregroundStyle(palette.transcript)
-                                .accessibilityHint("Recovery transcript. Copy pastes the full text.")
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if controller.text.isEmpty {
+                                Text("Nothing to paste into.")
+                                    .font(.title3)
+                                    .foregroundStyle(palette.dim)
+                            } else {
+                                Text(controller.text)
+                                    .font(.title3)
+                                    .foregroundStyle(palette.transcript)
+                                    .accessibilityHint("Recovery transcript. Copy pastes the full text.")
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .scrollBounceBehavior(.basedOnSize)
                     Spacer(minLength: 0)
                     HStack(alignment: .center, spacing: 10) {
                         Spacer()

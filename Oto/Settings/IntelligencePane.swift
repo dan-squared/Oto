@@ -30,6 +30,7 @@ struct IntelligencePane: View {
     @State private var shortcuts = TransformShortcuts.default()
     @State private var audit: [(slot: ShortcutSlotID, message: String)] = []
     @State private var recording: TransformPreset?
+    @State private var acceptedRecording: TransformPreset?
     @State private var messages: [TransformPreset: String] = [:]
     /// Custom prompt editors (Phase 9): mirrors of the UserDefaults store,
     /// loaded in refreshTransforms, saved debounced (never per keystroke).
@@ -57,21 +58,29 @@ struct IntelligencePane: View {
             }
         }
         .onAppear {
-            self.publishAccessory()
             CleanupMigrator.migrateIfNeeded()
             availability = polish.availability()
+            self.publishAccessory()
             refreshTransforms()
             if enabled, level.wrappedValue != .none, availability == .available {
                 polish.prewarm(job: .cleanup(level.wrappedValue))
             }
         }
         .onChange(of: enabled) { _, on in
+            self.availability = self.polish.availability()
             self.publishAccessory()
             guard on else { return }
-            self.availability = self.polish.availability()
             self.refreshTransforms()
             if self.level.wrappedValue != .none, self.availability == .available {
                 self.polish.prewarm(job: .cleanup(self.level.wrappedValue))
+            }
+        }
+        .onDisappear {
+            flushCustomSave()
+            if recording != nil {
+                recording = nil
+                acceptedRecording = nil
+                transforms.start()
             }
         }
     }
@@ -116,7 +125,6 @@ struct IntelligencePane: View {
                 LabeledContent("Apple Intelligence") {
                     OtoStatus(text: statusText, tone: statusTone)
                 }
-                Toggle("Use Apple Intelligence", isOn: $enabled)
                 if let statusDetail {
                     OtoPanelNote(statusDetail)
                 }
@@ -150,8 +158,14 @@ struct IntelligencePane: View {
     }
 
     /// The switch takes the detail column's top-right corner, exactly like
-    /// History's: the pane's master control is never buried in a card.
+    /// History's: the pane's master control is never buried in a card. Hidden
+    /// when Apple Intelligence is unavailable and off so an unsupported Mac
+    /// never exposes an enable switch that cannot do anything.
     private func publishAccessory() {
+        if case .unavailable = availability, !enabled {
+            chrome.publish(nil)
+            return
+        }
         chrome.publish(
             .toggle(isOn: enabled, help: "Use Apple Intelligence") { new in
                 enabled = new
@@ -202,6 +216,7 @@ struct IntelligencePane: View {
                     recordLabel: "\(preset.displayName) shortcut, \(transformShortcutLabel(kind: kind)). Activate to record a new shortcut.",
                     onRecord: {
                         transforms.stop()
+                        acceptedRecording = nil
                         recording = preset
                     }
                 )
@@ -210,11 +225,7 @@ struct IntelligencePane: View {
                     get: { recording == preset },
                     set: {
                         guard !$0, recording == preset else { return }
-                        transforms.start()
-                        recording = nil
-                        // Refusals live on the recorder's glass; the row must
-                        // not keep repeating them after it closes.
-                        messages[preset] = nil
+                        dismissRecorder(for: preset)
                     }
                 ), arrowEdge: .top) {
                     TransformShortcutCapturePopover(
@@ -222,9 +233,7 @@ struct IntelligencePane: View {
                             get: { recording == preset },
                             set: {
                                 guard !$0, recording == preset else { return }
-                                transforms.start()
-                                recording = nil
-                                messages[preset] = nil
+                                dismissRecorder(for: preset)
                             }
                         ),
                         hasShortcut: !KeyNames.chips(for: kind).isEmpty,
@@ -244,12 +253,14 @@ struct IntelligencePane: View {
                             transforms.clearShortcut(for: preset)
                             transforms.start()
                             recording = nil
+                            acceptedRecording = nil
                             messages[preset] = nil
                             refreshTransforms()
                         },
                         onCancel: {
                             transforms.start()
                             recording = nil
+                            acceptedRecording = nil
                             messages[preset] = nil
                         },
                         onInvalid: { reason in
@@ -333,11 +344,23 @@ struct IntelligencePane: View {
         if messages[preset] == nil, !conflicts.isEmpty {
             messages[preset] = ShortcutRecorderConflicts.describe(conflicts)
         }
+        acceptedRecording = preset
         refreshTransforms()
         transforms.start()
         // The recorder flashes green and dismisses itself; clearing `recording`
         // here would close the popover before the confirmation is visible.
         return nil
+    }
+
+    private func dismissRecorder(for preset: TransformPreset) {
+        transforms.start()
+        recording = nil
+        // Keep non-blocking conflict warnings produced by an accepted save;
+        // clear only refusal copy left over from an unaccepted attempt.
+        if acceptedRecording != preset {
+            messages[preset] = nil
+        }
+        acceptedRecording = nil
     }
 
     private func refreshTransforms() {
@@ -346,11 +369,13 @@ struct IntelligencePane: View {
         audit = ShortcutAudit.violations(
             hold: kinds.hold, handsFree: kinds.handsFree, transforms: shortcuts
         )
-        // Custom editors mirror the store (typing never triggers a
-        // refresh, so this cannot clobber in-flight edits).
-        let custom = CustomPrompt.load()
-        customName = custom.name
-        customInstruction = custom.instruction
+        // Custom editors mirror the store, but never clobber in-flight edits
+        // while a debounced save is pending.
+        if customSaveTask == nil {
+            let custom = CustomPrompt.load()
+            customName = custom.name
+            customInstruction = custom.instruction
+        }
     }
 
     /// Debounced custom-prompt save: 0.5s after the last keystroke.
@@ -364,7 +389,18 @@ struct IntelligencePane: View {
                 name: CustomPrompt.sanitizeName(customName),
                 instruction: CustomPrompt.sanitizeInstruction(customInstruction)
             ).save()
+            customSaveTask = nil
         }
+    }
+
+    private func flushCustomSave() {
+        guard let task = customSaveTask else { return }
+        task.cancel()
+        customSaveTask = nil
+        CustomPrompt(
+            name: CustomPrompt.sanitizeName(customName),
+            instruction: CustomPrompt.sanitizeInstruction(customInstruction)
+        ).save()
     }
 
     private var cleanupDescription: String {

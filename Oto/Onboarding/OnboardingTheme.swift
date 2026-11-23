@@ -43,11 +43,11 @@ enum OnboardingTheme {
 
     // MARK: - The media panel
 
-    /// The chapter's frame on the right. With no pictures in the walk, this is
-    /// an empty, quiet surface: a neutral lift off the page, never a colour of
-    /// its own — cool blue read as a different window in Dark Mode.
-    static var mediaTop: Color { self.tint(light: (0.975, 0.975, 0.98), dark: (0.32, 0.32, 0.325)) }
-    static var mediaBottom: Color { self.tint(light: (0.94, 0.94, 0.945), dark: (0.26, 0.26, 0.265)) }
+    /// The chapter's frame on the right: a clean, flat, gradient-free neutral
+    /// surface that adapts to Light and Dark Mode without introducing hue.
+    static var mediaSurface: Color { self.tint(light: (0.955, 0.955, 0.952), dark: (0.115, 0.115, 0.118)) }
+    static var mediaTop: Color { self.mediaSurface }
+    static var mediaBottom: Color { self.mediaSurface }
     static var mediaEdge: Color { OtoPalette.ink.opacity(0.07) }
 
     // MARK: - Private

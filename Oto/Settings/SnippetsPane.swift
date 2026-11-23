@@ -21,7 +21,7 @@ struct SnippetsPane: View {
     @State private var addingSnippet = false
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if snippets.saveFailed { SaveFailureNote() }
             if snippets.snippets.isEmpty {
                 OtoPaneCanvas {
@@ -172,16 +172,16 @@ private struct SnippetEditor: View {
     }
 
     private func save() {
+        error = nil
         Task {
-            let scopes = scopeGlobal ? [] : bundleIDs
+            let scope: AppScope = scopeGlobal ? .global : .apps(bundleIDs)
             let result: Result<Snippet, SnippetValidationError>
             if var snippet {
                 snippet.name = name
                 snippet.expansion = expansion
-                snippet.bundleIDs = scopes
-                result = await snippets.update(snippet)
+                result = await snippets.update(snippet, scope: scope)
             } else {
-                result = await snippets.add(name: name, expansion: expansion, bundleIDs: scopes)
+                result = await snippets.add(name: name, expansion: expansion, scope: scope)
             }
             switch result {
             case .success: onDone()

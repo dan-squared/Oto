@@ -96,9 +96,40 @@ struct AudioBufferRelayTests {
 
         relay.reset()
         // Post-reset receives with no sink buffer (bounded) but are not
-        // delivered anywhere.
+        // delivered anywhere, and deliveredCount resets to 0.
+        #expect(relay.deliveredBufferCount() == 0)
         relay.receive(makeBuffer())
         #expect(delivered.count == 1)
         #expect(relay.droppedBufferCount() == 0)
+        #expect(relay.deliveredBufferCount() == 0)
+    }
+
+    @Test func reentrantReceiveDuringAttachPreservesStrictFIFOOrder() {
+        let relay = AudioBufferRelay()
+        let first = makeBuffer()
+        let second = makeBuffer()
+        let third = makeBuffer()
+        let fourth = makeBuffer()
+        relay.receive(first)
+        relay.receive(second)
+        relay.receive(third)
+
+        var delivered: [AVAudioPCMBuffer] = []
+        var injected = false
+        relay.attach { buffer in
+            delivered.append(buffer)
+            if !injected {
+                injected = true
+                // Simulates a live buffer arriving while pre-attach buffers are flushing.
+                relay.receive(fourth)
+            }
+        }
+
+        #expect(delivered.count == 4)
+        #expect(delivered[0] === first)
+        #expect(delivered[1] === second)
+        #expect(delivered[2] === third)
+        #expect(delivered[3] === fourth)
+        #expect(relay.deliveredBufferCount() == 4)
     }
 }
