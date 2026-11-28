@@ -383,6 +383,7 @@ final class PillContentView: NSView {
         label.font = VisualizerMath.workFont
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
+        label.usesSingleLineMode = true
         ink.addSubview(label)
 
         shineLabel.textColor = .white
@@ -392,6 +393,7 @@ final class PillContentView: NSView {
         shineLabel.font = VisualizerMath.workFont
         shineLabel.lineBreakMode = .byTruncatingTail
         shineLabel.maximumNumberOfLines = 1
+        shineLabel.usesSingleLineMode = true
         // Explicit layer: the mask below needs a host layer even before
         // first paint (subviews of a layer-backed view normally get one,
         // but this is load-bearing — never implicit).
@@ -796,13 +798,17 @@ final class PillContentView: NSView {
             label.alignment = centerText ? .center : .left
             // Vertically center: an NSTextField draws from the top of a
             // tall frame, so fit the label to its text and center it in
-            // the pill (same 92.4 width as dictation — re-render, no resize).
+            // the pill with messagePadding horizontal air and messageTextSlack
+            // so AppKit never ellipsizes centered text on exact fit.
             label.sizeToFit()
             let h = VisualizerMath.pillHeight
+            let measured = ceil(VisualizerMath.measureWorkText(label.stringValue))
+                + VisualizerMath.messageTextSlack
+            let maxLabelW = max(0, currentWidth - VisualizerMath.messagePadding * 2)
             var f = label.frame
-            f.size.width = min(f.size.width, max(0, currentWidth - Self.padding * 2))
+            f.size.width = min(max(ceil(label.fittingSize.width) + 2, measured), maxLabelW)
             f.size.height = min(f.size.height, h)
-            f.origin.x = centerText ? (currentWidth - f.size.width) / 2 : Self.padding
+            f.origin.x = centerText ? (currentWidth - f.size.width) / 2 : VisualizerMath.messagePadding
             f.origin.y = max(0, (h - f.size.height) / 2)
             label.frame = f
         } else if currentVisual == .work {
@@ -971,6 +977,13 @@ final class PillContentView: NSView {
     /// beyond padding) with the full label left of it.
     func workLayoutFrames() -> (label: CGRect, spinner: CGRect) {
         (label.frame, spinner.frame)
+    }
+    func messageLayoutFrame() -> CGRect { label.frame }
+    /// True when AppKit's text cell would ellipsize the current message label
+    /// at its laid-out frame (verified via `NSTextFieldCell.expansionFrame`).
+    func messageIsTruncated() -> Bool {
+        guard let cell = label.cell as? NSTextFieldCell else { return false }
+        return cell.expansionFrame(withFrame: label.bounds, in: label) != .zero
     }
     func chaseOpacity(_ i: Int) -> Float { chaseLayers[i].opacity }
     func barScaleY(_ i: Int) -> CGFloat { barLayers[i].transform.m22 }

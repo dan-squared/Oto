@@ -124,6 +124,32 @@ struct SnippetStoreTests {
         #expect(Set(keys2.keys) == ["id", "name", "expansion"])
     }
 
+    @Test func voiceTriggerPersistsAndLegacyDecodesFalse() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let persistence = LocalPersistence(directory: dir)
+        let store = SnippetStore(persistence: persistence)
+        guard case .success(let added) = await store.add(
+            name: "Calendar link",
+            expansion: "https://cal.example/alex",
+            scope: .global,
+            voiceTriggerEnabled: true
+        ) else {
+            Issue.record("add with voiceTriggerEnabled must succeed"); return
+        }
+        #expect(added.voiceTriggerEnabled == true)
+
+        let reloaded = SnippetStore(persistence: persistence)
+        await reloaded.load()
+        #expect(reloaded.snippets.count == 1)
+        #expect(reloaded.snippets[0].voiceTriggerEnabled == true)
+
+        let id = UUID().uuidString
+        let legacy = #"{"id":"\#(id)","name":"Addr","expansion":"1 Main St"}"#
+        let decoded = try JSONDecoder().decode(Snippet.self, from: Data(legacy.utf8))
+        #expect(decoded.voiceTriggerEnabled == false)
+    }
+
     @Test func legacySingleScopeDecodesIntoScopeList() throws {
         let id = UUID().uuidString
         let legacy = #"{"id":"\#(id)","name":"Addr","expansion":"1 Main St","bundleID":"com.a.App"}"#

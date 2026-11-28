@@ -185,21 +185,23 @@ actor AppleSpeechService: SpeechServing {
             throw SpeechReadiness.unsupportedLocale
         }
 
-        // 2. Resolve the system locale against what Apple supports. P3:
-        // flag-gated snapshot (zero awaits on hit); the requery path reads
-        // per session, so a language change without relaunch still dictates
-        // (audit N3 — the snapshot invalidates on locale change, Settings
-        // prepare, and age cap, so the guarantee survives the cache).
+        // 2. Resolve the effective dictation locale (explicit preference or
+        // system) against what Apple supports. P3: flag-gated snapshot (zero
+        // awaits on hit); the requery path reads per session, so a language
+        // change without relaunch still dictates (audit N3 — the snapshot
+        // invalidates on locale change, Settings prepare, and age cap, so the
+        // guarantee survives the cache).
         let tLocale = PerfTrace.begin(.localeResolve)
+        let requestedLocale = SpeechLocalePreference.effectiveLocale()
         let resolved: Locale
         var pendingSnapshotSupported: [Locale]?
         if LocaleCacheExperiment.current().enabled,
-           case .use(let cached) = LocaleSnapshotCache.shared.resolve()
+           case .use(let cached) = LocaleSnapshotCache.shared.resolve(current: requestedLocale)
         {
             resolved = cached
         } else {
             let supported = await SpeechTranscriber.supportedLocales
-            guard let match = SpeechLocaleMatching.bestMatch(for: .current, in: supported) else {
+            guard let match = SpeechLocaleMatching.bestMatch(for: requestedLocale, in: supported) else {
                 PerfTrace.end(.localeResolve, tLocale)
                 throw SpeechReadiness.unsupportedLocale
             }

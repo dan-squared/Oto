@@ -31,9 +31,17 @@ struct LocaleSnapshot: Equatable, Sendable {
 }
 
 /// The pure press-path decision: resolve from snapshot or pay the awaits.
-enum LocaleCacheDecision: Equatable {
+nonisolated enum LocaleCacheDecision: Equatable, Sendable {
     case use(Locale)
     case requery
+
+    nonisolated static func == (lhs: LocaleCacheDecision, rhs: LocaleCacheDecision) -> Bool {
+        switch (lhs, rhs) {
+        case (.use(let a), .use(let b)): return a == b
+        case (.requery, .requery): return true
+        default: return false
+        }
+    }
 }
 
 /// Hidden A/B seam (P3 flag): `defaults write app.Oto.localeCache -bool YES`

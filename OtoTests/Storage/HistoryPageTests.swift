@@ -54,4 +54,95 @@ struct HistoryPageTests {
                 == [.page(1), .ellipsis, .page(7), .page(8), .page(9), .page(10)]
         )
     }
+
+    // MARK: - HistoryFilter
+
+    private func makeEntry(
+        finalText: String,
+        rawText: String? = nil,
+        wasCleaned: Bool = false,
+        bundleID: String? = nil
+    ) -> HistoryEntry {
+        HistoryEntry(
+            finalText: finalText,
+            bundleIdentifier: bundleID,
+            rawText: rawText,
+            wasCleaned: wasCleaned
+        )
+    }
+
+    @Test func filterEmptyOrWhitespaceReturnsAllEntries() {
+        let entries = [
+            makeEntry(finalText: "First dictation", bundleID: "com.apple.Notes"),
+            makeEntry(finalText: "Second dictation", bundleID: nil),
+        ]
+        #expect(HistoryFilter.filter(entries, query: "") == entries)
+        #expect(HistoryFilter.filter(entries, query: "   \t\n  ") == entries)
+        #expect(HistoryFilter.matches(entries[0], query: ""))
+        #expect(HistoryFilter.matches(entries[1], query: "   "))
+    }
+
+    @Test func filterSingleWordCaseAndDiacriticInsensitiveInFinalText() {
+        let cafe = makeEntry(finalText: "Meet me at the café at noon")
+        let other = makeEntry(finalText: "Buy milk on the way home")
+        let entries = [cafe, other]
+
+        #expect(HistoryFilter.filter(entries, query: "CAFE") == [cafe])
+        #expect(HistoryFilter.filter(entries, query: "café") == [cafe])
+        #expect(HistoryFilter.filter(entries, query: "noon") == [cafe])
+        #expect(HistoryFilter.matches(cafe, query: "CaFe"))
+        #expect(!HistoryFilter.matches(other, query: "cafe"))
+    }
+
+    @Test func filterMultiWordAndSemanticsAcrossTextAndAppName() {
+        let mailInvoice = makeEntry(finalText: "Send the invoice tomorrow", bundleID: "com.apple.mail")
+        let notesInvoice = makeEntry(finalText: "Send the invoice tomorrow", bundleID: "com.apple.Notes")
+        let mailLunch = makeEntry(finalText: "Lunch plans for Friday", bundleID: "com.apple.mail")
+        let entries = [mailInvoice, notesInvoice, mailLunch]
+
+        // Words in any order across finalText and app name must all match.
+        #expect(HistoryFilter.filter(entries, query: "mail invoice") == [mailInvoice])
+        #expect(HistoryFilter.filter(entries, query: "tomorrow mail") == [mailInvoice])
+        #expect(HistoryFilter.filter(entries, query: "tomorrow invoice") == [mailInvoice, notesInvoice])
+        #expect(HistoryFilter.filter(entries, query: "mail friday") == [mailLunch])
+    }
+
+    @Test func filterMatchesRawTextForCleanedEntries() {
+        let cleaned = makeEntry(
+            finalText: "Let's schedule the meeting.",
+            rawText: "um let us pencil in the meeting",
+            wasCleaned: true,
+            bundleID: "com.apple.Notes"
+        )
+        let plain = makeEntry(finalText: "No markers needed", rawText: nil, bundleID: "com.apple.Notes")
+
+        #expect(HistoryFilter.filter([cleaned, plain], query: "pencil") == [cleaned])
+        #expect(HistoryFilter.filter([cleaned, plain], query: "schedule") == [cleaned])
+        #expect(HistoryFilter.matches(cleaned, query: "pencil meeting"))
+    }
+
+    @Test func filterMatchesAppDisplayNameAndBundleIdentifier() {
+        let mail = makeEntry(finalText: "Draft reply", bundleID: "com.apple.mail")
+        let finder = makeEntry(finalText: "Rename folder", bundleID: "com.apple.finder")
+        let custom = makeEntry(finalText: "Custom note", bundleID: "com.example.CustomEditor")
+        let unknown = makeEntry(finalText: "Plain note", bundleID: nil)
+        let entries = [mail, finder, custom, unknown]
+
+        #expect(HistoryFilter.filter(entries, query: "Mail") == [mail])
+        #expect(HistoryFilter.filter(entries, query: "com.apple.mail") == [mail])
+        #expect(HistoryFilter.filter(entries, query: "Finder") == [finder])
+        #expect(HistoryFilter.filter(entries, query: "CustomEditor") == [custom])
+        // nil or empty bundleIdentifier should not fabricate "Unknown app" as a search target.
+        let emptyBundle = makeEntry(finalText: "Another note", bundleID: "   ")
+        #expect(HistoryFilter.filter([unknown, emptyBundle], query: "Unknown").isEmpty)
+    }
+
+    @Test func filterNonMatchingQueryReturnsEmpty() {
+        let entries = [
+            makeEntry(finalText: "Quick brown fox", rawText: "quick brown fox", bundleID: "com.apple.TextEdit"),
+        ]
+        #expect(HistoryFilter.filter(entries, query: "zebra").isEmpty)
+        #expect(HistoryFilter.filter(entries, query: "fox zebra").isEmpty)
+        #expect(!HistoryFilter.matches(entries[0], query: "zebra"))
+    }
 }

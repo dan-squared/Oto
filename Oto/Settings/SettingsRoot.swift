@@ -602,7 +602,14 @@ struct SettingsRoot: View {
                 dispatch: dispatch, chrome: chrome
             )
         case .snippets:
-            SnippetsPane(snippets: snippets, dispatch: dispatch, chrome: chrome)
+            SnippetsPane(
+                snippets: snippets,
+                dispatch: dispatch,
+                chrome: chrome,
+                onSnippetsChanged: { updated in
+                    Task { await coordinator.setSnippets(updated) }
+                }
+            )
         case .history:
             HistoryPane(history: history, dispatch: dispatch, chrome: chrome)
         case .privacy:

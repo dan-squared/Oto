@@ -122,6 +122,17 @@ enum VisualizerMath {
 
     // MARK: - Message pill (Copied / transient failure notices)
 
+    /// Horizontal air inside the message capsule (pt). Matches `dictationInset`
+    /// (12.375 pt) so text clears the 13.2 pt rounded end-caps with the same
+    /// optical margin as the bar row.
+    nonisolated static let messagePadding: CGFloat = dictationInset
+
+    /// Extra text slack for centered message labels (pt). AppKit's centered
+    /// `NSTextFieldCell` adds ~8 pt above raw `NSString.size` (vs ~4 pt when
+    /// left-aligned), so 12 pt guarantees zero ellipsizing across all notice
+    /// strings and display scales while keeping `"Copied"` at `dictationWidth`.
+    nonisolated static let messageTextSlack: CGFloat = 12
+
     /// Ceiling for transient message pills so long failure notices stay
     /// readable without stretching across the display.
     nonisolated static let messageMaxWidth: CGFloat = 320
@@ -131,7 +142,7 @@ enum VisualizerMath {
     /// with no resize, while longer failure notices expand up to `320 pt` so
     /// the full sentence is readable instead of truncating to ~8 characters.
     nonisolated static func messagePillWidth(textWidth: CGFloat) -> CGFloat {
-        let chrome = workPadding * 2 + workTextSlack
+        let chrome = messagePadding * 2 + messageTextSlack
         return min(messageMaxWidth, max(dictationWidth, ceil(textWidth) + chrome))
     }
 

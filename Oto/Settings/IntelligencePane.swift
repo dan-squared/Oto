@@ -37,6 +37,10 @@ struct IntelligencePane: View {
     @State private var customName = ""
     @State private var customInstruction = ""
     @State private var customSaveTask: Task<Void, Never>?
+    @State private var appOverrides: [AppCleanupOverride] = []
+    @State private var installedApps: [InstalledApp] = InstalledApps.cached
+    @State private var addingAppRule = false
+    @State private var editingAppRule: AppCleanupOverride?
 
     /// Bound through the raw string so a future value stored by a newer
     /// build never crashes this one — unknown reads as None (fail-safe:
@@ -62,15 +66,20 @@ struct IntelligencePane: View {
             availability = polish.availability()
             self.publishAccessory()
             refreshTransforms()
+            refreshAppOverrides()
             if enabled, level.wrappedValue != .none, availability == .available {
                 polish.prewarm(job: .cleanup(level.wrappedValue))
             }
+        }
+        .task {
+            installedApps = await InstalledApps.load()
         }
         .onChange(of: enabled) { _, on in
             self.availability = self.polish.availability()
             self.publishAccessory()
             guard on else { return }
             self.refreshTransforms()
+            self.refreshAppOverrides()
             if self.level.wrappedValue != .none, self.availability == .available {
                 self.polish.prewarm(job: .cleanup(self.level.wrappedValue))
             }
@@ -81,6 +90,36 @@ struct IntelligencePane: View {
                 recording = nil
                 acceptedRecording = nil
                 transforms.start()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshAppOverrides()
+        }
+        .sheet(isPresented: $addingAppRule) {
+            AppCleanupRuleEditor(
+                existingRule: nil,
+                blockedBundleIDs: Set(appOverrides.map(\.bundleID))
+            ) { saved in
+                addingAppRule = false
+                if let saved {
+                    CleanupAppOverrides.upsert(saved)
+                    refreshAppOverrides()
+                }
+            }
+        }
+        .sheet(item: $editingAppRule) { rule in
+            AppCleanupRuleEditor(
+                existingRule: rule,
+                blockedBundleIDs: Set(appOverrides.map(\.bundleID)).subtracting([rule.bundleID])
+            ) { saved in
+                editingAppRule = nil
+                if let saved {
+                    if saved.bundleID != rule.bundleID {
+                        CleanupAppOverrides.remove(bundleID: rule.bundleID)
+                    }
+                    CleanupAppOverrides.upsert(saved)
+                    refreshAppOverrides()
+                }
             }
         }
     }
@@ -141,6 +180,24 @@ struct IntelligencePane: View {
                 OtoPanelNote(cleanupFooting(historyEnabled: historyEnabled))
             } header: {
                 Text("Auto Cleanup")
+            }
+            .disabled(!enabled)
+
+            Section {
+                ForEach(sortedAppOverrides) { rule in
+                    appOverrideRow(for: rule)
+                }
+                HStack {
+                    Button("Add App Rule…") {
+                        addingAppRule = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Spacer(minLength: 0)
+                }
+                OtoPanelNote("Override cleanup per app — like Off in Terminal or a custom style in Slack.")
+            } header: {
+                Text("Per-App Rules")
             }
             .disabled(!enabled)
 
@@ -403,6 +460,97 @@ struct IntelligencePane: View {
         ).save()
     }
 
+    // MARK: - Per-App Rules
+
+    private func refreshAppOverrides() {
+        appOverrides = CleanupAppOverrides.load()
+    }
+
+    private var sortedAppOverrides: [AppCleanupOverride] {
+        appOverrides.sorted { lhs, rhs in
+            let lhsName = displayName(for: lhs.bundleID)
+            let rhsName = displayName(for: rhs.bundleID)
+            let order = lhsName.localizedCaseInsensitiveCompare(rhsName)
+            if order != .orderedSame { return order == .orderedAscending }
+            return lhs.bundleID < rhs.bundleID
+        }
+    }
+
+    private func displayName(for normalizedBundleID: String) -> String {
+        if let app = resolvedApp(for: normalizedBundleID) {
+            return app.name
+        }
+        if let running = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier.map(AppCleanupOverride.normalizeBundleID) == normalizedBundleID
+        }), let name = running.localizedName, !name.isEmpty {
+            return name
+        }
+        return InstalledApps.name(forBundleID: normalizedBundleID) ?? normalizedBundleID
+    }
+
+    private func appOverrideRow(for rule: AppCleanupOverride) -> some View {
+        let app = resolvedApp(for: rule.bundleID)
+        let appName = displayName(for: rule.bundleID)
+        return HStack(spacing: 10) {
+            appIcon(path: app?.path, bundleID: rule.bundleID, size: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appName)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                if rule.mode == .custom, !rule.customPrompt.isEmpty {
+                    Text(rule.customPrompt)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { editingAppRule = rule }
+
+            Text(rule.mode.displayName)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(OtoPalette.wash, in: Capsule())
+
+            OtoRowActions {
+                OtoRowButton(symbol: "pencil", help: "Edit app rule") {
+                    editingAppRule = rule
+                }
+                OtoRowButton(symbol: "trash", help: "Delete app rule", danger: true) {
+                    CleanupAppOverrides.remove(bundleID: rule.bundleID)
+                    refreshAppOverrides()
+                }
+            }
+        }
+    }
+
+    private func resolvedApp(for normalizedBundleID: String) -> InstalledApp? {
+        installedApps.first {
+            AppCleanupOverride.normalizeBundleID($0.bundleID) == normalizedBundleID
+        }
+    }
+
+    @ViewBuilder
+    private func appIcon(path: String?, bundleID: String, size: CGFloat) -> some View {
+        let resolvedPath = (path?.isEmpty == false ? path : nil)
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)?.path
+        if let resolvedPath {
+            Image(nsImage: InstalledApps.icon(forPath: resolvedPath))
+                .resizable()
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: "app")
+                .font(.system(size: size * 0.78))
+                .foregroundStyle(.secondary)
+                .frame(width: size, height: size)
+        }
+    }
+
     private var cleanupDescription: String {
         switch level.wrappedValue {
         case .none: "Exact words, mistakes included"
@@ -422,6 +570,283 @@ struct IntelligencePane: View {
     private var statusDetail: String? {
         if case .unavailable(let copy) = availability { return copy }
         return enabled ? nil : "Turned off — turn it on to use cleanup."
+    }
+}
+
+// MARK: - App rule editor sheet
+
+private struct AppCleanupRuleEditor: View {
+    private static let starterPrompts: [(title: String, prompt: String)] = [
+        ("Casual chat", "Keep it casual and concise for chat. Remove filler words and fix obvious typos."),
+        ("Formal email", "Write in a polite, clear, professional email tone while keeping the exact meaning."),
+        ("Bullet points", "Organize the key points into concise bullet points. Keep every fact."),
+    ]
+
+    let existingRule: AppCleanupOverride?
+    let blockedBundleIDs: Set<String>
+    let onDone: (AppCleanupOverride?) -> Void
+
+    @State private var selectedBundleID = ""
+    @State private var mode: AppCleanupMode = .off
+    @State private var customPrompt = ""
+    @State private var isChoosingApp = false
+    @State private var query = ""
+    @State private var installedApps: [InstalledApp] = InstalledApps.cached
+
+    var body: some View {
+        Form {
+            Section("App") {
+                Button {
+                    isChoosingApp = true
+                } label: {
+                    HStack(spacing: 8) {
+                        if let app = selectedApp {
+                            appIcon(for: app)
+                            Text(app.name)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        } else {
+                            Text("Choose an app…")
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("App for cleanup rule")
+                .popover(isPresented: $isChoosingApp, arrowEdge: .bottom) {
+                    appChooser
+                }
+            }
+
+            Section("Cleanup") {
+                OtoSegmented(
+                    options: [(.off, "Off"), (.light, "Light"), (.medium, "Medium"), (.custom, "Custom")],
+                    selection: $mode,
+                    accessibilityLabel: "App cleanup mode"
+                )
+                Text(modeDescription)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                if mode == .custom {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            ForEach(Self.starterPrompts, id: \.title) { starter in
+                                Button(starter.title) {
+                                    customPrompt = starter.prompt
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            Spacer(minLength: 0)
+                        }
+
+                        ZStack(alignment: .topLeading) {
+                            TextEditor(text: $customPrompt)
+                                .font(.system(size: 12))
+                                .frame(minHeight: 56)
+                                .accessibilityLabel("Per-app custom cleanup instruction")
+                            if customPrompt.isEmpty {
+                                Text("Describe how dictation should be cleaned up in this app…")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.top, 2)
+                                    .padding(.leading, 5)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+
+                        if sanitizedCustomPrompt.isEmpty {
+                            Text("Enter an instruction or choose a starter above.")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                        } else if customPrompt.count > CustomPrompt.instructionCap - 60 {
+                            let over = customPrompt.count > CustomPrompt.instructionCap
+                            Text("\(customPrompt.count) / \(CustomPrompt.instructionCap) characters\(over ? " — extra text will be trimmed on save" : "")")
+                                .font(.system(size: 11))
+                                .foregroundStyle(over ? .orange : .secondary)
+                        }
+                    }
+                }
+            }
+
+            HStack {
+                Button("Cancel", role: .cancel) { onDone(nil) }
+                Spacer()
+                Button("Save") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(minWidth: 420, minHeight: mode == .custom ? 390 : 270)
+        .onAppear { seed() }
+        .onChange(of: isChoosingApp) { _, open in
+            if !open { query = "" }
+        }
+    }
+
+    private var normalizedSelectedID: String {
+        AppCleanupOverride.normalizeBundleID(selectedBundleID)
+    }
+
+    private var sanitizedCustomPrompt: String {
+        CustomPrompt.sanitizeInstruction(customPrompt)
+    }
+
+    private var canSave: Bool {
+        guard !normalizedSelectedID.isEmpty,
+              !blockedBundleIDs.contains(normalizedSelectedID)
+        else { return false }
+        if mode == .custom {
+            return !sanitizedCustomPrompt.isEmpty
+        }
+        return true
+    }
+
+    private var modeDescription: String {
+        switch mode {
+        case .off: "Exact words — no AI cleanup in this app"
+        case .light: "Fixes fillers and grammar"
+        case .medium: "Tightens for clarity too"
+        case .custom: "Follows your own cleanup instruction"
+        }
+    }
+
+    private var availableApps: [InstalledApp] {
+        var list = installedApps
+        let known = Set(list.map { AppCleanupOverride.normalizeBundleID($0.bundleID) })
+        if !normalizedSelectedID.isEmpty, !known.contains(normalizedSelectedID) {
+            list.append(InstalledApp(
+                bundleID: normalizedSelectedID,
+                name: InstalledApps.name(forBundleID: normalizedSelectedID) ?? normalizedSelectedID,
+                path: NSWorkspace.shared.urlForApplication(withBundleIdentifier: normalizedSelectedID)?.path ?? ""
+            ))
+        }
+        return list
+    }
+
+    private var selectedApp: InstalledApp? {
+        guard !normalizedSelectedID.isEmpty else { return nil }
+        return availableApps.first {
+            AppCleanupOverride.normalizeBundleID($0.bundleID) == normalizedSelectedID
+        }
+    }
+
+    private var filteredApps: [InstalledApp] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        guard !needle.isEmpty else { return availableApps }
+        return availableApps.filter {
+            $0.name.localizedLowercase.contains(needle)
+                || $0.bundleID.localizedLowercase.contains(needle)
+        }
+    }
+
+    private var appChooser: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search apps", text: $query)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search apps")
+            }
+            .font(.system(size: 12))
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(.quaternary, in: Capsule())
+            .padding(10)
+
+            Divider()
+
+            if filteredApps.isEmpty {
+                Text("No apps found")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredApps) { app in
+                            let normalizedID = AppCleanupOverride.normalizeBundleID(app.bundleID)
+                            let isSelected = normalizedID == normalizedSelectedID
+                            let isBlocked = blockedBundleIDs.contains(normalizedID)
+                            Button {
+                                guard !isBlocked else { return }
+                                selectedBundleID = normalizedID
+                                isChoosingApp = false
+                            } label: {
+                                HStack(spacing: 8) {
+                                    appIcon(for: app)
+                                    Text(app.name)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    if isSelected {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(.tint)
+                                    } else if isBlocked {
+                                        Text("Added")
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .opacity(isBlocked ? 0.45 : 1)
+                                .padding(.horizontal, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(height: 26)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isBlocked)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .frame(width: 264, height: 300)
+        .task {
+            installedApps = await InstalledApps.load(forceRefresh: true)
+        }
+    }
+
+    @ViewBuilder
+    private func appIcon(for app: InstalledApp) -> some View {
+        if app.path.isEmpty {
+            Image(systemName: "app")
+                .frame(width: 16, height: 16)
+        } else {
+            Image(nsImage: InstalledApps.icon(forPath: app.path))
+                .resizable()
+                .frame(width: 16, height: 16)
+        }
+    }
+
+    private func seed() {
+        guard let existingRule else { return }
+        selectedBundleID = existingRule.bundleID
+        mode = existingRule.mode
+        customPrompt = existingRule.customPrompt
+    }
+
+    private func save() {
+        guard canSave else { return }
+        let prompt = mode == .custom ? sanitizedCustomPrompt : ""
+        onDone(AppCleanupOverride(
+            bundleID: normalizedSelectedID,
+            mode: mode,
+            customPrompt: prompt
+        ))
     }
 }
 

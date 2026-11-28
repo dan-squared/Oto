@@ -66,3 +66,54 @@ struct HistoryPage: Sendable {
         return slots
     }
 }
+
+/// Pure, case- and diacritic-insensitive multi-word AND filter over history
+/// entries: every whitespace-separated token must match `finalText`, `rawText`,
+/// the app's display name, or its bundle identifier.
+enum HistoryFilter: Sendable {
+    nonisolated static func filter(_ entries: [HistoryEntry], query: String) -> [HistoryEntry] {
+        let tokens = tokenized(query)
+        guard !tokens.isEmpty else { return entries }
+        var appNameCache: [String: String] = [:]
+        return entries.filter { entry in
+            matches(entry, tokens: tokens, appNameCache: &appNameCache)
+        }
+    }
+
+    nonisolated static func matches(_ entry: HistoryEntry, query: String) -> Bool {
+        let tokens = tokenized(query)
+        guard !tokens.isEmpty else { return true }
+        var appNameCache: [String: String] = [:]
+        return matches(entry, tokens: tokens, appNameCache: &appNameCache)
+    }
+
+    private nonisolated static func tokenized(_ query: String) -> [Substring] {
+        query
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+    }
+
+    private nonisolated static func matches(
+        _ entry: HistoryEntry,
+        tokens: [Substring],
+        appNameCache: inout [String: String]
+    ) -> Bool {
+        let nonEmptyBundleID = entry.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bundleID = (nonEmptyBundleID?.isEmpty == false) ? nonEmptyBundleID : nil
+        return tokens.allSatisfy { token in
+            if entry.finalText.localizedStandardContains(token) { return true }
+            if let raw = entry.rawText, raw.localizedStandardContains(token) { return true }
+            guard let bundleID else { return false }
+            if bundleID.localizedStandardContains(token) { return true }
+            let displayName: String
+            if let cached = appNameCache[bundleID] {
+                displayName = cached
+            } else {
+                let resolved = AppNames.displayName(forBundleID: bundleID)
+                appNameCache[bundleID] = resolved
+                displayName = resolved
+            }
+            return displayName.localizedStandardContains(token)
+        }
+    }
+}

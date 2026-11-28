@@ -24,8 +24,13 @@ struct HistoryPane: View {
     @State private var feedback: String?
     @State private var feedbackTask: Task<Void, Never>?
     @State private var historyPage = 1
+    @State private var searchQuery = ""
     @State private var infoEntryID: UUID?
     @State private var copyFlash = OtoCopyFlash()
+
+    private var filteredEntries: [HistoryEntry] {
+        HistoryFilter.filter(history.entries, query: searchQuery)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,12 +70,21 @@ struct HistoryPane: View {
         }
         .onChange(of: historyEnabled) { _, new in
             history.setEnabled(new)
-            if !new { historyPage = 1 }
+            if !new {
+                historyPage = 1
+                searchQuery = ""
+            }
             publishAccessory()
         }
+        .onChange(of: searchQuery) { _, _ in
+            historyPage = 1
+        }
         .onChange(of: history.entries.count) { _, _ in
-            historyPage = HistoryPage.clampedPage(historyPage, total: history.entries.count)
+            historyPage = HistoryPage.clampedPage(historyPage, total: filteredEntries.count)
             publishAccessory()
+        }
+        .onChange(of: filteredEntries.count) { _, newCount in
+            historyPage = HistoryPage.clampedPage(historyPage, total: newCount)
         }
 #if DEBUG
         // Probe-only (never posted in normal use): lets the screenshot walk
@@ -95,6 +109,7 @@ struct HistoryPane: View {
                 Task {
                     await history.clearAll()
                     historyPage = 1
+                    searchQuery = ""
                 }
             }
         } message: {
@@ -122,61 +137,111 @@ struct HistoryPane: View {
     // MARK: - List
 
     private var list: some View {
-        OtoPaneForm {
-            let pageCount = HistoryPage.pageCount(total: history.entries.count)
-            Section {
-                ForEach(HistoryPage.slice(items: history.entries, page: historyPage)) { entry in
-                    self.row(for: entry)
-                }
-            }
+        let filtered = filteredEntries
+        let pageCount = HistoryPage.pageCount(total: filtered.count)
+        return VStack(spacing: 0) {
+            self.searchBar
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
 
-            Section {
-                HStack(spacing: 12) {
-                    Button("Clear all…") { showClearConfirm = true }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .tint(.red)
-                    Spacer(minLength: 0)
-                }
-                if pageCount > 1 {
-                    let slots = HistoryPage.visibleSlots(current: historyPage, totalPages: pageCount)
-                    HStack(spacing: 6) {
-                        Button("Previous") {
-                            if historyPage > 1 { historyPage -= 1 }
+            if filtered.isEmpty {
+                OtoPaneCanvas {
+                    VStack(spacing: 10) {
+                        Text("No matching transcripts")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Button("Clear search") {
+                            searchQuery = ""
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
-                        .disabled(historyPage <= 1)
-                        ForEach(Array(slots.enumerated()), id: \.offset) { _, slot in
-                            switch slot {
-                            case .page(let number):
-                                self.pageButton(number: number, isCurrent: number == historyPage)
-                            case .ellipsis:
-                                Text("…")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            } else {
+                OtoPaneForm {
+                    Section {
+                        ForEach(HistoryPage.slice(items: filtered, page: historyPage)) { entry in
+                            self.row(for: entry)
+                        }
+                    }
+
+                    Section {
+                        HStack(spacing: 12) {
+                            Button("Clear all…") { showClearConfirm = true }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(.red)
+                            Spacer(minLength: 0)
+                        }
+                        if pageCount > 1 {
+                            let slots = HistoryPage.visibleSlots(current: historyPage, totalPages: pageCount)
+                            HStack(spacing: 6) {
+                                Button("Previous") {
+                                    if historyPage > 1 { historyPage -= 1 }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(historyPage <= 1)
+                                ForEach(Array(slots.enumerated()), id: \.offset) { _, slot in
+                                    switch slot {
+                                    case .page(let number):
+                                        self.pageButton(number: number, isCurrent: number == historyPage)
+                                    case .ellipsis:
+                                        Text("…")
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 2)
+                                    }
+                                }
+                                Button("Next") {
+                                    if historyPage < pageCount { historyPage += 1 }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(historyPage >= pageCount)
+                                Spacer(minLength: 0)
+                                Text("Page \(historyPage) of \(pageCount)")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 2)
                             }
                         }
-                        Button("Next") {
-                            if historyPage < pageCount { historyPage += 1 }
+                        if let feedback {
+                            Text(feedback)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(historyPage >= pageCount)
-                        Spacer(minLength: 0)
-                        Text("Page \(historyPage) of \(pageCount)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
-                }
-                if let feedback {
-                    Text(feedback)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
                 }
             }
         }
+        .background(OtoPalette.settingsGround)
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search transcripts or apps", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .accessibilityLabel("Search transcripts or apps")
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 10)
+        .frame(height: 22)
+        .background(.quaternary, in: Capsule())
+        .overlay(Capsule().strokeBorder(.primary.opacity(0.08), lineWidth: 0.7))
     }
 
     private func row(for entry: HistoryEntry) -> some View {

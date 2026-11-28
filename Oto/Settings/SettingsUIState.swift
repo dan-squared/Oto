@@ -33,6 +33,10 @@ final class SettingsUIState {
     var languageText = "—"
     var prepareFeedback: String?
     var isPreparing = false
+    var prepareProgress: Double?
+    var selectedLocaleIdentifier: String? = SpeechLocalePreference.selectedIdentifier()
+    var supportedLocales: [Locale] = []
+    var installedLocales: [Locale] = []
     // Permissions (typed stored state; nil = not yet read, the honest
     // "Checking…"). Display strings are computed below in exactly one
     // place, so producers and consumers can never disagree on a literal
@@ -43,13 +47,37 @@ final class SettingsUIState {
     // Mic devices (moved verbatim from DictationPane).
     var inputDevices: [AudioInputDevice] = []
     var defaultInputUID: String?
+    typealias PrepareHandler = @Sendable (@escaping @Sendable (Double?) -> Void) async -> PrepareOutcome
+    typealias NetworkConditionProvider = @Sendable () async -> NetworkPathCondition
+
     private let preparer: SpeechAssetPreparer
     private let permissions: PermissionsManager
+    private let prepareHandler: PrepareHandler
+    private let networkConditionProvider: NetworkConditionProvider
+    private let stallHintDelayNanoseconds: UInt64
     private var speechRefreshTask: Task<Void, Never>?
+    private var speechRefreshGeneration = 0
+    private var prepareTask: Task<Void, Never>?
+    private var prepareStallTask: Task<Void, Never>?
+    private var prepareGeneration = 0
+    private var prepareContinuation: CheckedContinuation<Void, Never>?
 
-    init(preparer: SpeechAssetPreparer, permissions: PermissionsManager) {
+    init(
+        preparer: SpeechAssetPreparer,
+        permissions: PermissionsManager,
+        prepareHandler: PrepareHandler? = nil,
+        networkConditionProvider: NetworkConditionProvider? = nil,
+        stallHintDelayNanoseconds: UInt64 = 15_000_000_000
+    ) {
         self.preparer = preparer
         self.permissions = permissions
+        self.prepareHandler = prepareHandler ?? { onProgress in
+            await preparer.prepareDefaultWithOutcome(onProgress: onProgress)
+        }
+        self.networkConditionProvider = networkConditionProvider ?? {
+            await preparer.currentNetworkCondition()
+        }
+        self.stallHintDelayNanoseconds = stallHintDelayNanoseconds
     }
 
     /// Refreshes permissions, microphones, and speech readiness without
@@ -63,10 +91,7 @@ final class SettingsUIState {
 
     func refreshSpeechInBackground() {
         guard speechRefreshTask == nil else { return }
-        speechRefreshTask = Task {
-            defer { self.speechRefreshTask = nil }
-            await self.refreshSpeech()
-        }
+        startSpeechRefreshTask()
     }
 
     func refreshPermissions() {
@@ -79,29 +104,181 @@ final class SettingsUIState {
         defaultInputUID = MicrophoneSelector.defaultInputUID()
     }
 
+    func selectLocale(_ identifier: String?) {
+        guard !isPreparing else { return }
+        let previous = selectedLocaleIdentifier
+        SpeechLocalePreference.setSelectedIdentifier(identifier)
+        selectedLocaleIdentifier = SpeechLocalePreference.selectedIdentifier()
+        prepareFeedback = nil
+        if selectedLocaleIdentifier != previous {
+            speechReadiness = nil
+        }
+        restartSpeechRefreshInBackground()
+    }
+
     func refreshSpeech() async {
-        let report = await preparer.status()
-        if let tag = report.resolved?.identifier(.bcp47) {
-            let systemTag = Locale.current.identifier(.bcp47)
-            languageText = tag == systemTag
-                ? tag
-                : "\(systemTag) → engine uses \(tag)"
+        let task = restartSpeechRefreshTask()
+        await task.value
+    }
+
+    private func restartSpeechRefreshInBackground() {
+        _ = restartSpeechRefreshTask()
+    }
+
+    @discardableResult
+    private func restartSpeechRefreshTask() -> Task<Void, Never> {
+        speechRefreshTask?.cancel()
+        speechRefreshTask = nil
+        return startSpeechRefreshTask()
+    }
+
+    @discardableResult
+    private func startSpeechRefreshTask() -> Task<Void, Never> {
+        speechRefreshGeneration += 1
+        let generation = speechRefreshGeneration
+        let task = Task {
+            defer {
+                if self.speechRefreshGeneration == generation {
+                    self.speechRefreshTask = nil
+                }
+            }
+            await self.performSpeechRefresh(generation: generation)
+        }
+        speechRefreshTask = task
+        return task
+    }
+
+    private func performSpeechRefresh(generation: Int) async {
+        selectedLocaleIdentifier = SpeechLocalePreference.selectedIdentifier()
+        let available = await preparer.availableLocales()
+        guard !Task.isCancelled, generation == speechRefreshGeneration else { return }
+
+        supportedLocales = SpeechLocalePreference.dedupedSortedLocales(available.supported)
+        installedLocales = SpeechLocalePreference.dedupedSortedLocales(available.installed)
+
+        let requested = SpeechLocalePreference.effectiveLocale()
+        let report = await preparer.status(locale: requested)
+        guard !Task.isCancelled, generation == speechRefreshGeneration else { return }
+
+        let names = SpeechLocalePreference.displayNames(for: supportedLocales)
+        if let resolved = report.resolved {
+            let resolvedTag = resolved.identifier(.bcp47)
+            languageText = names[resolvedTag] ?? SpeechLocalePreference.displayName(for: resolved)
         } else {
-            languageText = Locale.current.identifier(.bcp47)
+            languageText = SpeechLocalePreference.displayName(for: requested)
         }
         speechReadiness = report.readiness
     }
 
     func runPrepare() async {
+        guard !isPreparing else { return }
+        prepareGeneration += 1
+        let generation = prepareGeneration
+        let targetIdentifier = selectedLocaleIdentifier
         isPreparing = true
-        prepareFeedback = "Preparing…"
-        prepareFeedback = await preparer.prepareDefault()
-        // P3: preparing a language changes installed state — the press-path
-        // snapshot must requery next time (success or failure; a failed
-        // prepare changes nothing, and requerying once is harmless).
-        LocaleSnapshotCache.shared.invalidate()
+        prepareProgress = nil
+        prepareFeedback = nil
+
+        let constrainedNote = "Low Data Mode is on — macOS may pause speech downloads."
+        let stallNote = "Waiting on macOS to start the download…"
+
+        let condition = await networkConditionProvider()
+        guard generation == prepareGeneration, isPreparing else { return }
+        if condition == .constrained {
+            prepareFeedback = constrainedNote
+        }
+
+        prepareStallTask?.cancel()
+        if condition != .constrained && stallHintDelayNanoseconds > 0 {
+            let delay = stallHintDelayNanoseconds
+            prepareStallTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled, let self,
+                      self.prepareGeneration == generation,
+                      self.isPreparing,
+                      self.prepareProgress == nil,
+                      self.prepareFeedback == nil
+                else { return }
+                self.prepareFeedback = stallNote
+            }
+        } else {
+            prepareStallTask = nil
+        }
+
+        let handler = prepareHandler
+        let task = Task { [weak self] in
+            let outcome = await handler { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.prepareGeneration == generation,
+                          self.isPreparing,
+                          self.selectedLocaleIdentifier == targetIdentifier
+                    else { return }
+                    self.prepareProgress = progress
+                    if let progress, progress > 0 {
+                        self.prepareStallTask?.cancel()
+                        self.prepareStallTask = nil
+                        if self.prepareFeedback == constrainedNote || self.prepareFeedback == stallNote {
+                            self.prepareFeedback = nil
+                        }
+                    }
+                }
+            }
+
+            guard let self, self.prepareGeneration == generation else { return }
+            self.prepareStallTask?.cancel()
+            self.prepareStallTask = nil
+            self.prepareTask = nil
+            self.prepareProgress = nil
+            self.isPreparing = false
+
+            if !Task.isCancelled, self.selectedLocaleIdentifier == targetIdentifier {
+                switch outcome {
+                case .cancelled:
+                    self.prepareFeedback = nil
+                case .prepared, .alreadyPrepared, .failed:
+                    self.prepareFeedback = outcome.summary
+                }
+            } else if self.selectedLocaleIdentifier == targetIdentifier {
+                self.prepareFeedback = nil
+            }
+
+            // P3: preparing a language changes installed state — the press-path
+            // snapshot must requery next time (success or failure; a failed
+            // prepare changes nothing, and requerying once is harmless).
+            LocaleSnapshotCache.shared.invalidate()
+            await self.refreshSpeech()
+            if self.prepareGeneration == generation {
+                self.finishPrepareWaiter()
+            }
+        }
+        prepareTask = task
+
+        await withCheckedContinuation { continuation in
+            if prepareGeneration != generation || !isPreparing {
+                continuation.resume()
+            } else {
+                prepareContinuation = continuation
+            }
+        }
+    }
+
+    func cancelPrepare() {
+        prepareGeneration += 1
+        prepareStallTask?.cancel()
+        prepareStallTask = nil
+        prepareTask?.cancel()
+        prepareTask = nil
+        prepareProgress = nil
+        prepareFeedback = nil
         isPreparing = false
-        await refreshSpeech()
+        finishPrepareWaiter()
+    }
+
+    private func finishPrepareWaiter() {
+        let continuation = prepareContinuation
+        prepareContinuation = nil
+        continuation?.resume()
     }
 
     /// Just-in-time mic grant for the Allow buttons (moved from panes).

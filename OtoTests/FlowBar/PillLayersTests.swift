@@ -377,4 +377,38 @@ struct PillLayersTests {
         #expect(!pill.shineHasAnimation())
         #expect(pill.shineOverlayHidden())
     }
+
+    @Test func messagePillFitsAllFailureNoticesWithoutTruncation() {
+        let notices = [
+            "Copied",
+            "Microphone error",
+            "Speech unavailable",
+            "Target app closed",
+            "No text field",
+            "Couldn't paste — kept",
+            "Audio capture failed — check the microphone",
+        ]
+        for text in notices {
+            let measured = VisualizerMath.measureWorkText(text)
+            let width = VisualizerMath.messagePillWidth(textWidth: measured)
+            let pill = PillContentView(frame: NSRect(x: 0, y: 0, width: width, height: VisualizerMath.pillHeight))
+            pill.show(visual: .message)
+            pill.layout(width: width)
+            pill.update(level: 0, time: 0.3, text: text, centerText: true, reduceMotion: false)
+
+            let frame = pill.messageLayoutFrame()
+            #expect(pill.labelText() == text)
+            #expect(
+                !pill.messageIsTruncated(),
+                "AppKit text cell must NOT truncate centered notice '\(text)' (frame=\(frame), pillW=\(width))"
+            )
+            #expect(
+                frame.width >= ceil(measured) + VisualizerMath.messageTextSlack,
+                "Label frame for '\(text)' must include messageTextSlack to prevent centered ellipsizing"
+            )
+            #expect(frame.minX >= VisualizerMath.messagePadding - 0.5)
+            #expect(frame.maxX <= width - VisualizerMath.messagePadding + 0.5)
+            #expect(frame.height <= VisualizerMath.pillHeight)
+        }
+    }
 }

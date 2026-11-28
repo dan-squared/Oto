@@ -109,6 +109,14 @@ actor FakeSpeechService: SpeechServing {
         }
     }
 
+    func setFinalText(_ text: String) {
+        finalText = text
+    }
+
+    func closeFinishGate() {
+        finishGateOpen = false
+    }
+
     func openFinishGate() {
         finishGateOpen = true
         let waiters = finishWaiters

@@ -107,6 +107,7 @@ actor DictationCoordinator {
     /// the next dictation, no restart); `polish` streams cleanup.
     private let polish: (any PolishServing)?
     private let behaviorProvider: (@Sendable () -> CleanupBehavior)?
+    private let cleanupProvider: (@Sendable (String?) -> EffectiveCleanup)?
     /// Feedback sounds sink. Nil in tests and when unwired. Only outcomes come
     /// through here — the press cue belongs to the shortcut layer, which owns
     /// the key event. Every call site is optional, so a session without a sink
@@ -130,6 +131,12 @@ actor DictationCoordinator {
         didSet { notifyObservers() }
     }
 
+    /// Most recent non-empty finalized transcript from this app session.
+    /// In-memory only (never written to disk); works even when History is OFF.
+    private(set) var lastTranscript: String? {
+        didSet { notifyObservers() }
+    }
+
     /// Multi-subscriber change notifications for event-driven UI (Flow Bar, Menu Bar).
     private var stateObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
 
@@ -144,6 +151,7 @@ actor DictationCoordinator {
         mediaDuck: (any MediaDucking)? = nil,
         polish: (any PolishServing)? = nil,
         behaviorProvider: (@Sendable () -> CleanupBehavior)? = nil,
+        cleanupProvider: (@Sendable (String?) -> EffectiveCleanup)? = nil,
         feedback: (@Sendable (DictationCue) -> Void)? = nil,
         startTone: Duration = .zero
     ) {
@@ -157,6 +165,7 @@ actor DictationCoordinator {
         self.mediaDuck = mediaDuck
         self.polish = polish
         self.behaviorProvider = behaviorProvider
+        self.cleanupProvider = cleanupProvider
         self.feedback = feedback
         self.startTone = startTone
     }
@@ -166,13 +175,23 @@ actor DictationCoordinator {
     /// and enabled replacement terms are forwarded to speech recognition as
     /// contextual strings.
     func setDictionaryRules(_ rules: [DictionaryRule]) async {
-        pipeline = TranscriptPipeline(dictionaryRules: rules)
+        pipeline = TranscriptPipeline(dictionaryRules: rules, snippets: pipeline.snippets)
         let terms = Self.contextualStrings(from: rules)
         await speech.setContextualStrings(terms)
     }
 
+    /// Live snippet refresh from the snippets store (Snippets pane saves).
+    func setSnippets(_ snippets: [Snippet]) async {
+        pipeline = TranscriptPipeline(dictionaryRules: pipeline.dictionaryRules, snippets: snippets)
+    }
+
+    /// Most recent non-empty finalized transcript in memory (nil before the
+    /// first non-empty dictation). Never persisted to disk.
+    func lastTranscriptText() -> String? { lastTranscript }
+
     /// Event-driven change stream yielding whenever `state`, `currentWork`,
-    /// or `recovery` changes. Supports multiple concurrent subscribers.
+    /// `recovery`, or `lastTranscript` changes. Supports multiple concurrent
+    /// subscribers.
     func stateChanges() -> AsyncStream<Void> {
         let id = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
@@ -421,7 +440,7 @@ actor DictationCoordinator {
         currentWork = nil
         state = .starting(context)
         log.info("begin \(context.id.uuidString.prefix(8), privacy: .public) mode=\(String(describing: interaction), privacy: .public) target=\(context.target.bundleIdentifier ?? "?", privacy: .public)")
-        prewarmForSession()
+        prewarmForSession(for: target)
         prewarmAccessibility(for: target)
 
         Task { await self.runPreparation(sessionID: context.id) }
@@ -603,15 +622,37 @@ actor DictationCoordinator {
         pressReceivedAt = nil
     }
 
+    /// Resolves effective Auto Cleanup settings for `bundleID`, preferring
+    /// `cleanupProvider` (supports per-app overrides) and falling back to the
+    /// legacy `behaviorProvider` for existing tests.
+    private func resolveCleanup(for bundleID: String?) -> EffectiveCleanup {
+        if let cleanupProvider {
+            return cleanupProvider(bundleID)
+        }
+        if let behaviorProvider {
+            let behavior = behaviorProvider()
+            guard behavior.enabled else {
+                return EffectiveCleanup(enabled: false, job: nil)
+            }
+            switch behavior.level {
+            case .none:
+                return EffectiveCleanup(enabled: true, job: nil)
+            case .light, .medium:
+                return EffectiveCleanup(enabled: true, job: .cleanup(behavior.level))
+            }
+        }
+        return EffectiveCleanup(enabled: false, job: nil)
+    }
+
     /// E1 prewarm: the model warms while the user speaks (free seconds).
-    /// Gated on enabled + a real level + availability — all synchronous
+    /// Gated on enabled + a real job + availability — all synchronous
     /// property reads, never a download, never a prompt.
-    private func prewarmForSession() {
-        guard let polish, let behaviorProvider else { return }
-        let behavior = behaviorProvider()
-        guard behavior.enabled, behavior.level != .none else { return }
+    private func prewarmForSession(for target: TargetApplication) {
+        guard let polish else { return }
+        let effective = resolveCleanup(for: target.bundleIdentifier)
+        guard effective.enabled, let job = effective.job else { return }
         guard polish.availability() == .available else { return }
-        polish.prewarm(job: .cleanup(behavior.level))
+        polish.prewarm(job: job)
     }
 
     /// AX prewarm: ask the captured target to publish its accessibility tree
@@ -699,7 +740,8 @@ actor DictationCoordinator {
         PerfTrace.end(.finalizeAwait, tFinal)
         let finalizeMs = PerfTrace.ms(finalizeBeganAt.duration(to: .now))
 
-        let clean = pipeline.process(raw, for: context.target)
+        let processed = pipeline.processDetailed(raw, for: context.target)
+        let clean = processed.text
         guard !clean.isEmpty else {
             // Empty final: complete without insertion (02 timeline).
             // Terminal first (cancel-wins over in-flight restore).
@@ -712,17 +754,25 @@ actor DictationCoordinator {
         }
 
         // E1 Auto Cleanup: bounded pre-insertion race (Whisperflow shape).
-        // The winner inserts exactly once; timeout / error / empty /
-        // identical ⇒ raw inserts with zero ceremony. No swap, no window,
-        // no second write — a miss is invisible, never mysterious.
+        // Voice-triggered snippets bypass Auto Cleanup so saved URLs, emails,
+        // and signatures are never altered by Apple Intelligence.
+        // Otherwise the winner inserts exactly once; timeout / error / empty /
+        // identical ⇒ raw inserts with zero ceremony.
         let cleanupBeganAt = ContinuousClock.now
         let tRace = PerfTrace.begin(.cleanupRace)
-        let (final, wasCleaned) = await cleanedText(clean, sessionID: sessionID)
+        let (final, wasCleaned): (String, Bool)
+        if processed.matchedSnippet {
+            (final, wasCleaned) = (clean, false)
+        } else {
+            (final, wasCleaned) = await cleanedText(clean, target: context.target, sessionID: sessionID)
+        }
         PerfTrace.end(.cleanupRace, tRace)
         let cleanupMs = PerfTrace.ms(cleanupBeganAt.duration(to: .now))
         guard currentSessionID == sessionID,
               case .finalizing = state
         else { return }
+
+        lastTranscript = final
 
         // Opt-in recall: final text + what was said (never audio/partials/
         // clipboard). The store itself no-ops when history is off. Recorded
@@ -809,12 +859,11 @@ actor DictationCoordinator {
     /// and the caller re-checks session identity before inserting.
     /// `currentWork` feeds the pill for the race duration (cleared in defer
     /// and in `cancel`, so no path strands the beat).
-    private func cleanedText(_ clean: String, sessionID: UUID) async -> (String, Bool) {
-        guard let polish, let behaviorProvider else { return (clean, false) }
-        let behavior = behaviorProvider()
-        guard behavior.enabled, behavior.level != .none else { return (clean, false) }
+    private func cleanedText(_ clean: String, target: TargetApplication, sessionID: UUID) async -> (String, Bool) {
+        guard let polish else { return (clean, false) }
+        let effective = resolveCleanup(for: target.bundleIdentifier)
+        guard effective.enabled, let job = effective.job else { return (clean, false) }
         guard polish.availability() == .available else { return (clean, false) }
-        let job = PolishJob.cleanup(behavior.level)
         currentWork = .cleaningUp
         defer { currentWork = nil }
         guard let polished = await racePolishText(

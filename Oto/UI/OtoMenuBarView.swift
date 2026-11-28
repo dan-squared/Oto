@@ -18,12 +18,24 @@ import SwiftUI
 /// and one row to act on it until the next session starts.
 struct OtoMenuBarView: View {
     let coordinator: DictationCoordinator
-    let onboarding: OnboardingWindowController
     let settings: OtoSettingsWindowController
     let updater: AppUpdater
+    let snippets: SnippetStore
+    let uiState: SettingsUIState
 
     @State private var lastError: String?
-    @AppStorage(OnboardingStore.key) private var onboardingVersion = 0
+    @State private var lastTranscript: String?
+
+    private static let maxMenuSnippets = 25
+
+    private var languageSelection: Binding<String> {
+        Binding(
+            get: { uiState.selectedLocaleIdentifier ?? SpeechLocalePreference.systemTag },
+            set: { tag in
+                uiState.selectLocale(tag.isEmpty ? nil : tag)
+            }
+        )
+    }
 
     var body: some View {
         // Slice B undo: REMOVED (2026-10-06) — the OS owns undo; History's
@@ -35,11 +47,51 @@ struct OtoMenuBarView: View {
             }
             Divider()
         }
-        // Onboarding stays while the first-run flow is being refined: it is
-        // the only way to reach the walkthrough on demand. Until the walk is
-        // finished the entry says what it does — continue, not start over.
-        Button(onboardingVersion < OnboardingStore.current ? "Continue setup…" : "Show onboarding…") {
-            onboarding.show()
+        let hasQuickActions = lastTranscript != nil
+            || uiState.installedLocales.count >= 2
+            || !snippets.snippets.isEmpty
+        if let lastTranscript {
+            Button("Copy Last Dictation") {
+                ClipboardWrite.text(lastTranscript)
+            }
+        }
+        if uiState.installedLocales.count >= 2 {
+            let nameSource = uiState.supportedLocales.isEmpty
+                ? uiState.installedLocales
+                : uiState.supportedLocales
+            let localeNames = SpeechLocalePreference.displayNames(for: nameSource)
+            Menu("Language") {
+                Picker("Language", selection: languageSelection) {
+                    Text("System")
+                        .tag(SpeechLocalePreference.systemTag)
+                    Divider()
+                    ForEach(uiState.installedLocales.map { (tag: $0.identifier(.bcp47), locale: $0) }, id: \.tag) { item in
+                        Text(localeNames[item.tag] ?? SpeechLocalePreference.displayName(for: item.locale))
+                            .tag(item.tag)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+            .disabled(uiState.isPreparing)
+        }
+        if !snippets.snippets.isEmpty {
+            Menu("Snippets") {
+                ForEach(snippets.snippets.prefix(Self.maxMenuSnippets)) { snippet in
+                    Button(snippet.name) {
+                        ClipboardWrite.text(snippet.expansion)
+                    }
+                }
+                if snippets.snippets.count > Self.maxMenuSnippets {
+                    Divider()
+                    Button("Show All in Settings…") {
+                        settings.show()
+                    }
+                }
+            }
+        }
+        if hasQuickActions {
+            Divider()
         }
         // The button itself changes label (Checking… / Up to date / error);
         // there is intentionally no second row under it.
@@ -69,5 +121,6 @@ struct OtoMenuBarView: View {
     @MainActor
     private func refreshStatus() async {
         lastError = await coordinator.menuErrorSummary()
+        lastTranscript = await coordinator.lastTranscriptText()
     }
 }

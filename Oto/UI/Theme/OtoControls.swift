@@ -442,3 +442,67 @@ struct OtoStatusAction: View {
         .accessibilityHint(help ?? "")
     }
 }
+
+/// Inline circular download progress capsule with a cancel control.
+/// Matches `OtoStatusFace`'s capsule styling so transitioning between
+/// "Not prepared", active download, and "Ready" keeps the row steady.
+struct OtoProgressStatus: View {
+    let progress: Double?
+    var fill: Color = OtoPalette.wash
+    let onCancel: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hoveringCancel = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let progress, progress > 0 {
+                let clamped = min(1, max(0.02, progress))
+                ZStack {
+                    Circle()
+                        .stroke(Color.primary.opacity(0.14), lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: clamped)
+                        .stroke(
+                            Color.accentColor,
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: clamped)
+                }
+                .frame(width: 14, height: 14)
+
+                Text("\(Int((min(1, progress) * 100).rounded()))%")
+                    .font(.system(size: 11.5, weight: .medium).monospacedDigit())
+                    .foregroundStyle(OtoPalette.ink)
+                    .lineLimit(1)
+            } else {
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(0.75)
+                    .frame(width: 14, height: 14)
+
+                Text("Preparing…")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(OtoPalette.ink)
+                    .lineLimit(1)
+            }
+
+            Button(action: onCancel) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(hoveringCancel ? .primary : .secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveringCancel = $0 }
+            .help("Cancel download")
+            .accessibilityLabel("Cancel download")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(fill, in: Capsule())
+        .contentShape(Capsule())
+    }
+}

@@ -29,6 +29,7 @@ struct SettingsUIStateTests {
         #expect(state.axTrusted == false)
         #expect(state.inputDevices.isEmpty)
         #expect(state.speechReady == false)
+        #expect(state.prepareProgress == nil)
         #expect(state.currentInputName == "System default")
     }
 
@@ -104,5 +105,117 @@ struct SettingsUIStateTests {
     @Test func sidebarUsesCompactResizableWidth() {
         #expect(SettingsRoot.minimumSidebarWidth == 170)
         #expect(SettingsRoot.sidebarWidth == 180)
+    }
+
+    @Test func cancelPrepareResetsStateCleanly() {
+        let state = makeState()
+        #expect(state.prepareProgress == nil)
+        #expect(state.prepareFeedback == nil)
+        #expect(state.isPreparing == false)
+
+        state.prepareProgress = 0.42
+        state.prepareFeedback = "Preparing…"
+        state.cancelPrepare()
+
+        #expect(state.prepareProgress == nil)
+        #expect(state.prepareFeedback == nil)
+        #expect(state.isPreparing == false)
+    }
+
+    @Test func cancelPrepareExitsImmediatelyEvenWhenDownloadHangs() async {
+        // Mirrors real macOS 27.2 AssetInstallationRequest.downloadAndInstall(),
+        // which can remain suspended after progress.cancel() when mobileassetd stalls.
+        let gate = AsyncGate()
+        let state = SettingsUIState(
+            preparer: SpeechAssetPreparer(),
+            permissions: PermissionsManager(),
+            prepareHandler: { _ in
+                await gate.wait()
+                return .failed("Stale late failure after cancel")
+            },
+            networkConditionProvider: { .online },
+            stallHintDelayNanoseconds: 0
+        )
+
+        let runTask = Task { await state.runPrepare() }
+        // Yield until runPrepare enters preparing state and launches prepareTask.
+        for _ in 0..<20 where !state.isPreparing {
+            await Task.yield()
+        }
+        #expect(state.isPreparing == true)
+
+        state.cancelPrepare()
+        // UI state resets synchronously without waiting for the hung handler.
+        #expect(state.isPreparing == false)
+        #expect(state.prepareProgress == nil)
+        #expect(state.prepareFeedback == nil)
+
+        // Caller awaiting runPrepare() also unblocks promptly.
+        await runTask.value
+
+        // Even when the cancelled handler eventually finishes later, stale
+        // results must never overwrite current UI state.
+        await gate.open()
+        for _ in 0..<10 { await Task.yield() }
+        #expect(state.isPreparing == false)
+        #expect(state.prepareFeedback == nil)
+    }
+
+    @Test func constrainedNetworkShowsLowDataModeNoteAndClearsOnProgress() async {
+        let progressGate = AsyncGate()
+        let finishGate = AsyncGate()
+        let state = SettingsUIState(
+            preparer: SpeechAssetPreparer(),
+            permissions: PermissionsManager(),
+            prepareHandler: { onProgress in
+                await progressGate.wait()
+                onProgress(0.35)
+                await finishGate.wait()
+                return .prepared("en-US")
+            },
+            networkConditionProvider: { .constrained },
+            stallHintDelayNanoseconds: 0
+        )
+
+        let runTask = Task { await state.runPrepare() }
+        for _ in 0..<40 where state.prepareFeedback == nil {
+            await Task.yield()
+        }
+        #expect(state.isPreparing == true)
+        #expect(state.prepareFeedback?.contains("Low Data Mode") == true)
+
+        // Once real progress arrives, the Low Data Mode warning clears.
+        await progressGate.open()
+        for _ in 0..<40 where state.prepareProgress == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(state.prepareProgress == 0.35)
+        #expect(state.prepareFeedback == nil)
+
+        await finishGate.open()
+        await runTask.value
+        #expect(state.isPreparing == false)
+        #expect(state.prepareProgress == nil)
+        #expect(state.prepareFeedback == "Prepared (en-US).")
+    }
+}
+
+private actor AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }

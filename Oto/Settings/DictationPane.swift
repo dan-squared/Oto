@@ -51,13 +51,38 @@ struct DictationPane: View {
             // No "Dictation" header — the sidebar already says it.
 
             Section {
+                let localeNames = SpeechLocalePreference.displayNames(for: pickerLocales.map(\.locale))
+                let systemLabel: String = {
+                    if let resolved = SpeechLocaleMatching.bestMatch(for: .current, in: uiState.supportedLocales) {
+                        let name = localeNames[resolved.identifier(.bcp47)]
+                            ?? SpeechLocalePreference.displayName(for: resolved)
+                        return "System (\(name))"
+                    }
+                    return "System"
+                }()
+
+                Picker("Language", selection: languageSelection) {
+                    Text(systemLabel)
+                        .tag(SpeechLocalePreference.systemTag)
+                    if !pickerLocales.isEmpty {
+                        Divider()
+                        ForEach(pickerLocales, id: \.tag) { option in
+                            Text(localeNames[option.tag] ?? SpeechLocalePreference.displayName(for: option.locale))
+                                .tag(option.tag)
+                        }
+                    }
+                }
+                .disabled(uiState.isPreparing)
+
                 LabeledContent("Readiness") {
-                    if uiState.speechReady {
+                    if uiState.isPreparing {
+                        OtoProgressStatus(progress: uiState.prepareProgress) {
+                            uiState.cancelPrepare()
+                        }
+                    } else if uiState.speechReady {
                         OtoStatus(text: "Ready", tone: .ok)
                     } else if uiState.speechReadiness == nil {
                         OtoStatus(text: "Checking…", tone: .idle)
-                    } else if uiState.isPreparing {
-                        OtoStatusAction(text: "Preparing…", tone: .idle, busy: true) {}
                     } else {
                         // The state is the button: one control, no second
                         // "Prepare" button under a "Not prepared" pill.
@@ -237,6 +262,36 @@ struct DictationPane: View {
         Binding(
             get: { capturePopoverSlot == slot },
             set: { if !$0, capturePopoverSlot == slot { capturePopoverSlot = nil } }
+        )
+    }
+
+    private struct PickerLocaleOption {
+        let tag: String
+        let locale: Locale
+    }
+
+    private var pickerLocales: [PickerLocaleOption] {
+        var options = uiState.supportedLocales.map {
+            PickerLocaleOption(tag: $0.identifier(.bcp47), locale: $0)
+        }
+        if let selected = uiState.selectedLocaleIdentifier,
+           !selected.isEmpty,
+           !options.contains(where: { $0.tag == selected })
+        {
+            options.insert(
+                PickerLocaleOption(tag: selected, locale: Locale(identifier: selected)),
+                at: 0
+            )
+        }
+        return options
+    }
+
+    private var languageSelection: Binding<String> {
+        Binding(
+            get: { uiState.selectedLocaleIdentifier ?? SpeechLocalePreference.systemTag },
+            set: { tag in
+                uiState.selectLocale(tag.isEmpty ? nil : tag)
+            }
         )
     }
 

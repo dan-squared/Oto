@@ -13,7 +13,8 @@ import Foundation
 import os
 
 /// Named reusable text. Scope mirrors the dictionary (empty = global).
-/// Deliberately no trigger/activation: manual-only v1.
+/// Manual-only by default; `voiceTriggerEnabled` opts a snippet into exact-utterance
+/// expansion inside `TranscriptPipeline`.
 nonisolated struct Snippet: Sendable, Hashable, Codable, Identifiable {
     nonisolated static let maxNameLength = 60
     nonisolated static let maxExpansionLength = 2000
@@ -25,24 +26,29 @@ nonisolated struct Snippet: Sendable, Hashable, Codable, Identifiable {
     var expansion: String
     /// Apps this snippet is offered in; empty means everywhere.
     var bundleIDs: [String]
+    /// Opt-in: expand verbatim only when an entire dictation matches `name`.
+    var voiceTriggerEnabled: Bool
 
     nonisolated init(
         id: UUID = UUID(),
         name: String,
         expansion: String,
-        bundleIDs: [String] = []
+        bundleIDs: [String] = [],
+        voiceTriggerEnabled: Bool = false
     ) {
         self.id = id
         self.name = name
         self.expansion = expansion
         self.bundleIDs = bundleIDs
+        self.voiceTriggerEnabled = voiceTriggerEnabled
     }
 
     // MARK: - Codable
 
     /// v1 stored one `bundleID`; multi-select scopes store `bundleIDs`.
+    /// `voiceTriggerEnabled` is omitted when `false` to preserve v1 JSON bytes.
     private enum CodingKeys: String, CodingKey {
-        case id, name, expansion, bundleIDs, bundleID
+        case id, name, expansion, bundleIDs, bundleID, voiceTriggerEnabled
     }
 
     nonisolated init(from decoder: any Decoder) throws {
@@ -57,6 +63,7 @@ nonisolated struct Snippet: Sendable, Hashable, Codable, Identifiable {
         } else {
             bundleIDs = []
         }
+        voiceTriggerEnabled = try container.decodeIfPresent(Bool.self, forKey: .voiceTriggerEnabled) ?? false
     }
 
     nonisolated func encode(to encoder: any Encoder) throws {
@@ -66,6 +73,9 @@ nonisolated struct Snippet: Sendable, Hashable, Codable, Identifiable {
         try container.encode(expansion, forKey: .expansion)
         if !bundleIDs.isEmpty {
             try container.encode(bundleIDs, forKey: .bundleIDs)
+        }
+        if voiceTriggerEnabled {
+            try container.encode(voiceTriggerEnabled, forKey: .voiceTriggerEnabled)
         }
     }
 
@@ -226,18 +236,38 @@ final class SnippetStore {
     /// Validates + inserts using an explicit `AppScope`. `.apps([])` fails
     /// with `.emptyAppScope` instead of silently saving as global.
     @discardableResult
-    func add(name: String, expansion: String, scope: AppScope) async -> Result<Snippet, SnippetValidationError> {
+    func add(
+        name: String,
+        expansion: String,
+        scope: AppScope,
+        voiceTriggerEnabled: Bool = false
+    ) async -> Result<Snippet, SnippetValidationError> {
         switch scope {
         case .global:
-            return await add(name: name, expansion: expansion, bundleIDs: [])
+            return await add(
+                name: name,
+                expansion: expansion,
+                bundleIDs: [],
+                voiceTriggerEnabled: voiceTriggerEnabled
+            )
         case .apps(let ids):
             guard !ids.isEmpty else { return .failure(.emptyAppScope) }
-            return await add(name: name, expansion: expansion, bundleIDs: ids)
+            return await add(
+                name: name,
+                expansion: expansion,
+                bundleIDs: ids,
+                voiceTriggerEnabled: voiceTriggerEnabled
+            )
         }
     }
 
     @discardableResult
-    func add(name: String, expansion: String, bundleIDs: [String] = []) async -> Result<Snippet, SnippetValidationError> {
+    func add(
+        name: String,
+        expansion: String,
+        bundleIDs: [String] = [],
+        voiceTriggerEnabled: Bool = false
+    ) async -> Result<Snippet, SnippetValidationError> {
         await waitForLoadIfNeeded()
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return .failure(.emptyName) }
@@ -253,7 +283,12 @@ final class SnippetStore {
         if snippets.contains(where: { $0.name.lowercased() == cleanName.lowercased() }) {
             return .failure(.duplicateName)
         }
-        let snippet = Snippet(name: cleanName, expansion: expansion, bundleIDs: cleanScopes)
+        let snippet = Snippet(
+            name: cleanName,
+            expansion: expansion,
+            bundleIDs: cleanScopes,
+            voiceTriggerEnabled: voiceTriggerEnabled
+        )
         hasLocalMutations = true
         snippets.append(snippet)
         await persist()

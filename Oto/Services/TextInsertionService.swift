@@ -79,6 +79,11 @@ actor FakeTextInsertion: TextInserting {
         return replaceSelectionResult
     }
 
+    /// Test-only outcome re-scripting mid-test.
+    func setResult(_ result: InsertionResult) {
+        self.result = result
+    }
+
     /// Test-only outcome re-scripting mid-test (swap-then-revert-failure).
     func setReplaceResult(_ result: InsertionResult) {
         replaceResult = result

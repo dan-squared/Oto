@@ -16,6 +16,7 @@ struct SnippetsPane: View {
     let snippets: SnippetStore
     let dispatch: ShortcutDispatch
     let chrome: SettingsChrome
+    var onSnippetsChanged: (@MainActor ([Snippet]) -> Void)? = nil
 
     @State private var editingSnippet: Snippet?
     @State private var addingSnippet = false
@@ -48,7 +49,7 @@ struct SnippetsPane: View {
                     }
 
                     Section {
-                        OtoPanelNote("Snippets only insert when you choose — saying the name never expands it.")
+                        OtoPanelNote("Manual by default. Turn on voice expansion in a snippet to expand it only when you dictate its exact name.")
                     }
                 }
             }
@@ -56,13 +57,15 @@ struct SnippetsPane: View {
         .onAppear { publishAccessory() }
         .onChange(of: snippets.snippets.count) { _, _ in publishAccessory() }
         .sheet(isPresented: $addingSnippet) {
-            SnippetEditor(snippet: nil, snippets: snippets) {
+            SnippetEditor(snippet: nil, snippets: snippets) { saved in
                 addingSnippet = false
+                if saved { onSnippetsChanged?(snippets.snippets) }
             }
         }
         .sheet(item: $editingSnippet) { snippet in
-            SnippetEditor(snippet: snippet, snippets: snippets) {
+            SnippetEditor(snippet: snippet, snippets: snippets) { saved in
                 editingSnippet = nil
+                if saved { onSnippetsChanged?(snippets.snippets) }
             }
         }
     }
@@ -72,9 +75,18 @@ struct SnippetsPane: View {
     private func row(for snippet: Snippet) -> some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(snippet.name)
-                    .font(.system(size: 13))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(snippet.name)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                    if snippet.voiceTriggerEnabled {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .help("Expands when dictated alone")
+                            .accessibilityLabel("Expands when dictated alone")
+                    }
+                }
                 Text(snippet.preview())
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -90,7 +102,10 @@ struct SnippetsPane: View {
                     editingSnippet = snippet
                 }
                 OtoRowButton(symbol: "trash", help: "Delete snippet", danger: true) {
-                    Task { await snippets.remove(id: snippet.id) }
+                    Task {
+                        await snippets.remove(id: snippet.id)
+                        onSnippetsChanged?(snippets.snippets)
+                    }
                 }
             }
         }
@@ -118,12 +133,13 @@ struct SnippetsPane: View {
 private struct SnippetEditor: View {
     let snippet: Snippet?
     let snippets: SnippetStore
-    let onDone: () -> Void
+    let onDone: (Bool) -> Void
 
     @State private var name = ""
     @State private var expansion = ""
     @State private var scopeGlobal = true
     @State private var bundleIDs: [String] = []
+    @State private var voiceTriggerEnabled = false
     @State private var error: String?
 
     var body: some View {
@@ -134,12 +150,16 @@ private struct SnippetEditor: View {
                     .frame(minHeight: 90)
                 // Scope is picked, never typed (see DictionaryPane).
                 OtoAppScopePicker(isGlobal: $scopeGlobal, bundleIDs: $bundleIDs)
+                Toggle("Expand when dictated alone", isOn: $voiceTriggerEnabled)
+                Text("Only expands when your entire dictation matches this name in the selected apps.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if let error {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
             HStack {
-                Button("Cancel", role: .cancel) { onDone() }
+                Button("Cancel", role: .cancel) { onDone(false) }
                 Spacer()
                 Button("Copy expansion") { copyDraft() }
                 Button("Save") { save() }
@@ -157,6 +177,7 @@ private struct SnippetEditor: View {
             expansion = snippet.expansion
             scopeGlobal = snippet.bundleIDs.isEmpty
             bundleIDs = snippet.bundleIDs
+            voiceTriggerEnabled = snippet.voiceTriggerEnabled
         }
     }
 
@@ -179,12 +200,18 @@ private struct SnippetEditor: View {
             if var snippet {
                 snippet.name = name
                 snippet.expansion = expansion
+                snippet.voiceTriggerEnabled = voiceTriggerEnabled
                 result = await snippets.update(snippet, scope: scope)
             } else {
-                result = await snippets.add(name: name, expansion: expansion, scope: scope)
+                result = await snippets.add(
+                    name: name,
+                    expansion: expansion,
+                    scope: scope,
+                    voiceTriggerEnabled: voiceTriggerEnabled
+                )
             }
             switch result {
-            case .success: onDone()
+            case .success: onDone(true)
             case .failure(let failure): error = failure.errorDescription
             }
         }

@@ -8,11 +8,21 @@
 import Foundation
 import Synchronization
 
-/// Post-transcript processing seam. Trim + deterministic dictionary rules;
-/// snippet expansion is NEVER ambient (explicit user action only). Rules
-/// arrive as a value array (default empty = trim-only) and pre-compile their
-/// regular expressions once at initialization so dictations never recompile
-/// up to 500 regexes per utterance.
+/// Output from `TranscriptPipeline.processDetailed(_:for:)`.
+nonisolated struct ProcessedTranscript: Equatable, Sendable {
+    let text: String
+    let matchedSnippet: Bool
+
+    nonisolated static func == (lhs: ProcessedTranscript, rhs: ProcessedTranscript) -> Bool {
+        lhs.text == rhs.text && lhs.matchedSnippet == rhs.matchedSnippet
+    }
+}
+
+/// Post-transcript processing seam. Checks opt-in exact-utterance snippets first
+/// (never inside longer sentences), then applies trim + deterministic dictionary
+/// rules. Rules arrive as a value array (default empty = trim-only) and
+/// pre-compile their regular expressions once at initialization so dictations
+/// never recompile up to 500 regexes per utterance.
 struct TranscriptPipeline: Sendable {
     private struct CompiledRule: @unchecked Sendable {
         let regex: NSRegularExpression
@@ -38,14 +48,19 @@ struct TranscriptPipeline: Sendable {
         pattern: "(~|\\.{1,2})?/[\\p{L}\\p{N}._\\-+%@:,/]+"
     )
     private nonisolated static let linkDetector = LinkDetectorCache()
+    private nonisolated static let trailingSentencePunctuation = CharacterSet(
+        charactersIn: ".!?,;:…。！？、；："
+    )
 
     let dictionaryRules: [DictionaryRule]
+    let snippets: [Snippet]
     private let compiledRules: [CompiledRule]
 
     /// Value init: `nonisolated` so the background coordinator can rebuild
-    /// the pipeline on rule updates without a MainActor hop (Swift 6).
-    nonisolated init(dictionaryRules: [DictionaryRule] = []) {
+    /// the pipeline on rule/snippet updates without a MainActor hop (Swift 6).
+    nonisolated init(dictionaryRules: [DictionaryRule] = [], snippets: [Snippet] = []) {
         self.dictionaryRules = dictionaryRules
+        self.snippets = snippets
         self.compiledRules = dictionaryRules.compactMap { rule in
             guard rule.isEnabled else { return nil }
             let spoken = DictionaryRule.normalizeSpoken(rule.spoken)
@@ -67,10 +82,63 @@ struct TranscriptPipeline: Sendable {
         }
     }
 
-    /// Pure trim + dictionary (Swift 6: `nonisolated` for the background coordinator).
-    nonisolated func process(_ raw: String, for target: TargetApplication) -> String {
+    /// Normalizes a trigger phrase or spoken utterance for exact-utterance matching:
+    /// trims whitespace/newlines, strips trailing sentence punctuation (ASCII &
+    /// common Unicode/CJK), folds typographic apostrophes, collapses internal
+    /// whitespace runs, and lowercases.
+    nonisolated static func normalizeTriggerPhrase(_ raw: String) -> String {
+        var value = raw
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .replacingOccurrences(of: "\u{2018}", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = value.unicodeScalars.last, trailingSentencePunctuation.contains(last) {
+            value.unicodeScalars.removeLast()
+        }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        value = value.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return value.localizedLowercase
+    }
+
+    /// Pure opt-in exact-utterance snippet expansion + trim + dictionary
+    /// (Swift 6: `nonisolated` for the background coordinator).
+    nonisolated func processDetailed(_ raw: String, for target: TargetApplication) -> ProcessedTranscript {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !compiledRules.isEmpty, !trimmed.isEmpty else { return trimmed }
+        guard !trimmed.isEmpty else {
+            return ProcessedTranscript(text: "", matchedSnippet: false)
+        }
+
+        let normalizedUtterance = Self.normalizeTriggerPhrase(trimmed)
+        if !normalizedUtterance.isEmpty {
+            let matchingSnippets = snippets.filter { snippet in
+                guard snippet.voiceTriggerEnabled else { return false }
+                if !snippet.bundleIDs.isEmpty {
+                    guard let targetID = target.bundleIdentifier,
+                          DictionaryRule.scopeMatches(snippet.bundleIDs, target: targetID)
+                    else { return false }
+                }
+                return Self.normalizeTriggerPhrase(snippet.name) == normalizedUtterance
+            }
+            if let matched = matchingSnippets.min(by: { lhs, rhs in
+                let lhsScoped = !lhs.bundleIDs.isEmpty
+                let rhsScoped = !rhs.bundleIDs.isEmpty
+                if lhsScoped != rhsScoped { return lhsScoped }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }) {
+                return ProcessedTranscript(text: matched.expansion, matchedSnippet: true)
+            }
+        }
+
+        let text = applyDictionary(to: trimmed, for: target)
+        return ProcessedTranscript(text: text, matchedSnippet: false)
+    }
+
+    /// Pure trim + snippet/dictionary convenience returning just the final text.
+    nonisolated func process(_ raw: String, for target: TargetApplication) -> String {
+        processDetailed(raw, for: target).text
+    }
+
+    private nonisolated func applyDictionary(to trimmed: String, for target: TargetApplication) -> String {
+        guard !compiledRules.isEmpty else { return trimmed }
 
         let active = compiledRules.filter { rule in
             guard !rule.bundleIDs.isEmpty else { return true }

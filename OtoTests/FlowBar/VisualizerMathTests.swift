@@ -270,6 +270,32 @@ struct VisualizerMathTests {
         #expect(hugeW == VisualizerMath.messageMaxWidth)
     }
 
+    @Test func messagePillWidthGivesAllNoticesSlackAndCapsulePadding() {
+        #expect(VisualizerMath.messagePadding == VisualizerMath.dictationInset)
+        #expect(VisualizerMath.messageTextSlack == 12)
+        let notices = [
+            "Copied",
+            "Microphone error",
+            "Speech unavailable",
+            "Target app closed",
+            "No text field",
+            "Couldn't paste — kept",
+        ]
+        for text in notices {
+            let measured = VisualizerMath.measureWorkText(text)
+            let width = VisualizerMath.messagePillWidth(textWidth: measured)
+            #expect(
+                width >= ceil(measured) + VisualizerMath.messagePadding * 2 + VisualizerMath.messageTextSlack,
+                "Notice '\(text)' should have full capsule padding + centered text slack"
+            )
+            #expect(width <= VisualizerMath.messageMaxWidth)
+        }
+        #expect(
+            VisualizerMath.messagePillWidth(textWidth: VisualizerMath.measureWorkText("Speech unavailable"))
+                > VisualizerMath.dictationWidth
+        )
+    }
+
     // MARK: - Helpers
 
     /// Linear RMS amplitude for a dBFS value: dB = 20 log10(rms).

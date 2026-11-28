@@ -201,7 +201,7 @@ struct OtoApp: App {
             history: historyStore,
             mediaDuck: MediaDuck(),
             polish: polishService,
-            behaviorProvider: { CleanupBehavior.current() },
+            cleanupProvider: { bundleID in EffectiveCleanup.resolve(for: bundleID) },
             feedback: { cue in
                 // Coordinator outcomes hop to the player once, per cue — never
                 // per event stream. `play` is synchronous and allocation-free.
@@ -300,11 +300,13 @@ struct OtoApp: App {
         DockRestoreDelegate.onboarding = onboarding
         // Stores load off the launch path; rules push when ready. Dictation
         // before this lands uses trim-only (today's behavior), never blocks.
+        settingsUIState.refreshSpeechInBackground()
         Task {
             await dictionaryStore.load()
             await snippetStore.load()
             await historyStore.load()
             await coordinator.setDictionaryRules(dictionaryStore.rules)
+            await coordinator.setSnippets(snippetStore.snippets)
         }
     }
 
@@ -312,9 +314,10 @@ struct OtoApp: App {
         MenuBarExtra {
             OtoMenuBarView(
                 coordinator: coordinator,
-                onboarding: onboarding,
                 settings: settingsWindowController,
-                updater: updater
+                updater: updater,
+                snippets: snippetStore,
+                uiState: settingsUIState
             )
         } label: {
             Image("OtoMenubar")
