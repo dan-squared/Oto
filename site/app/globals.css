@@ -1,1 +1,112 @@
 @import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-inter), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@layer base {
+  html {
+    background-color: #ffffff;
+    color: #111111;
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #ffffff;
+    color: #111111;
+    overflow-x: clip;
+  }
+}
+
+/* Full-bleed atmospheric sky-blue / pearl hero mesh harmonizing with OtoLogo.svg */
+.oto-hero-mesh {
+  background-color: #f4f8fd;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0) 76%, #ffffff 100%),
+    radial-gradient(58% 58% at 12% 82%, rgba(139, 193, 255, 0.56) 0%, rgba(139, 193, 255, 0) 68%),
+    radial-gradient(54% 60% at 88% 24%, rgba(155, 203, 255, 0.64) 0%, rgba(155, 203, 255, 0) 70%),
+    radial-gradient(50% 48% at 84% 84%, rgba(182, 212, 255, 0.48) 0%, rgba(182, 212, 255, 0) 70%),
+    radial-gradient(54% 48% at 50% 34%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 74%),
+    radial-gradient(46% 46% at 14% 16%, rgba(214, 232, 255, 0.72) 0%, rgba(214, 232, 255, 0) 72%);
+}
+
+/* Subtle tactile grain overlay */
+.oto-hero-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+
+@keyframes oto-wave {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.oto-bar {
+  transform-origin: center;
+  animation: oto-wave 1.05s ease-in-out infinite;
+}
+
+@keyframes oto-shimmer {
+  0% {
+    background-position: 200% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
+}
+
+.oto-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.45) 0%,
+    rgba(255, 255, 255, 0.45) 38%,
+    #ffffff 50%,
+    rgba(255, 255, 255, 0.45) 62%,
+    rgba(255, 255, 255, 0.45) 100%
+  );
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: oto-shimmer 1.6s linear infinite;
+}
+
+@keyframes oto-caret {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.oto-caret {
+  animation: oto-caret 0.9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .oto-bar,
+  .oto-shimmer-text,
+  .oto-caret {
+    animation: none;
+  }
+
+  .oto-shimmer-text {
+    color: #ffffff;
+    background: none;
+  }
+}
